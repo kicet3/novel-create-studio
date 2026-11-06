@@ -66,6 +66,8 @@ export interface ManuscriptInternals {
   afterGatePass(tx: Tx, scope: NovelScope, ep: Episode, actor: ActorRef): Promise<"polish_episode" | "awaiting_approval">;
   /** E8 + approval request (or full_auto E9(c)) */
   enterAwaitingApproval(tx: Tx, scope: NovelScope, episodeId: string, actor: ActorRef, summary: { lengthWarning: string | null; length?: LengthCheck | null }): Promise<Episode>;
+  /** approval request for an episode already waiting without one (설계 추가 0014: level changed away from arc_approval) */
+  requestEpisodeApproval(tx: Tx, scope: NovelScope, ep: Episode, actor: ActorRef, opts: { lengthWarning: string | null; belowFloor: boolean }): Promise<Episode>;
 }
 
 export function createManuscriptService(ports: Ports): { service: ManuscriptService; internals: ManuscriptInternals } {
@@ -406,12 +408,20 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
     const profile = await lengthProfile(scope, tx);
     // 설계 추가 L10: under the 3,000-char floor → never auto-approved / auto-published; the user decides this episode alone
     const belowFloor = summary.length?.belowFloor ?? (preVersion ? belowFloorByCounts(preVersion, profile.countBasis) : false);
-    let ep = await transition(tx, scope, episodeId, "awaiting_approval", actor, { ruleId: "E8", details: { lengthWarning: summary.lengthWarning, belowFloor } });
-    if (n.autonomyLevel === "full_auto" && !belowFloor) {
-      // E9(c): gate already guaranteed no open high issue (INV-EP-02); actor recorded as the agent (D-24)
-      return approveInTx(tx, scope, episodeId, actor.type === "agent" ? actor : orchestrator, null);
-    }
-    if (n.autonomyLevel === "arc_approval" && !belowFloor) return ep; // MVP-β: arc approval requested when the whole arc waits
+    const ep = await transition(tx, scope, episodeId, "awaiting_approval", actor, { ruleId: "E8", details: { lengthWarning: summary.lengthWarning, belowFloor } });
+    // 설계 추가 0014: full_auto no longer approves here (E9(c) without an approval row); every level but arc_approval
+    // requests the episode approval and the autopilot decides it (approval row + auto_decided + provenance "자동 승인")
+    if (n.autonomyLevel === "arc_approval" && !belowFloor) return ep; // arc approval (plot batch) requested by the scheduler
+    return requestEpisodeApproval(tx, scope, ep, actor, { lengthWarning: summary.lengthWarning, belowFloor });
+  };
+
+  /** per-episode approval request of an episode already in awaiting_approval (E8 above, or a level change away from arc_approval) */
+  const requestEpisodeApproval = async (tx: Tx, scope: NovelScope, waiting: Episode, actor: ActorRef, opts: { lengthWarning: string | null; belowFloor: boolean }) => {
+    let ep = waiting;
+    const episodeId = ep.id;
+    const belowFloor = opts.belowFloor;
+    const summary = { lengthWarning: opts.lengthWarning };
+    const profile = await lengthProfile(scope, tx);
     const version = ep.currentVersionId ? await mustVersion(tx, scope, ep.currentVersionId) : null;
     const counts = version ? `공백 포함 ${version.charCountWithSpaces}자 / 공백 제외 ${version.charCountWithoutSpaces}자` : "";
     const floorCount = version ? (profile.countBasis === "without_spaces" ? version.charCountWithoutSpaces : version.charCountWithSpaces) : 0;
@@ -430,7 +440,7 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
       target: epRef(episodeId),
       question: { title: `${ep.episodeNo}화 승인 요청${belowFloor ? " (분량 미달)" : ""}`, body, links: [epRef(episodeId), ...(version ? [{ type: "manuscript_version" as const, id: version.id }] : [])] },
       requestedBy: actor,
-      ...(belowFloor ? { payload: { lengthBelowFloor: true } } : {}),
+      payload: { episodeNo: ep.episodeNo, ...(belowFloor ? { lengthBelowFloor: true } : {}) },
     });
     ep = await repo.updateEpisode(tx.db, scope, episodeId, { blockReasons: [...new Set([...ep.blockReasons, "approval" as const])] });
     await audit.record(tx, { novelId: scope.novelId, actor, action: "episode.blocked", target: epRef(episodeId), after: { blockReasons: ep.blockReasons }, approvalId: req.approvalId });
@@ -761,6 +771,24 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
       return uow.run((tx) => rejectInTx(tx, scope, ep.id, { ...input, approvalId }, actor));
     },
     publishEpisode: (scope, episodeId, actor) => uow.run((tx) => publishInTx(tx, scope, episodeId, actor)),
+    setScheduledPublish(scope, episodeId, at, actor) {
+      return uow.run(async (tx) => {
+        const ep = await mustEpisode(tx, scope, episodeId, true);
+        if (at && ep.status !== "approved") throw new InvalidTransitionError("episode", ep.status, "scheduled");
+        if ((ep.scheduledPublishAt?.getTime() ?? null) === (at?.getTime() ?? null)) return ep;
+        const updated = await repo.updateEpisode(tx.db, scope, episodeId, { scheduledPublishAt: at });
+        await audit.record(tx, {
+          novelId: scope.novelId,
+          actor,
+          action: "episode.publish_scheduled",
+          target: epRef(episodeId),
+          before: { scheduledPublishAt: ep.scheduledPublishAt?.toISOString() ?? null },
+          after: { scheduledPublishAt: at?.toISOString() ?? null },
+          details: { episodeNo: ep.episodeNo },
+        });
+        return updated;
+      });
+    },
     async unpublishEpisode(scope, episodeId, input, actor) {
       if (input.confirmedNotPublishedExternally !== true) {
         throw new DomainValidationError("external_confirmation_required", "외부 플랫폼에 공개되지 않았음을 확인해야 공개를 취소할 수 있습니다."); // FR-MAN-03
@@ -882,6 +910,7 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
       spansOf,
       afterGatePass,
       enterAwaitingApproval,
+      requestEpisodeApproval,
     },
   };
 }

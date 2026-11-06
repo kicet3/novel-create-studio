@@ -1,3 +1,4 @@
+import { AutopilotBanner } from "../autopilot/AutopilotBanner.js";
 import { formatUsd, labelKo, type NovelDto } from "@ncs/shared";
 import { Link } from "react-router";
 import { useNovelId } from "../../app/novel-context.js";
@@ -67,6 +68,7 @@ function HomeBody({ data }: { data: HomeData }) {
       />
       <div className="flex flex-col gap-3">
         <PausedCallout novel={novel} />
+        <AutopilotBanner novelId={novel.id} autonomyLevel={novel.autonomyLevel} timezone={novel.timezone} />
         <HealthCallout data={data} />
         {novel.status === "concept" && <ConceptStageCallout novel={novel} />}
         {novel.status === "onboarding" && <NovelSetupFlow novel={novel} />}
@@ -257,6 +259,8 @@ function RunningTasksCard({ novelId }: { novelId: string }) {
 
 function ArcsCard({ data }: { data: HomeData }) {
   if (data.arcs.length === 0) return null;
+  // episodes are written in order: an active plot whose first episode has not started yet is "집필 대기", not "집필 중"
+  const started = data.episodes ? data.episodes.approved + data.episodes.published + data.episodes.inProgress : null;
   return (
     <Card title="플롯">
       <List>
@@ -269,7 +273,7 @@ function ArcsCard({ data }: { data: HomeData }) {
                 {a.plannedEpisodeFrom}~{a.plannedEpisodeTo}화 · {a.goalText}
               </div>
             </div>
-            <StatusBadge enum="arc_status" value={a.status} />
+            {a.status === "active" && started !== null && a.plannedEpisodeFrom > started ? <Badge>집필 대기</Badge> : <StatusBadge enum="arc_status" value={a.status} />}
           </ListItem>
         ))}
       </List>

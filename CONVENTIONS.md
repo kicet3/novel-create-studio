@@ -55,7 +55,7 @@ apps/server/src/
   modules/<m>/       index.ts(공개 계약) · module.ts(팩토리) · domain/ · application/ · adapters/{db,http,<ext>}/ · README.md
 ```
 
-모듈 생성 순서(의존은 위쪽으로만): `audit → system → novel → budget → llm → ontology → orchestration → agents → messaging → hitl → linking → manuscript → foreshadow → continuity → concept → export → imaging → world → cast` (world = 설계 추가 0012 세계관 온톨로지; cast가 캐릭터 초안에 world 컨텍스트를 씀).
+모듈 생성 순서(의존은 위쪽으로만): `audit → system → novel → budget → llm → ontology → orchestration → agents → messaging → hitl → linking → manuscript → foreshadow → continuity → concept → export → imaging → world → cast → autopilot` (world = 설계 추가 0012 세계관 온톨로지; cast가 캐릭터 초안에 world 컨텍스트를 씀; autopilot = 설계 추가 0014 완전 자율 진행, 모든 모듈을 읽으므로 맨 끝).
 순환이 필요해 보이면 **등록부(registry)** 로 뒤집습니다(아래 §6).
 
 ## 3. 계층 규칙 (ADR-008, 08 §3.2)
@@ -107,6 +107,7 @@ export function createXModule(deps: XModuleDeps): ServerModule<XService>
 | `orchestration.registerTaskKind(handler)` | orchestration | LLM 작업은 `agents.defineAgentTask(h)`로 감싸 등록: concept(concept_turn, import_concept, check_concept_brief), manuscript(plan_series_bible, plan_arc, schedule_episodes, outline/draft/split_scenes/polish/revise_episode, plan_rework, check_text_safety), linking(extract_facts, link_mentions, dedupe_entities, build_initial_ontology), continuity(check_continuity), foreshadow(plan_setups, check_setups, review_setup_due), hitl(interpret_answer, apply_answer, grade_question) |
 | `agents.registerContextSection(provider)` | agents | manuscript(outline, recent_text), foreshadow(assigned_beats), hitl(answers → constraints), cast(cast) |
 | `hitl.registerApprovalHandler(type, h)` | hitl | concept(`concept_brief`), manuscript(`series_bible`, `arc_plan`, `arc`, `episode`), budget(`budget_resume`) |
+| `hitl.registerAutoDecider(d)` (설계 추가 0014) | hitl | autopilot(full_auto 자동 결정: 디스패처 보류 판정 `holds`, 결정 트랜잭션 재확인 `confirm`/`confirmAnswer`) |
 | `hitl.registerAnswerApplier(topic, a)` | hitl | linking(`entity_disambiguation`, `duplicate_entity`), 기타 주제별 |
 | `messaging.registerInboundHandler(h)` | messaging | hitl(`answer_*`, `session_step`), concept(`concept_message`) |
 | `manuscript.registerCheckGateContributor(c)` / `onEpisodeTransition(hook)` | manuscript | continuity(열린 high 이슈), foreshadow(missing 비트, E9 비트 확정); ontology 승격은 manuscript가 직접 `ontology.promoteEpisodeFacts` 호출 |

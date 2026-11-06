@@ -38,6 +38,7 @@ export function PipelineFlow({
   gates,
   other,
   approvals,
+  autoGates,
 }: {
   novelId: string;
   stages: AgentStageOverviewDto[];
@@ -45,6 +46,8 @@ export function PipelineFlow({
   other: AgentStatusCounts;
   /** pending approvals per gate (undefined while loading) */
   approvals: Record<AgentPipelineGate, number> | undefined;
+  /** 설계 추가 0014: gates the autopilot decides (full_auto) — ◇ instead of ◆ */
+  autoGates?: Partial<Record<AgentPipelineGate, boolean>>;
 }) {
   const nodes = flowNodes(stages, gates, approvals);
   const edges = flowEdges(nodes);
@@ -56,7 +59,7 @@ export function PipelineFlow({
           <ol className="m-0 flex w-full min-w-max list-none items-stretch p-0">
             {nodes.map((n, i) => (
               <li key={`${n.type}-${n.id}`} className={cx("flex min-w-0 items-stretch", n.type === "stage" ? "flex-[1_1_0]" : "flex-[0.75_1_0]")}>
-                {n.type === "stage" ? <StageNode n={n} /> : <GateNode novelId={novelId} n={n} loading={!approvals} />}
+                {n.type === "stage" ? <StageNode n={n} /> : <GateNode novelId={novelId} n={n} loading={!approvals} auto={!!autoGates?.[n.id as AgentPipelineGate]} />}
                 {i < edges.length && <Connector state={edges[i]!.state} />}
               </li>
             ))}
@@ -171,12 +174,15 @@ function StageBar({ c, human }: { c: AgentStageOverviewDto["counts"]; human: num
   );
 }
 
-function GateNode({ novelId, n, loading }: { novelId: string; n: Extract<FlowNode, { type: "gate" }>; loading: boolean }) {
+function GateNode({ novelId, n, loading, auto = false }: { novelId: string; n: Extract<FlowNode, { type: "gate" }>; loading: boolean; auto?: boolean }) {
   const pending = n.pending > 0;
   const body = (
     <>
-      <span aria-hidden="true" className={cx("block size-3 rotate-45 rounded-[2px] border-2", pending ? "border-warn bg-warn-soft" : "border-faint")} />
-      <span className="text-[11px] font-semibold leading-tight">{n.label}</span>
+      <span aria-hidden="true" className={cx("block size-3 rotate-45 rounded-[2px] border-2", auto ? "border-violet" : pending ? "border-warn bg-warn-soft" : "border-faint")} />
+      <span className="text-[11px] font-semibold leading-tight">
+        {n.label}
+        {auto && <span className="block text-[10px] font-normal text-violet">자동 승인</span>}
+      </span>
       <span className={cx("tabular text-[11px]", pending ? "font-bold text-warn" : "text-faint")}>{loading ? "…" : pending ? `대기 ${n.pending}건` : "—"}</span>
       {n.blockedTasks > 0 && <span className="tabular break-keep text-[10.5px] leading-tight text-muted">작업 {n.blockedTasks} 멈춤</span>}
     </>

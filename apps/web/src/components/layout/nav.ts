@@ -6,7 +6,7 @@ import type { NavIconName } from "./icons.js";
  * `screen` = mockup `data-screen` id (08 §9.1).
  */
 export interface NovelNavItem {
-  screen: "home" | "concept" | "cast" | "structure" | "board" | "agents" | "inbox" | "manuscript" | "ontology" | "foreshadow" | "images" | "audit" | "settings";
+  screen: "home" | "concept" | "cast" | "structure" | "board" | "agents" | "inbox" | "manuscript" | "reader" | "ontology" | "foreshadow" | "images" | "audit" | "settings";
   label: string;
   /** Path relative to `/novels/:novelId`; "" = home. */
   path: string;
@@ -22,6 +22,7 @@ export const NOVEL_NAV: readonly NovelNavItem[] = [
   { screen: "agents", label: "에이전트 현황", path: "agents", icon: "agents" },
   { screen: "inbox", label: "인박스", path: "inbox", icon: "inbox" },
   { screen: "manuscript", label: "원고", path: "manuscript", icon: "manuscript" },
+  { screen: "reader", label: "읽기", path: "read", icon: "reader" },
   { screen: "ontology", label: "세계관 온톨로지", path: "ontology", icon: "ontology" },
   { screen: "foreshadow", label: "떡밥", path: "setups", icon: "foreshadow" },
   { screen: "images", label: "이미지 생성", path: "images", icon: "image" },

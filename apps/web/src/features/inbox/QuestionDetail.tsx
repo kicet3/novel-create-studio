@@ -21,6 +21,23 @@ import {
 } from "../../components/ui/index.js";
 import { cx } from "../../lib/cx.js";
 import { approvalOf, useAnswerQuestion, useResolveLateAnswer } from "./api.js";
+import { useAutopilot } from "../autopilot/api.js";
+import { useNovel } from "../novels/api.js";
+
+/** 설계 추가 0014: "자동 승인 예정 HH:MM" / "자동 승인됨" / "자동 응답" / "사람 확인 필요" (완전 자율) */
+function AutoProvenance({ novelId, view, approval, timezone }: { novelId: string; view: HitlQuestionView; approval: ReturnType<typeof approvalOf>; timezone?: string }) {
+  const novel = useNovel(novelId);
+  const full = novel.data?.autonomyLevel === "full_auto";
+  const ap = useAutopilot(novelId, { enabled: full && !!approval && approval.status === "pending" });
+  if ((approval as { autoDecided?: boolean } | null)?.autoDecided) return <Badge tone="violet">자동 승인됨</Badge>;
+  if (!approval && view.resolutionSource === "auto_answer") return <Badge tone="violet">자동 응답</Badge>;
+  if (!approval || approval.status !== "pending" || !full) return null;
+  const held = (approval.payload as { autopilot?: { heldReason?: string } } | null)?.autopilot?.heldReason;
+  if (held) return <Badge tone="warn" title={held}>사람 확인 필요</Badge>;
+  const at = ap.data?.scheduled.find((x) => x.approvalId === approval.id)?.at;
+  if (at) return <Badge tone="violet">자동 승인 예정 {formatDateTime(at, timezone)}</Badge>;
+  return ap.data?.active && ap.data.waitingHuman.every((w) => w.approvalId !== approval.id) ? <Badge tone="violet">자동 승인 대기</Badge> : null;
+}
 
 /** Imperative key handling so the page-level shortcut handler can drive the open question. */
 export interface QuestionDetailHandle {
@@ -156,6 +173,7 @@ export const QuestionDetail = forwardRef<QuestionDetailHandle, { novelId: string
           <Badge tone="neutral">{labelKo("question_topic", view.topic)}</Badge>
           {approval && <Badge tone="accent">{labelKo("approval_type", approval.approvalType as never)} 승인</Badge>}
           <StatusBadge enum="question_status" value={view.status} />
+          <AutoProvenance novelId={novelId} view={view} approval={approval} timezone={timezone} />
         </div>
         <h2 id="q-title" tabIndex={-1} className="text-[16px] font-bold focus:outline-none">
           {view.title}
@@ -358,6 +376,7 @@ export const QuestionDetail = forwardRef<QuestionDetailHandle, { novelId: string
                   <StatusBadge enum="answer_disposition" value={a.disposition} />
                   {formatDateTime(a.receivedAt, timezone)}
                   {a.lateResolution && <Badge>{labelKo("late_answer_resolution", a.lateResolution)}</Badge>}
+                  {a.autoAnswered && <Badge tone="violet">{approval ? "자동 승인" : "자동 응답"}</Badge>}
                 </div>
                 <div className="mt-1">
                   {a.payload.decision && (

@@ -24,3 +24,5 @@ export * from "./imaging.js";
 export * from "./cast.js";
 export * from "./world.js";
 export * from "./agents-overview.js";
+export * from "./autopilot.js";
+export * from "./reader.js";

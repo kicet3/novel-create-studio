@@ -7,6 +7,7 @@ import { sql } from "@ncs/db/orm";
 import { DEFAULTS, labelKo, type ApprovalType, type QuestionTopic, type ReflectionChangeKind } from "@ncs/shared";
 import {
   actors,
+  AppError,
   DomainValidationError,
   InvalidTransitionError,
   NotFoundError,
@@ -25,6 +26,8 @@ import type { OrchestrationService } from "../../orchestration/index.js";
 import type {
   AcceptAnswerInput,
   Answer,
+  AutoDecider,
+  AutoDecisionResult,
   AnswerApplier,
   Approval,
   ApprovalHandler,
@@ -35,7 +38,7 @@ import type {
   QuestionDraft,
 } from "../index.js";
 import { hitlRepo as repo, type Interpretation, type Reflection } from "../adapters/db/hitl-repository.js";
-import { approvalQuestionShape, gradeQuestion, HOLD_TOPICS, TOPIC_RULES } from "../domain/grading.js";
+import { approvalQuestionShape, gradeQuestion, HOLD_TOPICS, questionSensitivity, TOPIC_RULES } from "../domain/grading.js";
 import {
   buildRecommendation,
   interpretAnswerOutputSchema,
@@ -88,10 +91,17 @@ const SYS_MESSENGER = actors.system("messenger");
 const SYS_SCHEDULER = actors.system("scheduler");
 const SYS_ORCH = actors.system("orchestrator");
 
+/** 설계 추가 0014: how an auto (full_auto) answer is recorded */
+interface AutoAnswerMode {
+  actor: ActorRef;
+  note?: string;
+}
+
 export function createHitlCore(deps: HitlServiceDeps) {
   const { platform, audit, novel, messaging, orchestration, ontology } = deps;
   const { uow, ids, clock, log, config } = platform;
   const approvalHandlers = new Map<ApprovalType, ApprovalHandler>();
+  let autoDecider: AutoDecider | null = null;
   const answerAppliers = new Map<QuestionTopic, AnswerApplier>();
   const tasks: TaskAvailability = { interpret: false, grade: false };
   const now = () => clock.date();
@@ -160,6 +170,7 @@ export function createHitlCore(deps: HitlServiceDeps) {
       createdByRunId: runId,
       parentQuestionId: extra.parent?.id ?? null,
       dependsOnQuestionId: d.dependsOnQuestionId ?? null,
+      sensitivity: questionSensitivity({ topic: d.topic, basis: g.basis, hints: d.gradeHints, proposed: d.sensitivity ?? null }),
       createdAt: at,
       updatedAt: at,
     });
@@ -334,7 +345,7 @@ export function createHitlCore(deps: HitlServiceDeps) {
   }
 
   // ── approvals ──
-  async function decideApproval(tx: Tx, scope: NovelScope, q: Question, answer: Answer, p: AnswerPayload, actor: ActorRef): Promise<void> {
+  async function decideApproval(tx: Tx, scope: NovelScope, q: Question, answer: Answer, p: AnswerPayload, actor: ActorRef, auto: AutoAnswerMode | null = null): Promise<void> {
     const approval = q.approvalId ? await repo.getApproval(tx.db, scope, q.approvalId, true) : await repo.approvalByQuestion(tx.db, scope, q.id);
     if (!approval) throw new DomainValidationError("approval_missing", "이 질문에 연결된 승인 요청이 없습니다.");
     const decision = p.decision!;
@@ -347,6 +358,7 @@ export function createHitlCore(deps: HitlServiceDeps) {
       decisionNote: p.decision_note ?? null,
       reworkFrom: p.rework_from ?? null,
       decidedViaChannelId: answer.channelId,
+      autoDecided: !!auto && decision === "approved",
       payload: { ...(approval.payload as object), ...(p.decision_variant ? { decision_variant: p.decision_variant } : {}) },
       updatedAt: at,
     }))!;
@@ -361,10 +373,11 @@ export function createHitlCore(deps: HitlServiceDeps) {
       questionId: q.id,
       approvalId: approval.id,
       answerId: answer.id,
+      ...(auto ? { details: { auto: true, provenance: "자동 승인", delegatedBy: answer.responderUserId, note: auto.note ?? null } } : {}),
     });
     const handler = approvalHandlers.get(approval.approvalType);
     if (handler) {
-      await handler({ tx, scope, approval: updated, decision, decisionNote: p.decision_note ?? null, reworkFrom: p.rework_from ?? null, actor, answerId: answer.id });
+      await handler({ tx, scope, approval: updated, decision, decisionNote: p.decision_note ?? null, reworkFrom: p.rework_from ?? null, actor, answerId: answer.id, ...(auto ? { auto: true } : {}) });
     } else {
       log.warn({ approvalType: approval.approvalType }, "no approval handler registered; decision recorded only");
     }
@@ -381,7 +394,7 @@ export function createHitlCore(deps: HitlServiceDeps) {
           {
             changeKind: approval.approvalType === "series_bible" ? "bible_changed" : tasksUnblocked.length ? "task_changed" : "no_change",
             ref: { type: approval.subjectType, id: approval.subjectId },
-            summary: `${label} ${decision === "approved" ? "승인" : "반려"}${p.rework_from ? `(${labelKo("rework_from", p.rework_from)})` : ""}`,
+            summary: `${label} ${decision === "approved" ? (auto ? "자동 승인(완전 자율)" : "승인") : "반려"}${p.rework_from ? `(${labelKo("rework_from", p.rework_from)})` : ""}`,
           },
         ],
       },
@@ -675,16 +688,23 @@ export function createHitlCore(deps: HitlServiceDeps) {
     await finishReflection(tx, scope, q, answer, r, SYS_ORCH);
   }
 
-  async function afterAccepted(tx: Tx, scope: NovelScope, q: Question, answer: Answer, p: AnswerPayload, actor: ActorRef) {
+  async function afterAccepted(tx: Tx, scope: NovelScope, q: Question, answer: Answer, p: AnswerPayload, actor: ActorRef, auto: AutoAnswerMode | null = null) {
     const at = now();
     const chan = await messaging.getChannel(scope, answer.channelId, tx);
     const options = await repo.listOptions(tx.db, scope, q.id);
     const choice = p.decision ? (p.decision === "approved" ? "승인" : "반려") : p.selected_idx.map((i) => options[i]?.label).filter(Boolean).join(", ") || "직접 입력";
-    const via = `${labelKo("channel_kind", chan.kind)}, ${hhmm(at, (await novel.getNovel(scope, tx)).timezone)}`;
-    await closeDeliveries(tx, scope, q, { answeredVia: answer.channelId, state: "answered", text: `답변 완료(${via})`, hereText: `선택: ${choice} (${via})` }); // I7, QD3/QD4
+    const clockText = hhmm(at, (await novel.getNovel(scope, tx)).timezone);
+    const via = `${labelKo("channel_kind", chan.kind)}, ${clockText}`;
+    if (auto) {
+      // 설계 추가 0014: provenance on every channel the question reached ("자동 승인" / "자동 응답")
+      const text = p.decision ? `자동 승인(완전 자율, ${clockText})` : `자동 응답(완전 자율, ${clockText}): 추천안 "${choice}"`;
+      await closeDeliveries(tx, scope, q, { state: "closed", text });
+    } else {
+      await closeDeliveries(tx, scope, q, { answeredVia: answer.channelId, state: "answered", text: `답변 완료(${via})`, hereText: `선택: ${choice} (${via})` }); // I7, QD3/QD4
+    }
     await repo.cancelSessionsForQuestion(tx.db, scope, q.id, at); // AS4 for sessions on other channels
     await ensureReflection(tx, scope, q, answer.id); // F1
-    if (q.questionType === "approve_reject" || q.questionType === "attachment_review") return decideApproval(tx, scope, q, answer, p, actor);
+    if (q.questionType === "approve_reject" || q.questionType === "attachment_review") return decideApproval(tx, scope, q, answer, p, actor, auto);
     if (q.topic === "interpretation_confirm") return handleConfirmAnswer(tx, scope, q, answer, p, actor);
     if (q.topic === "late_answer_conflict") return handleLateConflictAnswer(tx, scope, q, answer, p, actor);
     if (needsInterpretation(q.questionType, p)) return startInterpretation(tx, scope, q, answer); // INV-AI-01
@@ -692,7 +712,7 @@ export function createHitlCore(deps: HitlServiceDeps) {
   }
 
   // ── acceptAnswer (05 §6.2) ──
-  async function acceptAnswer(scope: NovelScope, input: AcceptAnswerInput, outer?: Tx) {
+  async function acceptAnswer(scope: NovelScope, input: AcceptAnswerInput, outer?: Tx, auto: AutoAnswerMode | null = null) {
     return uow.join(outer, async (tx) => {
       let q = await mustQuestion(tx, scope, input.questionId, true);
       const replay = await repo.findAnswerBySource(tx.db, scope, q.id, input.sourceKey);
@@ -714,7 +734,7 @@ export function createHitlCore(deps: HitlServiceDeps) {
       const at = now();
       if (q.status === "pending") {
         // web answer before dispatch: Q2(b) then answer (user opened it)
-        q = (await publish(tx, scope, q, { actor: actors.user(input.responderUserId), messengers: [] })) ?? q;
+        q = (await publish(tx, scope, q, { actor: auto?.actor ?? actors.user(input.responderUserId), messengers: [] })) ?? q;
       }
       const answer = await repo.insertAnswer(tx.db, {
         id: ids.next("ans"),
@@ -727,15 +747,16 @@ export function createHitlCore(deps: HitlServiceDeps) {
         payload: p,
         disposition: "late",
         lateResolution: "pending_user_choice",
+        autoAnswered: !!auto,
         createdAt: at,
         updatedAt: at,
       });
       // CAS (Q3): one statement decides the race (05 §6.2)
       const won =
         q.status === "open"
-          ? await repo.updateQuestion(tx.db, scope, q.id, ["open"], { status: "answered", acceptedAnswerId: answer.id, answeredAt: at, resolutionSource: "user_answer", updatedAt: at })
+          ? await repo.updateQuestion(tx.db, scope, q.id, ["open"], { status: "answered", acceptedAnswerId: answer.id, answeredAt: at, resolutionSource: auto ? "auto_answer" : "user_answer", updatedAt: at })
           : null;
-      const actor = actors.user(input.responderUserId);
+      const actor = auto?.actor ?? actors.user(input.responderUserId);
       if (won) {
         const accepted = (await repo.updateAnswer(tx.db, scope, answer.id, { disposition: "accepted", lateResolution: null }))!;
         await audit.record(tx, {
@@ -744,14 +765,16 @@ export function createHitlCore(deps: HitlServiceDeps) {
           action: "question.answered",
           target: { type: "question", id: q.id },
           before: { status: "open" },
-          after: { status: "answered", channelId: channel.id },
+          after: { status: "answered", channelId: channel.id, ...(auto ? { resolutionSource: "auto_answer" } : {}) },
           questionId: q.id,
           answerId: answer.id,
           approvalId: q.approvalId,
+          ...(auto ? { details: { auto: true, provenance: q.approvalId ? "자동 승인" : "자동 응답", delegatedBy: input.responderUserId } } : {}),
         });
-        await afterAccepted(tx, scope, won, accepted, p, actor);
+        await afterAccepted(tx, scope, won, accepted, p, actor, auto);
         return { disposition: "accepted" as const, answerId: answer.id };
       }
+      if (auto) throw new DomainValidationError("auto_answer_lost", "질문이 이미 답변되어 자동 응답하지 않았습니다.");
       const prev = q.acceptedAnswerId ? await repo.getAnswer(tx.db, scope, q.acceptedAnswerId) : null;
       if (prev && prev.responderUserId === input.responderUserId && isDuplicateOf(p, prev.payload as AnswerPayload)) {
         await repo.updateAnswer(tx.db, scope, answer.id, { disposition: "duplicate", lateResolution: null });
@@ -794,6 +817,29 @@ export function createHitlCore(deps: HitlServiceDeps) {
     });
   }
 
+  /** 설계 추가 0014: approval question the autopilot is expected to decide (web inbox only, no messenger push) */
+  async function heldForAuto(tx: Tx, scope: NovelScope, q: Question): Promise<boolean> {
+    if (!autoDecider || !q.approvalId) return false;
+    const a = await repo.getApproval(tx.db, scope, q.approvalId);
+    if (!a || a.status !== "pending") return false;
+    try {
+      return await autoDecider.holds(tx, scope, a);
+    } catch (err) {
+      log.warn({ err, approvalId: a.id }, "auto decider hold check failed; delivering normally");
+      return false;
+    }
+  }
+
+  async function markHeld(tx: Tx, scope: NovelScope, approvalId: string, reason: string) {
+    const a = await repo.getApproval(tx.db, scope, approvalId, true);
+    if (!a || a.status !== "pending") return;
+    const payload = (a.payload ?? {}) as Record<string, unknown>;
+    const prev = (payload.autopilot ?? {}) as Record<string, unknown>;
+    if (prev.heldReason === reason) return;
+    await repo.updateApproval(tx.db, scope, a.id, ["pending"], { payload: { ...payload, autopilot: { ...prev, heldReason: reason, heldAt: now().toISOString() } }, updatedAt: now() });
+    tx.afterCommit(() => platform.workSignal.notify("question", scope.novelId));
+  }
+
   // ── dispatcher (05 §5.1–5.2) ──
   async function dispatchNovel(scope: NovelScope): Promise<number> {
     return uow.run(async (tx) => {
@@ -815,7 +861,9 @@ export function createHitlCore(deps: HitlServiceDeps) {
           if (q.digestBatchId) continue;
           if (q.grade === "blocking") {
             const urgent = policy.urgentExceptionEnabled && q.topic === "budget";
-            if (await publish(tx, scope, q, { actor: SYS_MESSENGER, messengers: quiet && !urgent ? [] : messengers })) count++; // D3 + D4
+            // 설계 추가 0014: an approval the autopilot will decide stays on the web inbox ("자동 승인 예정")
+            const held = await heldForAuto(tx, scope, q);
+            if (await publish(tx, scope, q, { actor: SYS_MESSENGER, messengers: (quiet && !urgent) || held ? [] : messengers })) count++; // D3 + D4
           } else if (q.grade === "informational") {
             if (await publish(tx, scope, q, { actor: SYS_MESSENGER, messengers: [] })) count++;
           } else {
@@ -883,6 +931,7 @@ export function createHitlCore(deps: HitlServiceDeps) {
           const have = new Set((await repo.listDeliveries(tx.db, scope, q.id)).map((d) => d.channelId));
           const missing = messengers.filter((c) => !have.has(c.id));
           if (!missing.length) continue;
+          if (await heldForAuto(tx, scope, q)) continue; // goes out once the autopilot hands it to the author
           const view = await viewOf(tx, scope, q);
           for (const c of missing) {
             const del = await repo.insertDelivery(tx.db, { id: ids.next("qdl"), novelId: scope.novelId, questionId: q.id, channelId: c.id, state: "pending", createdAt: at, updatedAt: at });
@@ -1065,6 +1114,89 @@ export function createHitlCore(deps: HitlServiceDeps) {
       if (approvalHandlers.has(type)) throw new Error(`approval handler already registered: ${type}`);
       approvalHandlers.set(type, handler);
     },
+    registerAutoDecider(decider) {
+      if (autoDecider) throw new Error("auto decider already registered");
+      autoDecider = decider;
+    },
+    async autoDecideApproval(scope, approvalId, opts): Promise<AutoDecisionResult> {
+      if (!autoDecider) return { decided: false, code: "no_decider", reason: "자동 결정기가 없습니다." };
+      const decider = autoDecider;
+      try {
+        return await uow.run(async (tx): Promise<AutoDecisionResult> => {
+          // lock order of a human answer (question → approval → owner rows): never approval first (deadlock on a real PG
+          // when the author answers the same request at that moment)
+          const peek = await repo.getApproval(tx.db, scope, approvalId);
+          if (!peek) throw new NotFoundError("승인 요청", approvalId);
+          await mustQuestion(tx, scope, peek.questionId, true);
+          const a = await repo.getApproval(tx.db, scope, approvalId, true);
+          if (!a) throw new NotFoundError("승인 요청", approvalId);
+          if (a.status !== "pending") return { decided: false, code: "not_pending", reason: "이미 결정된 승인 요청입니다." };
+          const ok = await decider.confirm(tx, scope, a);
+          if (!ok.ok) return { decided: false, code: "not_eligible", reason: ok.reason };
+          const { web } = await channels(tx, scope);
+          if (!web) return { decided: false, code: "web_channel_missing", reason: "웹 인박스 채널이 없습니다." };
+          const r = await acceptAnswer(
+            scope,
+            { questionId: a.questionId, channelId: web.id, responderUserId: ok.delegatedByUserId, approval: { decision: "approved" }, sourceKey: `auto:${a.id}` },
+            tx,
+            { actor: opts.actor, note: opts.note },
+          );
+          if (r.disposition !== "accepted") return { decided: false, code: "not_accepted", reason: "자동 승인이 반영되지 않았습니다." };
+          return { decided: true, answerId: r.answerId };
+        });
+      } catch (err) {
+        const reason = (err as Error).message || "자동 승인 중 오류가 났습니다.";
+        // the owner refused (4xx: structure_incomplete, plot_cast_incomplete, length_below_floor …): hand it to the author.
+        // anything else (timeout, lock conflict, 5xx) is transient: the autopilot retries and holds after repeated failures
+        if (err instanceof AppError && err.status < 500) {
+          await uow.run((tx) => markHeld(tx, scope, approvalId, reason)).catch(() => undefined);
+          return { decided: false, code: err.code, reason };
+        }
+        log.warn({ err, approvalId }, "auto decision failed");
+        return { decided: false, code: "transient", reason };
+      }
+    },
+    async autoAnswerQuestion(scope, questionId, opts): Promise<AutoDecisionResult> {
+      if (!autoDecider) return { decided: false, code: "no_decider", reason: "자동 결정기가 없습니다." };
+      const decider = autoDecider;
+      try {
+        return await uow.run(async (tx): Promise<AutoDecisionResult> => {
+          const q = await mustQuestion(tx, scope, questionId, true);
+          if (q.status !== "open" && q.status !== "pending") return { decided: false, code: "not_open", reason: "열린 질문이 아닙니다." };
+          if (q.approvalId || q.questionType === "approve_reject" || q.questionType === "attachment_review") return { decided: false, code: "approval", reason: "승인 질문은 자동 응답하지 않습니다." };
+          // the stored flag, and the topic / basis again (rows created before 0014 default to 'normal')
+          if (q.sensitivity === "high" || questionSensitivity({ topic: q.topic, basis: q.blockingBasis }) === "high") {
+            return { decided: false, code: "high_sensitivity", reason: "민감도가 높은 질문은 사람이 답합니다." };
+          }
+          if (q.dependsOnQuestionId) {
+            const dep = await repo.getQuestion(tx.db, scope, q.dependsOnQuestionId);
+            if (dep && (dep.status === "open" || dep.status === "pending")) return { decided: false, code: "depends_on_open", reason: "앞 질문이 아직 열려 있습니다." };
+          }
+          if (q.questionType !== "single_choice" && q.questionType !== "multi_choice") return { decided: false, code: "not_choice", reason: "선택형 질문만 자동 응답합니다." };
+          const rec = readRecommendation(q.recommendation);
+          if (rec.option_idx === null) return { decided: false, code: "no_recommendation", reason: "추천안이 없습니다." };
+          const ok = await decider.confirmAnswer(tx, scope, q);
+          if (!ok.ok) return { decided: false, code: "not_eligible", reason: ok.reason };
+          const { web } = await channels(tx, scope);
+          if (!web) return { decided: false, code: "web_channel_missing", reason: "웹 인박스 채널이 없습니다." };
+          const r = await acceptAnswer(
+            scope,
+            { questionId: q.id, channelId: web.id, responderUserId: ok.delegatedByUserId, optionIds: [String(rec.option_idx)], sourceKey: `auto:${q.id}` },
+            tx,
+            { actor: opts.actor },
+          );
+          if (r.disposition !== "accepted") return { decided: false, code: "not_accepted", reason: "자동 응답이 반영되지 않았습니다." };
+          return { decided: true, answerId: r.answerId };
+        });
+      } catch (err) {
+        const code = (err as { code?: string }).code ?? "error";
+        log.warn({ err, questionId }, "auto answer failed");
+        return { decided: false, code, reason: (err as Error).message };
+      }
+    },
+    async markAutoHeld(scope, approvalId, reason, tx) {
+      await uow.join(tx, (t) => markHeld(t, scope, approvalId, reason));
+    },
     registerAnswerApplier(topic, applier) {
       if (answerAppliers.has(topic)) throw new Error(`answer applier already registered: ${topic}`);
       answerAppliers.set(topic, applier);
@@ -1073,7 +1205,7 @@ export function createHitlCore(deps: HitlServiceDeps) {
     async getQuestionView(scope, questionId) {
       const q = await mustQuestion(undefined, scope, questionId);
       const view = await viewOf(undefined, scope, q);
-      return { ...view, status: q.status, answers: await repo.listAnswers(uow.db, scope, q.id) };
+      return { ...view, status: q.status, resolutionSource: q.resolutionSource, sensitivity: q.sensitivity, answers: await repo.listAnswers(uow.db, scope, q.id) };
     },
     listApprovals: (scope, filter) => repo.listApprovals(uow.db, scope, filter),
     async getApproval(scope, approvalId, tx) {

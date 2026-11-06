@@ -11,7 +11,7 @@ import type { ModelCallPort } from "../../llm/index.js";
 import type { OntologyService } from "../../ontology/index.js";
 import { TaskFailure, type OrchestrationService, type RunHandle } from "../../orchestration/index.js";
 import { hitlRepo as repo } from "../adapters/db/hitl-repository.js";
-import { applyLlmGrade, gradeQuestionOutputSchema, type GradeQuestionOutput } from "../domain/grading.js";
+import { applyLlmGrade, gradeQuestionOutputSchema, HIGH_SENSITIVITY_BASES, type GradeQuestionOutput } from "../domain/grading.js";
 import { interpretAnswerOutputSchema, readRecommendation, type AnswerPayload, type InterpretAnswerOutput } from "../domain/questions.js";
 import type { HitlCore } from "./hitl-service.js";
 
@@ -171,6 +171,7 @@ export function registerHitlTasks(core: HitlCore, deps: HitlTaskDeps, already: {
             await repo.updateQuestion(tx.db, scope, q.id, ["pending", "open"], {
               grade: "blocking",
               blockingBasis: next.basis,
+              ...(HIGH_SENSITIVITY_BASES.has(next.basis) ? { sensitivity: "high" as const } : {}),
               gradeReason: `${q.gradeReason}; G3 LLM 판정: ${proposal.reason_ko || next.basis}`,
               digestBatchId: q.status === "pending" ? null : q.digestBatchId,
               recommendation: { ...readRecommendation(q.recommendation), default_action: "hold" },

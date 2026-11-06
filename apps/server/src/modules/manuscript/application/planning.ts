@@ -19,7 +19,7 @@ import {
 import { bibleMarkdown, synthArcPlan, synthBible } from "../domain/synth.js";
 import { IN_FLIGHT_STATUSES } from "../domain/transitions.js";
 import { belowFloorByCounts } from "../domain/text.js";
-import { EPISODE_HARD_MIN_CHARS } from "@ncs/shared";
+import { EPISODE_HARD_MIN_CHARS, parseAutopilotSettings, startOfLocalDay } from "@ncs/shared";
 import type { ScheduleResult } from "../index.js";
 import { promptOf, type PipelineHandler } from "./agent-task.js";
 import type { ManuscriptInternals } from "./manuscript-service.js";
@@ -288,13 +288,8 @@ export function createPlanning(m: ManuscriptInternals, getService: () => import(
       const replanActive = input.replan === true && arc.status === "active";
       if (arc.status !== "planned" && !replanActive) return { kind: "done", outputRefs: [] }; // already decided elsewhere
       if (replanActive) {
-        // a running plot's new plan is applied only after the author approves it (any level but full_auto)
-        const n = await novel.getNovel(scope, tx);
-        if (n.autonomyLevel !== "full_auto") {
-          await requestReplanApproval(tx, scope, arc, p, agent, run.taskId);
-          return { kind: "done", outputRefs: [{ refType: "arc", refId: arc.id }] };
-        }
-        await applyArcPlan(tx, scope, arc, p, agent);
+        // a running plot's new plan is applied only after its approval (full_auto: decided by the autopilot, 설계 추가 0014)
+        await requestReplanApproval(tx, scope, arc, p, agent, run.taskId);
         return { kind: "done", outputRefs: [{ refType: "arc", refId: arc.id }] };
       }
       const eps = await applyArcPlan(tx, scope, arc, p, agent);
@@ -375,7 +370,7 @@ export function createPlanning(m: ManuscriptInternals, getService: () => import(
     });
   };
 
-  // ── AR1 / AR4 ──
+  // ── AR1 (설계 추가 0014: full_auto too — the autopilot decides the arc_plan approval; AR4 stays in the table for old rows) ──
   const requestArcPlanApproval = async (tx: Tx, scope: NovelScope, arcId: string, actor: ActorRef) => {
     const arc = await novel.getArc(scope, arcId, tx);
     if (arc.status !== "planned") return { approvalId: arc.planApprovalId ?? null };
@@ -383,14 +378,7 @@ export function createPlanning(m: ManuscriptInternals, getService: () => import(
     const st = await novel.getStructure(scope, tx);
     if (st && st.status !== "approved") return { approvalId: null };
     const gaps = await cast().completeness(scope, { scope: "arc", arcId }, tx);
-    const n = await novel.getNovel(scope, tx);
     if (!gaps.complete) await cast().requestFill(tx, scope, gaps.items.filter((i) => i.missing.length).map((i) => i.characterId), actor);
-    if (n.autonomyLevel === "full_auto") {
-      if (!gaps.complete) return { approvalId: null }; // stays planned until the new characters are filled and accepted
-      await novel.transitionArc(tx, scope, arcId, "active", actor, { reason: "full_auto: 계획 승인 없이 시작" }); // AR4
-      await cast().confirmPlotCharacters(tx, scope, arcId, actor);
-      return { approvalId: null };
-    }
     const eps = await repo.listEpisodes(tx.db, scope, { arcId });
     const req = await ports.requestApproval(tx, scope, {
       approvalType: "arc_plan",
@@ -486,7 +474,10 @@ export function createPlanning(m: ManuscriptInternals, getService: () => import(
       // arc_approval (MVP-β): E9(b) for every waiting episode; rejection applies to all (per-episode choice is web-only, 05 §10.3)
       const { tx, scope, approval, actor } = ctx;
       const arc = await novel.getArc(scope, approval.subjectId, tx);
-      const eps = (await repo.listEpisodes(tx.db, scope, { arcId: arc.id })).filter((e) => e.status === "awaiting_approval");
+      // 설계 추가 0014: a batch names its episodes (partial batch of a running plot); older rows: every waiting episode
+      const named = (approval.payload as { episodeIds?: unknown } | null)?.episodeIds;
+      const only = Array.isArray(named) ? new Set(named.filter((x): x is string => typeof x === "string")) : null;
+      const eps = (await repo.listEpisodes(tx.db, scope, { arcId: arc.id })).filter((e) => e.status === "awaiting_approval" && (!only || only.has(e.id)));
       if (ctx.decision === "approved") {
         // 설계 추가: an under-floor episode is never approved in bulk — it keeps its own "분량 미달" approval request
         const basis = (await m.lengthProfile(scope, tx)).countBasis;
@@ -498,7 +489,11 @@ export function createPlanning(m: ManuscriptInternals, getService: () => import(
         for (const e of eps) if (!short.has(e.id)) await m.approveInTx(tx, scope, e.id, actor, approval.id);
         const fresh = await novel.getArc(scope, arc.id, tx);
         if (fresh.status === "awaiting_approval") {
-          if (short.size) await novel.transitionArc(tx, scope, arc.id, "active", actor, { reason: "분량 미달 화는 따로 승인합니다" }); // AR6
+          // AR7 only when every episode of the plot is approved/published: an under-floor episode left out of the batch
+          // (not named in episodeIds) still waits for its own approval → AR6
+          const after = await repo.listEpisodes(tx.db, scope, { arcId: arc.id });
+          const open = after.filter((e) => e.status !== "approved" && e.status !== "published");
+          if (short.size || open.length) await novel.transitionArc(tx, scope, arc.id, "active", actor, { reason: "분량 미달 화는 따로 승인합니다" }); // AR6
           else await novel.transitionArc(tx, scope, arc.id, "completed", actor, { arcApprovalId: approval.id }); // AR7
         }
       } else {
@@ -509,6 +504,102 @@ export function createPlanning(m: ManuscriptInternals, getService: () => import(
       }
       await unblock(tx, scope, approval.id);
     },
+  };
+
+  /** 설계 추가 0014: full_auto limits read from the novel row (settings / state written by the autopilot) */
+  const autopilotLimits = async (scope: NovelScope, n: Awaited<ReturnType<typeof novel.getNovel>>) => {
+    const s = parseAutopilotSettings(n.autopilotSettings);
+    const state = (n.autopilotState ?? {}) as { throttle?: { until?: string; reason?: string } | null };
+    const at = platform.clock.date();
+    const throttled = state.throttle?.until && new Date(state.throttle.until).getTime() > at.getTime() ? (state.throttle.reason ?? "throttled") : null;
+    const stop = n.autopilotHaltedAt ? "halted" : throttled;
+    const since = startOfLocalDay(at, n.timezone);
+    const outlines = await orchestration.listTasks(scope, { kinds: ["outline_episode"], includeCancelled: true, limit: 1000 });
+    // first outlines the scheduler started today (cycle key = episode id; reworks have their own keys)
+    const startedToday = new Set(
+      outlines.filter((t) => t.createdAt.getTime() >= since.getTime() && (t.input as { cycle_key?: string } | null)?.cycle_key === t.targetId).map((t) => t.targetId),
+    ).size;
+    return { stop, startedToday, maxPerDay: s.maxEpisodesPerDay };
+  };
+
+  /**
+   * arc_approval: one `arc` approval per plot batch. (a) every episode of the plot is done or waiting → final batch
+   * (AR5, the plot waits); (b) the reserve is full and nothing of the plot is in flight → partial batch of the waiting
+   * episodes (the plot stays active) — without (b) a plot longer than the reserve target never got a request.
+   * Under-floor episodes never join a batch (they keep their own approval).
+   */
+  const requestArcBatches = async (scope: NovelScope, arcs: Arc[], result: ScheduleResult) => {
+    const reserve = await getService().reserveSummary(scope);
+    const pendingAll = await soft(() => ports.deps.hitl.listApprovals(scope, { statuses: ["pending"], types: ["arc", "episode"] }), []);
+    const pending = pendingAll.filter((p) => p.approvalType === "arc");
+    // episodes that already have their own request (under-floor, or requested before the level became arc_approval)
+    const ownRequest = new Set(pendingAll.filter((p) => p.approvalType === "episode").map((p) => p.subjectId));
+    for (const arc of arcs.filter((a) => a.status === "active")) {
+      if (pending.some((p) => p.subjectId === arc.id)) continue;
+      const eps = await repo.listEpisodes(platform.uow.db, scope, { arcId: arc.id });
+      const waiting = eps.filter((e) => e.status === "awaiting_approval");
+      if (!waiting.length) continue;
+      const flagged = await getService().withLengthFlags(scope, waiting);
+      const short = flagged.filter((e) => e.lengthBelowFloor);
+      const batch = flagged.filter((e) => !e.lengthBelowFloor && !ownRequest.has(e.id));
+      if (!batch.length) continue; // only under-floor episodes: each keeps its own approval request
+      const final = eps.every((e) => ["awaiting_approval", "approved", "published"].includes(e.status));
+      const partial = !final && reserve.includingAwaiting >= reserve.target && !eps.some((e) => IN_FLIGHT_STATUSES.includes(e.status));
+      if (!final && !partial) continue;
+      await platform.uow.run(async (tx) => {
+        const fresh = await novel.getArc(scope, arc.id, tx);
+        if (fresh.status !== "active") return;
+        const nos = batch.map((e) => `${e.episodeNo}화`).join(", ");
+        const req = await ports.requestApproval(tx, scope, {
+          approvalType: "arc",
+          target: { type: "arc", id: arc.id },
+          question: {
+            title: `「${arc.title}」 플롯 승인 요청${final ? "" : ` (${nos})`}`,
+            body: [
+              final ? `${arc.title}의 남은 화(${nos})가 모두 승인 대기입니다.` : `비축분이 찼습니다. ${arc.title}에서 승인 대기 중인 ${nos}을(를) 묶어 승인합니다. 플롯의 나머지 화는 이어서 씁니다.`,
+              short.length ? `\n⚠ 분량 미달(${EPISODE_HARD_MIN_CHARS.toLocaleString("ko-KR")}자 미만): ${short.map((e) => `${e.episodeNo}화`).join(", ")} — 묶음에서 빠지며 화마다 따로 승인해야 합니다.` : "",
+            ].join(""),
+            links: [{ type: "arc", id: arc.id }, ...batch.map((e) => ({ type: "episode" as const, id: e.id }))],
+          },
+          requestedBy: scheduler,
+          payload: { episodeIds: batch.map((e) => e.id), episodeNos: batch.map((e) => e.episodeNo), partial: !final },
+        });
+        if (final) await novel.transitionArc(tx, scope, arc.id, "awaiting_approval", scheduler, req.approvalId ? { arcApprovalId: req.approvalId } : {}); // AR5
+      });
+      result.notes.push(`arc_batch:${arc.ord}:${final ? "final" : "partial"}:${batch.length}`);
+    }
+  };
+
+  /**
+   * 설계 추가 0014: leaving arc_approval. Episodes that waited for a plot batch (no approval row of their own) get their
+   * per-episode request; a pending batch is cancelled first (its plot goes back to `active`, AR6) — otherwise they
+   * would wait forever (no batch at this level, nothing for the autopilot to decide) and fill the reserve.
+   */
+  const requestMissingEpisodeApprovals = async (scope: NovelScope, arcs: Arc[], result: ScheduleResult) => {
+    const waiting = await repo.listEpisodes(platform.uow.db, scope, { statuses: ["awaiting_approval"] });
+    if (!waiting.length) return;
+    const pending = await soft(() => ports.deps.hitl.listApprovals(scope, { statuses: ["pending"], types: ["episode", "arc"] }), null);
+    if (!pending) return;
+    const own = new Set(pending.filter((p) => p.approvalType === "episode").map((p) => p.subjectId));
+    const orphans = waiting.filter((e) => !own.has(e.id));
+    if (!orphans.length) return;
+    const flagged = await getService().withLengthFlags(scope, orphans);
+    await platform.uow.run(async (tx) => {
+      const n = await novel.getNovel(scope, tx);
+      if (n.autonomyLevel === "arc_approval") return;
+      for (const b of pending.filter((p) => p.approvalType === "arc" && orphans.some((e) => e.arcId === p.subjectId))) {
+        await ports.deps.hitl.cancelApproval(tx, scope, b.id, "자율성 수준이 바뀌어 화별 승인으로 다시 요청합니다.", scheduler);
+        const arc = await novel.getArc(scope, b.subjectId, tx);
+        if (arc.status === "awaiting_approval") await novel.transitionArc(tx, scope, arc.id, "active", scheduler, { reason: "자율성 수준 변경: 화별 승인으로 전환" }); // AR6
+      }
+      for (const e of flagged) {
+        const fresh = await m.mustEpisode(tx, scope, e.id, true);
+        if (fresh.status !== "awaiting_approval") continue;
+        await m.requestEpisodeApproval(tx, scope, fresh, scheduler, { lengthWarning: e.lengthBelowFloor ? "분량 미달(최소 3,000자)" : null, belowFloor: !!e.lengthBelowFloor });
+      }
+    });
+    result.notes.push(`episode_approvals_requested:${orphans.length}`);
+    void arcs;
   };
 
   // ── deterministic scheduler (04 §3.4, system:scheduler) ──
@@ -552,29 +643,6 @@ export function createPlanning(m: ManuscriptInternals, getService: () => import(
       const r = await platform.uow.run((tx) => requestArcPlanApproval(tx, scope, arc.id, scheduler));
       result.notes.push(`arc_plan_approval:${arc.ord}:${r.approvalId ?? "none"}`);
     }
-    // arc_approval autonomy: AR5 when every episode of the arc waits
-    if (n.autonomyLevel === "arc_approval") {
-      for (const arc of arcs.filter((a) => a.status === "active")) {
-        const eps = await repo.listEpisodes(platform.uow.db, scope, { arcId: arc.id });
-        if (!eps.length || !eps.every((e) => e.status === "awaiting_approval")) continue;
-        const short = (await getService().withLengthFlags(scope, eps)).filter((e) => e.lengthBelowFloor);
-        if (short.length === eps.length) continue; // only under-floor episodes: each keeps its own approval request
-        await platform.uow.run(async (tx) => {
-          const req = await ports.requestApproval(tx, scope, {
-            approvalType: "arc",
-            target: { type: "arc", id: arc.id },
-            question: {
-              title: `「${arc.title}」 플롯 승인 요청`,
-              body: `${arc.title}의 ${eps.length}개 화가 모두 승인 대기입니다.${short.length ? `\n\n⚠ 분량 미달(${EPISODE_HARD_MIN_CHARS.toLocaleString("ko-KR")}자 미만): ${short.map((e) => `${e.episodeNo}화`).join(", ")} — 일괄 승인에서 빠지며 화마다 따로 승인해야 합니다.` : ""}`,
-              links: [{ type: "arc", id: arc.id }],
-            },
-            requestedBy: scheduler,
-          });
-          await novel.transitionArc(tx, scope, arc.id, "awaiting_approval", scheduler, req.approvalId ? { arcApprovalId: req.approvalId } : {});
-        });
-      }
-    }
-
     // outline_episode for the next planned episodes (reserve + in-flight < target, in-flight < cap)
     const all = await repo.listEpisodes(platform.uow.db, scope);
     const reserve = await getService().reserveSummary(scope);
@@ -589,10 +657,19 @@ export function createPlanning(m: ManuscriptInternals, getService: () => import(
       !!arc &&
       !arc.pausedAt &&
       !(arc.planFlags ?? []).length &&
-      (arc.status === "active" || (n.autonomyLevel === "full_auto" && arc.status === "planned" && !arc.partId));
+      arc.status === "active";
     const arcById = new Map(arcs.map((a) => [a.id, a]));
+    // 설계 추가 0014 (full_auto): kill switch / daily budget throttle stop new episodes; at most N new episodes a day
+    const auto = n.autonomyLevel === "full_auto" ? await autopilotLimits(scope, n) : null;
+    if (auto?.stop) result.notes.push(`autopilot:${auto.stop}`);
+    let startedToday = auto?.startedToday ?? 0;
     for (const ep of all.filter((e) => e.status === "planned")) {
       if (inFlight >= cfg.maxEpisodesInFlight || reserve.includingAwaiting + inFlight >= reserve.target) break;
+      if (auto?.stop) break;
+      if (auto && startedToday >= auto.maxPerDay) {
+        result.notes.push("autopilot:daily_episode_cap");
+        break;
+      }
       if (!startable(arcById.get(ep.arcId)) || ep.pausedAt || hasActive("outline_episode", ep.id)) continue;
       const prev = all.find((e) => e.episodeNo === ep.episodeNo - 1);
       if (prev && ["planned", "outlining", "drafting"].includes(prev.status)) break; // ED-1 (N-1 must have reached checking)
@@ -615,8 +692,13 @@ export function createPlanning(m: ManuscriptInternals, getService: () => import(
       );
       if (taskId) result.createdTasks.push({ kind: "outline_episode", taskId, targetId: ep.id });
       inFlight++;
+      startedToday++;
     }
     result.inFlight = inFlight;
+
+    // arc_approval (설계 추가 0014): plot batch approvals, evaluated after the reserve count above
+    if (n.autonomyLevel === "arc_approval") await requestArcBatches(scope, arcs, result);
+    else await requestMissingEpisodeApprovals(scope, arcs, result);
 
     // next arc via schedule_episodes when the planned queue runs short (04 §3.4 step 4)
     const epsOf = (arcId: string) => all.filter((e) => e.arcId === arcId).length;
@@ -626,7 +708,7 @@ export function createPlanning(m: ManuscriptInternals, getService: () => import(
     const remaining = all.filter((e) => e.status === "planned" && startable(arcById.get(e.arcId))).length;
     const maxPlanned = arcs.reduce((x, a) => Math.max(x, a.plannedEpisodeTo), 0);
     const goalOpen = st ? arcs.some((a) => a.status === "planned" && epsOf(a.id) === 0) : !goal.totalEpisodesMax || maxPlanned < goal.totalEpisodesMax;
-    if (!planning && goalOpen && remaining < reserve.target && !hasActive("schedule_episodes", goal.id)) {
+    if (!planning && goalOpen && remaining < reserve.target && !hasActive("schedule_episodes", goal.id) && !auto?.stop) {
       const taskId = await platform.uow.run((tx) =>
         ports.createTask(tx, scope, { kind: "schedule_episodes", targetType: "goal", targetId: goal.id, input: { goal_id: goal.id, reason: "reserve_low" }, createdBy: scheduler, priority: 400 }),
       );

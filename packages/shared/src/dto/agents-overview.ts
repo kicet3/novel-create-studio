@@ -189,6 +189,8 @@ export const agentRunSpanSchema = z.object({
   outputTokens: z.number().int(),
   costMicros: z.number().int(),
   models: z.array(z.string()),
+  /** agent-to-agent repair rounds in this run (transcript: GET …/tasks/:taskId/runs → outputSummary) */
+  repairRounds: z.number().int().default(0),
 });
 export type AgentRunSpanDto = z.infer<typeof agentRunSpanSchema>;
 

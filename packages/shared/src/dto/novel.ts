@@ -55,6 +55,11 @@ export const novelDtoSchema = z.object({
   activeSchemaVersionId: z.string(),
   pausedAt: isoDateTime.nullable(),
   pauseReason: z.enum(ENUMS.pause_reason).nullable(),
+  /** 설계 추가 0014: 완전 자율 — 저장된 설정(빈 객체 = 기본값, parseAutopilotSettings로 읽음)·킬 스위치 */
+  autopilotSettings: z.record(z.string(), z.unknown()).default({}),
+  autopilotEnabledByUserId: z.string().nullable().default(null),
+  autopilotHaltedAt: isoDateTime.nullable().default(null),
+  autopilotHaltReason: z.enum(ENUMS.autopilot_halt_reason).nullable().default(null),
   createdAt: isoDateTime,
   updatedAt: isoDateTime,
 });
@@ -192,6 +197,12 @@ export const changeAutonomyRequestSchema = z.object({
   publishPolicy: z.enum(ENUMS.publish_policy).optional(),
   /** required true when autonomyLevel=full_auto (정책·저작권 경고 확인) */
   acknowledgedFullAutoWarning: z.boolean().default(false),
+  /** 설계 추가 0014: required true when switching full_auto ON (자동으로 진행할 항목 확인) */
+  acknowledgedAutoItems: z.boolean().default(false),
+  /** required true when concept confirm / structure approval auto-approval is on ("구성·결말도 자동 승인") */
+  acknowledgedStructureAutoWarning: z.boolean().default(false),
+  /** settings merged when full_auto is switched on (AutopilotSettingsPatch without the ack flag) */
+  autopilot: z.record(z.string(), z.unknown()).optional(),
   reason: z.string().max(1000).optional(),
 });
 export type ChangeAutonomyRequest = z.input<typeof changeAutonomyRequestSchema>;

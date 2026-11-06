@@ -10,9 +10,13 @@ export const extractionResultSchema = z.object({
       z.object({
         local_key: z.string().min(1),
         scene_ord: z.number().int().min(0),
-        char_start: z.number().int().min(0),
-        char_end: z.number().int().min(0),
+        /** verbatim surface as written in the scene (without particles) */
         surface: z.string(),
+        /** 설계 추가: short verbatim context (10–40 chars, one line) containing the surface — the server locates the span with it */
+        quote: z.string().nullable().optional(),
+        /** offsets in the scene text (0 = first char of the scene body): hints only, the server locates the span */
+        char_start: z.number().int().min(0).nullable().optional(),
+        char_end: z.number().int().min(0).nullable().optional(),
         mention_kind: mentionKind,
         speaker_hint: z.string().nullable().optional(),
         chain_key: z.string().nullable().optional(),

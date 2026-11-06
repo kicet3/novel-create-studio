@@ -146,7 +146,7 @@ export const PROMPT_TEMPLATE_DATA: readonly PromptTemplateData[] = [
   T(
     "world_keeper",
     "extract_facts",
-    `<manuscript> 안의 원고에서 새로 드러난 사실(관계·상태·사건·인물 지식)과 엔티티 언급을 추출합니다. 각 사실에는 근거가 되는 원문 인용을 붙이고, 인용은 원고에 있는 문자열 그대로 씁니다. ${HANDLE_NOTE}`,
+    "<scene> 안 본문에서 새로 드러난 사실(관계·상태·사건·인물 지식)과 엔티티 언급을 추출합니다. 언급마다 원문 그대로의 surface와, 그 언급을 포함한 원문 그대로의 짧은 quote를 붙입니다(위치는 서버가 quote로 찾고, char_start/char_end는 힌트일 뿐입니다). 사실의 주어·목적어는 언급 local_key로 가리킵니다.",
   ),
   T(
     "world_keeper",

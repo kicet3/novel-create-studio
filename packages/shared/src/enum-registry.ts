@@ -229,7 +229,7 @@ export const ENUMS = {
     "system_failure",
     "none",
   ],
-  resolution_source: ["user_answer", "default_applied", "deadline_hold", "absence_delegated", "notice_only"],
+  resolution_source: ["user_answer", "default_applied", "deadline_hold", "absence_delegated", "notice_only", "auto_answer"],
   question_delivery_state: ["pending", "posted", "answered_here", "closed_elsewhere", "withdrawn", "failed"],
   answer_session_status: ["active", "completed", "expired", "cancelled"],
   answer_disposition: ["accepted", "late", "duplicate"],
@@ -324,6 +324,7 @@ export const ENUMS = {
     "migrator",
     "health_check",
     "importer",
+    "autopilot", // 설계 추가 0014: 완전 자율 진행
   ],
   ref_type: [
     "novel",
@@ -549,6 +550,9 @@ export const ENUMS = {
   world_item_kind: ["faction", "place", "system", "object", "history", "relation", "constraint"],
   world_item_status: ["pending", "approved", "rejected", "superseded"],
   world_item_origin: ["agent", "user"],
+  /** 설계 추가 0014: 완전 자율 — 자율 진행 멈춤 사유, 질문 민감도(high = 자동 응답하지 않음) */
+  autopilot_halt_reason: ["user", "budget_warning", "error"],
+  question_sensitivity: ["normal", "high"],
 } as const satisfies Record<string, readonly [string, ...string[]]>;
 
 export type EnumName = keyof typeof ENUMS;

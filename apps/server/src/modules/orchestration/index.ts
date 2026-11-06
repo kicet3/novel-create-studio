@@ -55,6 +55,11 @@ export interface RunHandle {
   noteSafePoint?(seq: number): void;
   /** runs.context_snapshot_id (agents ContextBuilder); pass the caller's tx when inside one */
   attachContextSnapshot?(tx: Tx | null, snapshotId: string): Promise<void>;
+  /**
+   * set one top-level key of runs.output_summary (written when the run finishes, whatever the outcome), e.g. the
+   * agent-to-agent repair dialogue (`repairRounds`, `repairDialogues`). Values must be JSON and contain no secrets.
+   */
+  noteOutputSummary?(key: string, value: unknown): void;
 }
 
 /**
@@ -166,7 +171,7 @@ export interface TaskFilter {
 }
 
 export interface TaskWithLatestRun extends Task {
-  latestRun: Pick<Run, "id" | "status" | "stopReason" | "errorFamily" | "errorMessage" | "startedAt" | "heartbeatAt" | "finishedAt" | "costMicros"> | null;
+  latestRun: (Pick<Run, "id" | "status" | "stopReason" | "errorFamily" | "errorMessage" | "startedAt" | "heartbeatAt" | "finishedAt" | "costMicros"> & { repairRounds: number }) | null;
 }
 
 // ── service (04 §13 OrchestrationApi + registry + read side) ──────────────

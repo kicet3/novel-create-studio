@@ -1,6 +1,7 @@
 /** orchestration tables only: tasks, task_dependencies, wake_requests, runs. */
 import { and, asc, desc, eq, inArray, isNull, lte, ne, notInArray, or, sql, type SQL } from "@ncs/db/orm";
 import { runs, taskDependencies, tasks, wakeRequests } from "@ncs/db/schema";
+import { repairRoundsOf } from "@ncs/shared";
 import type { Db, NovelScope } from "../../../../platform/index.js";
 import type { Run, Task, TaskFilter, TaskWithLatestRun } from "../../index.js";
 
@@ -120,7 +121,7 @@ export const taskRepo = {
       return {
         ...t,
         latestRun: r
-          ? { id: r.id, status: r.status, stopReason: r.stopReason, errorFamily: r.errorFamily, errorMessage: r.errorMessage, startedAt: r.startedAt, heartbeatAt: r.heartbeatAt, finishedAt: r.finishedAt, costMicros: r.costMicros }
+          ? { id: r.id, status: r.status, stopReason: r.stopReason, errorFamily: r.errorFamily, errorMessage: r.errorMessage, startedAt: r.startedAt, heartbeatAt: r.heartbeatAt, finishedAt: r.finishedAt, costMicros: r.costMicros, repairRounds: repairRoundsOf(r.outputSummary) }
           : null,
       };
     });

@@ -32,6 +32,72 @@ export type TaskListQuery = z.infer<typeof taskListQuerySchema>;
 
 export const taskParamsSchema = z.object({ taskId: z.string().regex(/^tsk_/) });
 
+// ── agent-to-agent repair dialogue (runs.output_summary) ─────────────────
+/**
+ * When a deterministic check rejects an agent's structured output, a validator critique is sent back to the
+ * producing agent as a follow-up turn in the same conversation (agents.callWithRepair). Each dialogue is stored
+ * on the run: `runs.output_summary = { repairRounds, repairDialogues: [...] }`.
+ */
+export const repairIssueSchema = z.object({
+  /** which item failed, e.g. `ord=3 m7 "서이온"` */
+  item: z.string(),
+  problem: z.string(),
+  /** source excerpt shown to the producer */
+  excerpt: z.string().nullable().optional(),
+});
+export type RepairIssueDto = z.infer<typeof repairIssueSchema>;
+
+export const repairRoundSchema = z.object({
+  round: z.number().int(),
+  /** the critique sent to the producing agent (validator → producer) */
+  critique: z.string(),
+  issueCount: z.number().int(),
+  /** provider_calls.id of the producer's answer to this critique (null when the call failed) */
+  responseCallId: z.string().nullable(),
+  /** start of the producer's answer (full answer: provider_calls) */
+  responseExcerpt: z.string().nullable(),
+  /** issues left after the answer (null when the call failed) */
+  remainingIssueCount: z.number().int().nullable(),
+});
+export type RepairRoundDto = z.infer<typeof repairRoundSchema>;
+
+export const repairDialogueSchema = z.object({
+  purpose: z.string(),
+  /** what was checked, e.g. "언급 위치 검증" */
+  label: z.string(),
+  /** the reviewing side, e.g. "검증 에이전트" */
+  critic: z.string(),
+  producerRole: z.enum(ENUMS.agent_role),
+  maxRounds: z.number().int(),
+  initialCallId: z.string().nullable(),
+  initialIssueCount: z.number().int(),
+  finalIssueCount: z.number().int(),
+  /** resolved = no issues left; partial = fewer issues; unresolved = no improvement */
+  status: z.enum(["resolved", "partial", "unresolved"]),
+  rounds: z.array(repairRoundSchema),
+  /** remaining issues (first ones) after the last round */
+  remaining: z.array(repairIssueSchema).default([]),
+});
+export type RepairDialogueDto = z.infer<typeof repairDialogueSchema>;
+
+/** dialogues stored on a run (tolerates missing / malformed output_summary) */
+export function repairDialoguesOf(outputSummary: unknown): RepairDialogueDto[] {
+  const list = outputSummary && typeof outputSummary === "object" ? (outputSummary as { repairDialogues?: unknown }).repairDialogues : undefined;
+  if (!Array.isArray(list)) return [];
+  const out: RepairDialogueDto[] = [];
+  for (const d of list) {
+    const p = repairDialogueSchema.safeParse(d);
+    if (p.success) out.push(p.data);
+  }
+  return out;
+}
+
+/** total repair rounds stored on a run */
+export function repairRoundsOf(outputSummary: unknown): number {
+  const n = outputSummary && typeof outputSummary === "object" ? (outputSummary as { repairRounds?: unknown }).repairRounds : undefined;
+  return typeof n === "number" && Number.isFinite(n) ? n : 0;
+}
+
 export const runSummaryDtoSchema = z.object({
   id: z.string(),
   status: z.enum(ENUMS.run_status),
@@ -42,6 +108,8 @@ export const runSummaryDtoSchema = z.object({
   heartbeatAt: isoDateTime.nullable(),
   finishedAt: isoDateTime.nullable(),
   costMicros: z.number().int(),
+  /** agent-to-agent repair rounds of this run (runs.output_summary.repairRounds) */
+  repairRounds: z.number().int().default(0),
 });
 export type RunSummaryDto = z.infer<typeof runSummaryDtoSchema>;
 

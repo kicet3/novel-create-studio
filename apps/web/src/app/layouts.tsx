@@ -1,10 +1,11 @@
-import { Outlet } from "react-router";
+import { Outlet, useLocation } from "react-router";
 import { AppShell } from "../components/layout/AppShell.js";
 import { Sidebar, SidebarNavItem, SidebarSection } from "../components/layout/Sidebar.js";
 import { NOVEL_NAV, novelPath } from "../components/layout/nav.js";
 import { useNovelId } from "./novel-context.js";
 import { NovelSidebarContext, useInboxNavCount } from "../features/novels/NovelSidebarContext.js";
 import { useNovel } from "../features/novels/api.js";
+import { AutopilotBanner } from "../features/autopilot/AutopilotBanner.js";
 
 /** Shell for install-level pages: /novels, /onboarding, /settings. */
 export function GlobalLayout() {
@@ -51,6 +52,9 @@ export function NovelLayout() {
   const novelId = useNovelId();
   const inboxCount = useInboxNavCount(novelId);
   const novel = useNovel(novelId);
+  const { pathname } = useLocation();
+  // 설계 추가 0014: the full_auto status + kill switch on every novel screen (home shows the detailed banner itself)
+  const home = pathname.replace(/\/+$/, "") === novelPath(novelId, "").replace(/\/+$/, "");
   return (
     <AppShell
       title={novel.data?.title}
@@ -88,6 +92,16 @@ export function NovelLayout() {
         </Sidebar>
       }
     >
+      {!home && novel.data?.autonomyLevel === "full_auto" && (
+        <div className="mb-3">
+          <AutopilotBanner novelId={novelId} autonomyLevel={novel.data.autonomyLevel} timezone={novel.data.timezone} compact />
+        </div>
+      )}
+      {!home && novel.data?.autonomyLevel === "full_auto" && (
+        <div className="mb-3">
+          <AutopilotBanner novelId={novelId} autonomyLevel={novel.data.autonomyLevel} timezone={novel.data.timezone} compact />
+        </div>
+      )}
       <Outlet />
     </AppShell>
   );

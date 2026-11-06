@@ -60,6 +60,8 @@ export interface QuestionDraft {
   notice?: boolean;
   /** offer "직접 입력" (free text outside the options → interpret_answer, FR-MSG-16) */
   allowFreeText?: boolean;
+  /** 설계 추가 0014: an agent may only RAISE the sensitivity (high = never auto-answered in full_auto) */
+  sensitivity?: "high";
   /** deterministic G2 inputs the asking module knows (05 §4.2 U1–U7) */
   gradeHints?: {
     touchesApprovedCanon?: boolean;
@@ -101,6 +103,8 @@ export interface ApprovalDecisionContext {
   reworkFrom: ReworkFrom | null;
   actor: ActorRef;
   answerId: string | null;
+  /** 설계 추가 0014: decided by the autopilot (full_auto) on behalf of the delegating author */
+  auto?: boolean;
 }
 
 export type ApprovalHandler = (ctx: ApprovalDecisionContext) => Promise<void>;
@@ -150,6 +154,20 @@ export interface PendingCounts {
   earliestDeadlineAt: Date | null;
 }
 
+/**
+ * 설계 추가 0014: the autopilot (full_auto) registers itself here. `holds` is a cheap check run by the dispatcher in
+ * its transaction (true = the approval waits for an auto decision: web inbox only, no messenger push); `confirm`
+ * re-checks inside the auto-decision transaction (novel row locked) right before the decision is recorded.
+ */
+export interface AutoDecider {
+  holds(tx: Tx, scope: NovelScope, approval: Approval): Promise<boolean>;
+  confirm(tx: Tx, scope: NovelScope, approval: Approval): Promise<{ ok: true; delegatedByUserId: string } | { ok: false; reason: string }>;
+  /** may this question be auto-answered now (level / halt / settings re-check in the answer transaction) */
+  confirmAnswer(tx: Tx, scope: NovelScope, question: Question): Promise<{ ok: true; delegatedByUserId: string } | { ok: false; reason: string }>;
+}
+
+export type AutoDecisionResult = { decided: true; answerId: string } | { decided: false; code: string; reason: string };
+
 export interface HitlService {
   createQuestion(tx: Tx, scope: NovelScope, draft: QuestionDraft, ctx: CreateQuestionContext): Promise<{ questionId: string; grade: QuestionGrade; displayNo: number }>;
   /** A1 + linked approve_reject question in the same tx (ADR-014) */
@@ -165,11 +183,23 @@ export interface HitlService {
   recordReflection(tx: Tx, scope: NovelScope, answerId: string, r: Awaited<ReturnType<AnswerApplier>>, actor: ActorRef): Promise<{ reflectionId: string }>;
 
   registerApprovalHandler(approvalType: ApprovalType, handler: ApprovalHandler): void;
+  /** 설계 추가 0014 (one decider; the autopilot module) */
+  registerAutoDecider(decider: AutoDecider): void;
+  /**
+   * approve a pending approval on behalf of the delegating author (answer row auto_answered, question
+   * resolution_source=auto_answer, approval auto_decided, handler ctx.auto). Never rejects. A handler refusal rolls the
+   * decision back and marks the approval held (payload.autopilot.heldReason) — it then goes to the human path.
+   */
+  autoDecideApproval(scope: NovelScope, approvalId: string, opts: { actor: ActorRef; note?: string }): Promise<AutoDecisionResult>;
+  /** answer an open (non-approval) choice question with its recommended option (`auto_answer`) */
+  autoAnswerQuestion(scope: NovelScope, questionId: string, opts: { actor: ActorRef }): Promise<AutoDecisionResult>;
+  /** the autopilot will not decide this approval: payload.autopilot.heldReason (the dispatcher sends it to messengers) */
+  markAutoHeld(scope: NovelScope, approvalId: string, reason: string, tx?: Tx): Promise<void>;
   registerAnswerApplier(topic: QuestionTopic, applier: AnswerApplier): void;
 
   // read side (web inbox, home)
   listQuestions(scope: NovelScope, filter?: QuestionFilter): Promise<Question[]>;
-  getQuestionView(scope: NovelScope, questionId: string): Promise<QuestionView & { status: QuestionStatus; answers: Answer[] }>;
+  getQuestionView(scope: NovelScope, questionId: string): Promise<QuestionView & { status: QuestionStatus; resolutionSource: Question["resolutionSource"]; sensitivity: Question["sensitivity"]; answers: Answer[] }>;
   listApprovals(scope: NovelScope, filter?: { statuses?: ApprovalStatus[]; types?: ApprovalType[] }): Promise<Approval[]>;
   getApproval(scope: NovelScope, approvalId: string, tx?: Tx): Promise<Approval>;
   pendingCounts(scope: NovelScope): Promise<PendingCounts>;

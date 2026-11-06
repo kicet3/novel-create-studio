@@ -67,6 +67,13 @@ export const novels = pgTable(
     pausedAt: timestamp("paused_at", { withTimezone: true, mode: "date" }),
     pauseReason: text("pause_reason", { enum: ENUMS.pause_reason }),
     stylePresetAssetId: text("style_preset_asset_id"),
+    /** 설계 추가 0014: 완전 자율 설정(AutopilotSettings, 빈 객체 = 기본값)·진행 상태·위임한 사람·킬 스위치 */
+    autopilotSettings: jsonb("autopilot_settings").$type<Record<string, unknown>>().notNull().default({}),
+    autopilotState: jsonb("autopilot_state").$type<Record<string, unknown>>().notNull().default({}),
+    autopilotEnabledByUserId: text("autopilot_enabled_by_user_id"),
+    autopilotAcknowledgedAt: timestamp("autopilot_acknowledged_at", { withTimezone: true, mode: "date" }),
+    autopilotHaltedAt: timestamp("autopilot_halted_at", { withTimezone: true, mode: "date" }),
+    autopilotHaltReason: text("autopilot_halt_reason", { enum: ENUMS.autopilot_halt_reason }),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },

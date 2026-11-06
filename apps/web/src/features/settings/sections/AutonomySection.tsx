@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
-import { labelKo, type AutonomyLevel, type NovelDto, type PublishPolicy } from "@ncs/shared";
-import { errorMessage } from "../../../api/client.js";
+import { formatUsd, labelKo, parseAutopilotSettings, type AutonomyLevel, type NovelDto, type PublishPolicy } from "@ncs/shared";
+import { api, errorMessage } from "../../../api/client.js";
 import { Badge, Button, Callout, Card, Checkbox, ChoiceGroup, ConfirmDialog, Field, Select, type ChoiceOption } from "../../../components/ui/index.js";
 import { useChangeAutonomy } from "../../novels/api.js";
+import { ALWAYS_HUMAN, AUTO_ITEMS, AUTO_PUBLISH_ITEM, STRUCTURE_OPT_IN_LABEL } from "../../autopilot/labels.js";
+import { usePendingApprovals } from "../../inbox/api.js";
 
 const OPTIONS: ChoiceOption<AutonomyLevel>[] = [
   {
@@ -14,35 +16,78 @@ const OPTIONS: ChoiceOption<AutonomyLevel>[] = [
   {
     value: "arc_approval",
     label: "플롯별 승인",
-    adornment: <Badge>준비 중</Badge>,
-    description: "비축분이 쌓이면 플롯 단위로 묶어 승인합니다. 그 전의 사실은 ‘미확정’으로 씁니다.",
+    description: "화는 플롯 단위로 묶어 승인합니다. 비축분이 차면 그때까지 쓴 화를 묶어 먼저 승인 요청하고, 그 전의 사실은 ‘미확정’으로 씁니다. 플롯 계획은 직접 승인합니다.",
   },
   {
     value: "full_auto",
     label: "완전 자율",
-    adornment: <Badge tone="violet">준비 중</Badge>,
-    description: "기획서 확정과 질문 응답만 사람이 하고 나머지는 에이전트가 진행합니다. 정책·저작권 경고 확인이 필요합니다.",
+    description: "켜면 아래 항목을 에이전트가 진행합니다. 사람 확인이 필요한 곳에서는 그 갈래만 멈추고 인박스·메신저로 알립니다. 정책·저작권 경고 확인이 필요합니다.",
   },
   { value: "co_writing", label: "공동 집필", adornment: <Badge>v1</Badge>, description: "v1에서 제공합니다.", disabled: true },
 ];
 
+const PUBLISH_OPTIONS: Array<{ value: PublishPolicy; disabled?: boolean; suffix?: string }> = [
+  { value: "manual" },
+  { value: "scheduled" },
+  { value: "batch_question", disabled: true, suffix: " (준비 중)" },
+];
+
 /**
- * 자율성 수준 (FR-UI-09, INV-NOV-02/04). Change is recorded as `novel.autonomy_changed`.
+ * 자율성 수준 (FR-UI-09, INV-NOV-02/04). Change is recorded as `novel.autonomy_changed` (+ `autopilot.enabled/disabled`).
  * 기존 approved 사실 변경·리트콘·결말 방향 변경·예산 재개·떡밥 폐기는 모든 수준에서 사람 승인입니다.
  */
 export function AutonomySection({ novel }: { novel: NovelDto }) {
   const [level, setLevel] = useState<AutonomyLevel>(novel.autonomyLevel);
-  const [policy, setPolicy] = useState<PublishPolicy>(novel.publishPolicy);
+  const [policy, setPolicy] = useState<PublishPolicy>(novel.publishPolicy === "batch_question" ? "manual" : novel.publishPolicy);
   const [ack, setAck] = useState(false);
+  const [ackItems, setAckItems] = useState(false);
+  const [optIn, setOptIn] = useState(false);
+  const [ackOptIn, setAckOptIn] = useState(false);
+  const [conceptAuto, setConceptAuto] = useState(false);
   const [confirm, setConfirm] = useState(false);
+  const [conceptError, setConceptError] = useState<string | null>(null);
   const m = useChangeAutonomy(novel.id);
   useEffect(() => {
     setLevel(novel.autonomyLevel);
-    setPolicy(novel.publishPolicy);
+    setPolicy(novel.publishPolicy === "batch_question" ? "manual" : novel.publishPolicy);
   }, [novel.autonomyLevel, novel.publishPolicy]);
 
+  const turningOn = level === "full_auto" && novel.autonomyLevel !== "full_auto";
   const dirty = level !== novel.autonomyLevel || (level === "full_auto" && policy !== novel.publishPolicy);
   const needsAck = level === "full_auto";
+  const settings = parseAutopilotSettings(novel.autopilotSettings);
+  const approvals = usePendingApprovals(novel.id);
+  const pendingApprovals = approvals.data?.items.length ?? 0;
+  const canSubmit = !needsAck || (ack && (!turningOn || (ackItems && (!optIn || ackOptIn))));
+
+  const submit = () =>
+    m.mutate(
+      {
+        autonomyLevel: level,
+        publishPolicy: level === "full_auto" ? policy : undefined,
+        acknowledgedFullAutoWarning: needsAck ? ack : false,
+        acknowledgedAutoItems: turningOn ? ackItems : false,
+        acknowledgedStructureAutoWarning: turningOn && optIn ? ackOptIn : false,
+        // the opt-ins are sent explicitly when turning on (never carried over from an earlier full_auto period)
+        ...(turningOn ? { autopilot: { autoConfirmConcept: optIn, autoApproveStructure: optIn } } : {}),
+      },
+      {
+        onSuccess: async () => {
+          setConfirm(false);
+          if (!(turningOn && conceptAuto)) return;
+          // 진행 중인 컨셉 대화에 자동 승인도 켜기 (concept chat auto-approve, user action)
+          try {
+            const view = await api.get<{ session?: { id: string; status: string } | null; id?: string }>(`/novels/${novel.id}/concept/session`);
+            const sid = view.session?.id ?? view.id;
+            if (sid) await api.post(`/novels/${novel.id}/concept/sessions/${sid}/auto-approve`, { enabled: true });
+          } catch (err) {
+            setConceptError(`컨셉 대화 자동 승인을 켜지 못했습니다: ${errorMessage(err)}`);
+          }
+        },
+        onSettled: () => setConfirm(false),
+      },
+    );
+
   return (
     <Card title="자율성 수준" actions={<Badge tone="accent">현재 {labelKo("autonomy_level", novel.autonomyLevel)}</Badge>}>
       <div className="flex flex-col gap-3">
@@ -52,11 +97,23 @@ export function AutonomySection({ novel }: { novel: NovelDto }) {
         <ChoiceGroup legend="자율성 수준" legendHidden name={`autonomy-${novel.id}`} value={level} onChange={setLevel} options={OPTIONS} />
         {level === "full_auto" && (
           <>
+            <div className="rounded-[8px] border border-border p-3 text-[13px]">
+              <p className="m-0 mb-1 font-semibold">에이전트가 자동으로 진행하는 항목</p>
+              <ul className="m-0 list-disc pl-5">
+                {AUTO_ITEMS.map((x) => (
+                  <li key={x}>{x}</li>
+                ))}
+              </ul>
+              <p className="m-0 mt-2 text-muted">
+                세부 항목과 질문 대기 시간·하루 상한은 아래 ‘완전 자율 설정’에서 바꿀 수 있습니다{novel.autonomyLevel === "full_auto" && settings.autoApproveStructure ? " (구성 자동 승인 켜짐)" : ""}.
+              </p>
+            </div>
             <Field label="공개 처리 방식">
               <Select value={policy} onChange={(e) => setPolicy(e.target.value as PublishPolicy)}>
-                {(["manual", "batch_question", "scheduled"] as const).map((p) => (
-                  <option key={p} value={p}>
-                    {labelKo("publish_policy", p)}
+                {PUBLISH_OPTIONS.map((p) => (
+                  <option key={p.value} value={p.value} disabled={p.disabled}>
+                    {labelKo("publish_policy", p.value)}
+                    {p.suffix ?? ""}
                   </option>
                 ))}
               </Select>
@@ -65,15 +122,34 @@ export function AutonomySection({ novel }: { novel: NovelDto }) {
               에이전트가 만든 원고가 사람 검토 없이 확정·공개될 수 있습니다. 연재 플랫폼의 AI 생성물 정책과 저작권 책임은 작가에게 있습니다.
             </Callout>
             <Checkbox label="위 정책·저작권 경고를 확인했습니다" checked={ack} onChange={(e) => setAck(e.target.checked)} />
+            {turningOn && (
+              <>
+                <Checkbox label="위 항목을 에이전트가 자동으로 진행하는 것을 확인했습니다" checked={ackItems} onChange={(e) => setAckItems(e.target.checked)} />
+                <Checkbox
+                  label={STRUCTURE_OPT_IN_LABEL}
+                  hint="첫 컨셉 확정과 전체 구성(1~4부·결말) 승인도 에이전트가 합니다. 승인된 결말이 바뀐 재승인은 항상 직접 합니다."
+                  checked={optIn}
+                  onChange={(e) => setOptIn(e.target.checked)}
+                />
+                {optIn && (
+                  <>
+                    <Callout tone="warn">이야기의 큰 방향(컨셉·전체 구성·결말)이 사람 검토 없이 정해질 수 있습니다.</Callout>
+                    <Checkbox label="컨셉 확정·구성·결말 자동 승인 경고를 확인했습니다" checked={ackOptIn} onChange={(e) => setAckOptIn(e.target.checked)} />
+                  </>
+                )}
+                {novel.status === "concept" && (
+                  <Checkbox label="진행 중인 컨셉 대화에 자동 승인도 켜기" checked={conceptAuto} onChange={(e) => setConceptAuto(e.target.checked)} />
+                )}
+              </>
+            )}
           </>
         )}
-        <p className="m-0 text-xs text-faint">
-          모든 수준에서 항상 사람 승인: 기존 승인 사실 변경 · 리트콘 · 결말 방향 변경 · 예산 하드 한도 도달 후 재개 · 떡밥 폐기.
-        </p>
+        <p className="m-0 text-xs text-faint">모든 수준에서 항상 사람 승인: {ALWAYS_HUMAN.join(" · ")}.</p>
         {m.error && <Callout tone="danger">{errorMessage(m.error)}</Callout>}
+        {conceptError && <Callout tone="warn">{conceptError}</Callout>}
         {m.isSuccess && !dirty && <Callout tone="ok">자율성 수준을 바꿨습니다.</Callout>}
         <div className="flex justify-end">
-          <Button variant="primary" disabled={!dirty || (needsAck && !ack)} onClick={() => setConfirm(true)}>
+          <Button variant="primary" disabled={!dirty || !canSubmit} onClick={() => setConfirm(true)}>
             자율성 수준 저장
           </Button>
         </div>
@@ -81,16 +157,55 @@ export function AutonomySection({ novel }: { novel: NovelDto }) {
       <ConfirmDialog
         open={confirm}
         title={`자율성 수준을 ‘${labelKo("autonomy_level", level)}’(으)로 바꿀까요?`}
-        description="다음 작업부터 적용됩니다."
+        description={
+          turningOn
+            ? "저장하면 바로 자동 진행을 시작합니다. 언제든 ‘자율 진행 멈춤’으로 멈출 수 있습니다."
+            : novel.autonomyLevel === "full_auto" && level !== "full_auto"
+              ? "자동 승인을 바로 멈춥니다. 대기 중인 승인은 그대로 남아 직접 결정합니다."
+              : "다음 작업부터 적용됩니다."
+        }
+        confirmLabel={turningOn ? "완전 자율 켜기" : novel.autonomyLevel === "full_auto" && level !== "full_auto" ? "자동 승인 끄기" : "바꾸기"}
         busy={m.isPending}
         onCancel={() => setConfirm(false)}
-        onConfirm={() =>
-          m.mutate(
-            { autonomyLevel: level, publishPolicy: level === "full_auto" ? policy : undefined, acknowledgedFullAutoWarning: needsAck ? ack : false },
-            { onSettled: () => setConfirm(false) },
-          )
-        }
-      />
+        onConfirm={submit}
+      >
+        {turningOn && (
+          <div className="flex flex-col gap-2 text-[13px]">
+            <div>
+              <p className="m-0 font-semibold">자동으로 진행</p>
+              <ul className="m-0 list-disc pl-5">
+                {[...AUTO_ITEMS, ...(policy === "scheduled" ? [AUTO_PUBLISH_ITEM] : []), ...(optIn ? ["첫 컨셉 확정과 전체 구성(1~4부·결말) 승인"] : [])].map((x) => (
+                  <li key={x}>{x}</li>
+                ))}
+              </ul>
+            </div>
+            <div>
+              <p className="m-0 font-semibold">속도·비용 한도(‘완전 자율 설정’에서 변경)</p>
+              <ul className="m-0 list-disc pl-5">
+                <li>하루 새 화 착수 최대 {settings.maxEpisodesPerDay}화</li>
+                <li>
+                  하루 비용 상한 {settings.dailyBudgetUsd === null ? "없음 — 월 예산을 정하지 않았다면 비용 제한은 하루 착수 화 수뿐입니다" : formatUsd(Math.round(settings.dailyBudgetUsd * 1_000_000))}
+                </li>
+                <li>월 예산 경고 시 {settings.haltOnBudgetWarning ? "자율 진행 멈춤" : "계속 진행"}</li>
+              </ul>
+            </div>
+            {pendingApprovals > 0 && (
+              <Callout tone="warn">지금 승인 대기 중인 요청 {pendingApprovals}건도 조건을 만족하면 켜는 즉시 자동 승인됩니다. 직접 결정하려면 먼저 처리하세요.</Callout>
+            )}
+            <p className="m-0 text-muted">
+              정책·저작권: 에이전트가 만든 원고가 사람 검토 없이 확정{policy === "scheduled" ? "·공개" : ""}될 수 있으며, 연재 플랫폼의 AI 생성물 정책과 저작권 책임은 작가에게 있습니다(확인함).
+            </p>
+            <div>
+              <p className="m-0 font-semibold">항상 사람이 결정</p>
+              <ul className="m-0 list-disc pl-5">
+                {ALWAYS_HUMAN.map((x) => (
+                  <li key={x}>{x}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        )}
+      </ConfirmDialog>
     </Card>
   );
 }

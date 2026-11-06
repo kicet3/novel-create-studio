@@ -18,6 +18,9 @@ export async function drain(t: TestCore, scope: Scope, until: () => Promise<bool
     await t.testDb.exec(`UPDATE wake_requests SET not_before_at = NULL WHERE novel_id = '${scope.novelId}' AND status = 'pending'`);
     const ran = await t.modules.orchestration.service.runOnce();
     const sched = await t.modules.manuscript.service.schedule(scope);
+    // 설계 추가 0014: full_auto novels move on through the autopilot (no-op for other levels)
+    const auto = await t.modules.autopilot.service.tick(scope);
+    if (auto.decided.length || auto.steps.length || auto.answered.length || auto.published.length) continue;
     if (!ran && !sched.createdTasks.length && !(await t.modules.orchestration.service.runOnce()) && i > 6) break;
   }
   if (!(await until())) {

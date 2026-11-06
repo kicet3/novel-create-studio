@@ -10,6 +10,7 @@ import type { OntologyService } from "../ontology/index.js";
 import type { OrchestrationService } from "../orchestration/index.js";
 import type { ManuscriptService } from "./index.js";
 import { mountManuscriptRoutes } from "./adapters/http/routes.js";
+import { mountReaderRoutes } from "./adapters/http/reader-routes.js";
 import { createTaskRegistrar } from "./application/agent-task.js";
 import { createContextSections } from "./application/context-sections.js";
 import { createManuscriptService } from "./application/manuscript-service.js";
@@ -91,7 +92,11 @@ export function createManuscriptModule(deps: ManuscriptModuleDeps): ServerModule
     name: "manuscript",
     implemented: true,
     service,
-    routes: (r) => mountManuscriptRoutes(r, service, deps.novel),
+    routes: (r) => {
+      mountManuscriptRoutes(r, service, deps.novel);
+      // 읽기(reader): read-only text + TOC
+      mountReaderRoutes(r, { service, novel: deps.novel, db: deps.platform.uow.db });
+    },
     loops: [{ name: "manuscript.scheduler", intervalMs: 30_000, wakeOn: ["wake", "task"], tick }],
   };
 }

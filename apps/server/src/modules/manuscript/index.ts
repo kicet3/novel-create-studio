@@ -215,6 +215,8 @@ export interface ManuscriptService {
   rejectEpisode(tx: Tx, scope: NovelScope, episodeId: string, input: { decisionNote: string; reworkFrom: ReworkFrom; approvalId: string | null }, actor: ActorRef): Promise<EpisodeRejection>;
   /** E13 (INV-EP-03) — promotes facts to published_locked via hooks */
   publishEpisode(scope: NovelScope, episodeId: string, actor: ActorRef): Promise<Episode>;
+  /** 설계 추가 0014: publish slot of an approved episode (`episode.publish_scheduled`); null clears it */
+  setScheduledPublish(scope: NovelScope, episodeId: string, at: Date | null, actor: ActorRef): Promise<Episode>;
   /** E14 — requires "외부 미공개" confirmation + reason */
   unpublishEpisode(scope: NovelScope, episodeId: string, input: { reason: string; confirmedNotPublishedExternally: true }, actor: ActorRef): Promise<Episode>;
 

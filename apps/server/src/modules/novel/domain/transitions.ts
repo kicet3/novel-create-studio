@@ -56,15 +56,34 @@ export const assertBibleTransition = (from: SeriesBibleStatus, to: SeriesBibleSt
   findTransition(SERIES_BIBLE_TRANSITIONS, "series_bible", from, to);
 export const assertArcTransition = (from: ArcStatus, to: ArcStatus) => findTransition(ARC_TRANSITIONS, "arc", from, to);
 
-/** INV-NOV-02 / INV-NOV-04: non-full_auto forces publish_policy=manual; full_auto needs the warning acknowledgement. */
-export function resolveAutonomy(input: {
-  autonomyLevel: AutonomyLevel;
-  publishPolicy?: PublishPolicy;
-  acknowledgedFullAutoWarning: boolean;
-}): { autonomyLevel: AutonomyLevel; publishPolicy: PublishPolicy } {
+/**
+ * INV-NOV-02 / INV-NOV-04: non-full_auto forces publish_policy=manual; full_auto needs the warning acknowledgement.
+ * 설계 추가 0014: switching full_auto ON also needs the "자동으로 진행할 항목" acknowledgement, and concept confirm /
+ * structure auto-approval ("구성·결말도 자동 승인") turned on needs its own warning acknowledgement.
+ * `batch_question` has no publish handler yet (준비 중) and is refused.
+ */
+export function resolveAutonomy(
+  input: {
+    autonomyLevel: AutonomyLevel;
+    publishPolicy?: PublishPolicy;
+    acknowledgedFullAutoWarning: boolean;
+    acknowledgedAutoItems?: boolean;
+    acknowledgedStructureAutoWarning?: boolean;
+  },
+  ctx: { wasFullAuto?: boolean; structureOptInTurnedOn?: boolean } = {},
+): { autonomyLevel: AutonomyLevel; publishPolicy: PublishPolicy } {
   if (input.autonomyLevel !== "full_auto") return { autonomyLevel: input.autonomyLevel, publishPolicy: "manual" };
   if (!input.acknowledgedFullAutoWarning) {
     throw new DomainValidationError("full_auto_ack_required", "완전 자율을 켜려면 정책·저작권 경고를 확인해야 합니다.");
+  }
+  if (!ctx.wasFullAuto && !input.acknowledgedAutoItems) {
+    throw new DomainValidationError("full_auto_items_ack_required", "완전 자율을 켜려면 에이전트가 자동으로 진행할 항목을 확인해야 합니다.");
+  }
+  if (ctx.structureOptInTurnedOn && !input.acknowledgedStructureAutoWarning) {
+    throw new DomainValidationError("structure_auto_ack_required", "컨셉 확정·전체 구성 자동 승인을 켜려면 경고를 확인해야 합니다.");
+  }
+  if (input.publishPolicy === "batch_question") {
+    throw new DomainValidationError("publish_policy_unavailable", "'일괄 질문' 공개 방식은 아직 준비 중입니다. 수동 또는 예약을 고르세요.");
   }
   return { autonomyLevel: "full_auto", publishPolicy: input.publishPolicy ?? "manual" };
 }

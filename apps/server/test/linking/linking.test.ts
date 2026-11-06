@@ -60,7 +60,9 @@ describe("linker domain (pure)", () => {
   });
   it("text helpers: offset repair, dictionary L0, bible parse", () => {
     expect(repairOffsets("레온은 웃었다", { char_start: 5, char_end: 7, surface: "레온" })).toEqual({ start: 0, end: 2 });
-    expect(repairOffsets("레온과 레온", { char_start: 9, char_end: 10, surface: "레온" })).toBeNull();
+    // offsets are hints: a repeated name is placed at the occurrence nearest to the hint (was: dropped)
+    expect(repairOffsets("레온과 레온", { char_start: 9, char_end: 10, surface: "레온" })).toEqual({ start: 4, end: 6 });
+    expect(repairOffsets("레온과 레온", { char_start: 0, char_end: 2, surface: "카이" })).toBeNull();
     expect(dictionaryMentions("폐하께서 레온아, 하고 불렀다. 흑레온은 아니다.", [{ surface: "레온", nameKind: "true_name", entityType: "character" }, { surface: "폐하", nameKind: "title", entityType: "title" }]).map((m) => [m.surface, m.mentionKind])).toEqual([
       ["폐하", "title"],
       ["레온", "named"],

@@ -160,5 +160,12 @@ export interface AgentsService {
   getContextPack(scope: NovelScope, snapshotId: string): Promise<ContextPack | null>;
 }
 
+/**
+ * Agent-to-agent repair dialogue: deterministic validation → validator critique → producer correction in the same
+ * conversation (≤ agents.repair_rounds), recorded on the run (runs.output_summary.repairDialogues).
+ */
+export { callWithRepair, formatCritique, summarizeIssues, repairDialoguesOfRun } from "./application/repair-dialogue.js";
+export type { RepairIssue, RepairVerdict, RepairDialogueOptions, RepairDialogueResult } from "./application/repair-dialogue.js";
+export { priorFailureFeedback } from "./application/retry-feedback.js";
 export type { AgentsModuleDeps } from "./module.js";
 export { createAgentsModule } from "./module.js";

@@ -10,6 +10,7 @@ export type NavIconName =
   | "agents"
   | "inbox"
   | "manuscript"
+  | "reader"
   | "ontology"
   | "foreshadow"
   | "image"
@@ -74,6 +75,7 @@ const PATHS: Record<NavIconName, ReactNode> = {
       <path d="M14 3v5h5M9 12h7M9 16h7" />
     </>
   ),
+  reader: <path d="M12 6.5C10.5 5 8 4.5 4 4.5v14c4 0 6.5.5 8 2 1.5-1.5 4-2 8-2v-14c-4 0-6.5.5-8 2ZM12 6.5v14" />,
   ontology: (
     <>
       <circle cx="6" cy="6" r="2.5" />

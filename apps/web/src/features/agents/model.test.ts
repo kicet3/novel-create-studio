@@ -39,6 +39,7 @@ const run = (over: Partial<AgentRunSpanDto>): AgentRunSpanDto => ({
   outputTokens: 0,
   costMicros: 0,
   models: [],
+  repairRounds: 0,
   ...over,
 });
 

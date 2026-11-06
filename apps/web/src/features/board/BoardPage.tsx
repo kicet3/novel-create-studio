@@ -24,6 +24,7 @@ import {
 import { useNovel } from "../novels/api.js";
 import { PauseControl } from "../home/PauseControl.js";
 import { allowedActions, TASK_ACTION_LABEL, useTaskAction, useTasks, type TaskAction } from "./api.js";
+import { RepairDialogueDisclosure } from "../agents/RepairDialogue.js";
 
 const COLUMNS: TaskStatus[] = ["pending", "ready", "running", "blocked", "done"];
 type View = "kanban" | "list";
@@ -226,6 +227,7 @@ function TaskCard({ novelId, t, timezone }: { novelId: string; t: TaskDto; timez
         </div>
       )}
       {t.status === "pending" && t.notBeforeAt && <div className="text-xs text-muted">예약 {formatDateTime(t.notBeforeAt, timezone)}</div>}
+      {run && run.repairRounds > 0 && <RepairDialogueDisclosure novelId={novelId} taskId={t.id} rounds={run.repairRounds} />}
       <TaskActions novelId={novelId} t={t} />
     </article>
   );

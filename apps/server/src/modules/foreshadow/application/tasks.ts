@@ -5,9 +5,9 @@
  * execute = reads + LLM only (P-2); commit = deterministic writes in the engine's transaction.
  */
 import { z, ZodError } from "zod";
-import { DEFAULTS } from "@ncs/shared";
+import { DEFAULTS, defaultValue } from "@ncs/shared";
 import { actors, type ActorRef, type NovelScope } from "../../../platform/index.js";
-import type { AgentTaskHandler, ContextBuilder, ContextPack, ContextSpec } from "../../agents/index.js";
+import { callWithRepair, type AgentTaskHandler, type ContextBuilder, type ContextPack, type ContextSpec } from "../../agents/index.js";
 import type { ModelCallPort } from "../../llm/index.js";
 import { TaskFailure, type RunHandle } from "../../orchestration/index.js";
 import { foreshadowRepo as repo } from "../adapters/db/foreshadow-repository.js";
@@ -112,22 +112,22 @@ export function planSetupsHandler(deps: ForeshadowPorts, svc: ForeshadowInternal
         "[/OPEN_SETUPS]",
       ].join("\n");
       const prompt = compose(context, PLAN_INSTRUCTION, user);
-      let plan = await callObject(llm, run, "plan", SCHEMA_NAMES.plan, setupPlanSchema, prompt);
-      let violations = validateSetupPlan(plan, await checkContext(scope, arc.id));
-      if (violations.length) {
-        // 07 §1.3: one correction request in the same run
-        await run.checkpoint();
-        plan = await callObject(llm, run, "repair", SCHEMA_NAMES.plan, setupPlanSchema, {
-          system: prompt.system,
-          messages: [
-            ...prompt.messages,
-            { role: "assistant", content: JSON.stringify(plan) },
-            { role: "user", content: `배치 검사에 실패했습니다. 아래 위반을 모두 고친 전체 계획을 다시 내세요.\n${describeViolations(violations)}` },
-          ],
-        });
-        violations = validateSetupPlan(plan, await checkContext(scope, arc.id));
-        if (violations.length) throw new TaskFailure("invalid_output", `떡밥 배치 검사 실패: ${describeViolations(violations)}`, false);
-      }
+      // 07 §1.3 correction request in the same run, as an agent-to-agent repair dialogue (recorded on the run)
+      const repaired = await callWithRepair({
+        llm,
+        request: { run, purpose: "plan", system: prompt.system, messages: prompt.messages, output: { kind: "object", schemaName: SCHEMA_NAMES.plan, schema: setupPlanSchema } },
+        validate: async (p: SetupPlan) => {
+          const v = validateSetupPlan(p, await checkContext(scope, arc.id));
+          return { result: v, issues: v.map((x) => ({ item: `[${x.rule}] ${x.target}`, problem: x.message })) };
+        },
+        label: "떡밥 배치 검사",
+        critic: "떡밥 배치 검사 에이전트",
+        instruction: "위반을 모두 고친 전체 계획을 다시 내세요.",
+        maxRounds: Math.max(1, defaultValue("agents.repair_rounds")),
+        repairPurpose: "repair",
+      });
+      const plan = setupPlanSchema.parse(repaired.value);
+      if (repaired.issues.length) throw new TaskFailure("invalid_output", `떡밥 배치 검사 실패(에이전트 간 수정 대화 ${repaired.rounds}회 후): ${describeViolations(repaired.result)}`, false);
       return { arcId: arc.id, plan };
     },
     async commit(tx, run, _input, proposal) {

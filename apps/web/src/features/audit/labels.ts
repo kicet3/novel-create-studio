@@ -45,6 +45,7 @@ const AREA_KO: Record<string, string> = {
   cast: "캐스트",
   design_sheet: "디자인 시트",
   structure: "전체 구성",
+  autopilot: "완전 자율",
 };
 
 const VERB_KO: Record<string, string> = {
@@ -138,6 +139,15 @@ const VERB_KO: Record<string, string> = {
   changed: "변경",
   set: "설정",
   completed: "완료",
+  enabled: "켬",
+  disabled: "끔",
+  halted: "멈춤",
+  approval_decided: "자동 승인",
+  question_answered: "자동 응답",
+  step: "자동 진행",
+  gate_hit: "사람 확인 필요",
+  throttled: "하루 상한 도달",
+  publish_scheduled: "예약 공개 지정",
   failed: "실패",
   restored: "복원",
   migration_applied: "마이그레이션 적용",

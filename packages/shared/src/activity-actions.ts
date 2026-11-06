@@ -62,6 +62,10 @@ export const ACTIVITY_ACTIONS = [
   "structure.created", "structure.updated", "structure.status_changed",
   "arc.plan_flagged", "arc.plan_flags_cleared",
   "cast.plot_characters_proposed", "cast.plot_characters_confirmed", "cast.first_appearance_set",
+  // 설계 추가 0014: 완전 자율 진행(module autopilot)
+  "autopilot.enabled", "autopilot.disabled", "autopilot.settings_changed", "autopilot.halted", "autopilot.resumed",
+  "autopilot.approval_decided", "autopilot.question_answered", "autopilot.step", "autopilot.gate_hit", "autopilot.throttled",
+  "autopilot.completed", "episode.publish_scheduled",
 ] as const;
 
 export type ActivityAction = (typeof ACTIVITY_ACTIONS)[number];

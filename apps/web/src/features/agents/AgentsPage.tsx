@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { formatUsd } from "@ncs/shared";
+import { formatUsd, parseAutopilotSettings } from "@ncs/shared";
 import { useNovelId } from "../../app/novel-context.js";
 import { PageHeader } from "../../components/layout/PageHeader.js";
 import { Badge, Callout, Card, Field, QueryView, Select } from "../../components/ui/index.js";
@@ -10,6 +10,8 @@ import { formatTokens, gateApprovalCounts, rosterSummary } from "./model.js";
 import { PipelineFlow } from "./PipelineFlow.js";
 import { RunTimeline } from "./RunTimeline.js";
 import { useNow } from "./use-now.js";
+import { useNovel } from "../novels/api.js";
+import { AutopilotLogCard } from "../autopilot/AutopilotLogCard.js";
 
 const HOURS = [1, 3, 6, 12, 24] as const;
 const HOURS_KEY = "ncs.agents.hours";
@@ -49,6 +51,14 @@ export function AgentsPage() {
   const approvals = usePendingApprovals(novelId);
   const approvalCounts = useMemo(() => (approvals.data ? gateApprovalCounts(approvals.data.items) : undefined), [approvals.data]);
   const now = useNow(q.data?.clockOffsetMs ?? 0);
+  const novel = useNovel(novelId);
+  const level = novel.data?.autonomyLevel ?? "episode_approval";
+  const autoGates = useMemo(() => {
+    const n = novel.data;
+    if (!n || n.autonomyLevel !== "full_auto" || n.autopilotHaltedAt) return undefined;
+    const st = parseAutopilotSettings(n.autopilotSettings);
+    return { concept: st.autoConfirmConcept, structure: st.autoApproveBible && st.autoApproveStructure, plot: st.autoApprovePlots, episode: st.autoApproveEpisodes };
+  }, [novel.data]);
 
   const changeHours = (h: number) => {
     setHours(h);
@@ -102,8 +112,8 @@ export function AgentsPage() {
                 </span>
               </div>
 
-              <Card title="작업 흐름" actions={<span className="text-[11.5px] text-muted">● 실행 · ○ 대기 · ◇ 사람 대기 · ! 막힘 · ✕ 실패 · ◆ 사람 승인</span>}>
-                <PipelineFlow novelId={novelId} stages={d.stages} gates={d.gates} other={d.other} approvals={approvalCounts} />
+              <Card title="작업 흐름" actions={<span className="text-[11.5px] text-muted">● 실행 · ○ 대기 · ◇ 사람 대기 · ! 막힘 · ✕ 실패 · ◆ 사람 승인{autoGates ? " · 보라 ◆ 자동 승인(완전 자율)" : ""}</span>}>
+                <PipelineFlow novelId={novelId} stages={d.stages} gates={d.gates} other={d.other} approvals={approvalCounts} autoGates={autoGates} />
               </Card>
 
               <section aria-labelledby="agents-roster" className="flex flex-col gap-2">
@@ -131,6 +141,7 @@ export function AgentsPage() {
                   <p className="m-0 p-5 text-center text-[13px] text-muted">실행 타임라인을 불러오는 중…</p>
                 )}
               </Card>
+              <AutopilotLogCard novelId={novelId} autonomyLevel={level} timezone={d.timezone} />
             </div>
           );
         }}

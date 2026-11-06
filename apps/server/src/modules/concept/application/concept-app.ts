@@ -60,6 +60,7 @@ import {
   autoApproveState,
   autoStopText,
   decideAutoStep,
+  AUTO_PREFIX,
   type AutoApproveState,
   type AutoStopReason,
 } from "../domain/auto-approve.js";
@@ -1133,6 +1134,7 @@ export function createConceptApp(deps: ConceptAppDeps) {
       }
       b.checks.working_brief_hash = ctx.input.working_brief_hash;
       b.checks.checked_by_run_id = ctx.run.runId;
+      b.checks.llm_checked = !!p.proposal; // false: no provider / unparsable answer — not a clean result (full_auto hands it to the author)
       s = await repo.updateSession(tx.db, scope, s.id, { workingBrief: b });
       const user = actors.user(ctx.input.requested_by_user_id);
       if (workingBriefHash(b) !== ctx.input.working_brief_hash) {
@@ -1974,6 +1976,45 @@ export function createConceptApp(deps: ConceptAppDeps) {
         s = await repo.updateSession(tx.db, scope, s.id, { workingBrief: b });
         await audit.record(tx, { novelId: scope.novelId, actor, action: "concept_brief.field_edited", target: target(s.id), after: { confirmed: diffs.map((d) => d.field_path) }, details: { ids: diffs.map((d) => d.field_path), count: diffs.length } });
         return s;
+      });
+    },
+
+    autoSubmitForApproval(scope, input) {
+      return uow.run(async (tx) => {
+        const open = await repo.getOpenSession(tx.db, scope);
+        if (!open || open.status !== "active" || open.purpose !== "initial") return { submitted: false, reason: "진행 중인 첫 컨셉 대화가 없습니다." };
+        if ((await repo.briefByStatus(tx.db, scope, "approved")) || (await repo.briefByStatus(tx.db, scope, "awaiting_approval"))) {
+          return { submitted: false, reason: "이미 확정했거나 승인 대기 중인 컨셉이 있습니다." };
+        }
+        const st = autoOf(open);
+        if (st.enabled && st.status === "running") return { submitted: false, reason: "컨셉 대화 자동 승인이 아직 진행 중입니다." };
+        if (await liveInFlightTask(tx, scope, open)) return { submitted: false, reason: "컨셉 파트너의 답변을 기다리는 중입니다." };
+        let s = await mustSession(tx, scope, open.id, true);
+        const b = parseWorkingBrief(s.workingBrief);
+        const paths = Object.entries(b.field_provenance)
+          .filter(([, p]) => p.slot_state === "proposed" && p.origin === "agent_delegated")
+          .map(([k]) => k);
+        if (paths.length) {
+          // [모두 확정] on the author's behalf (origin kept: agent_delegated, D-4) — marked as an auto step
+          const msg = await insertMessage(tx, scope, s, { authorKind: "user", kind: "form_edit", body: `${AUTO_PREFIX}에이전트가 정한 항목 모두 확정(완전 자율)`, authorUserId: input.delegatedByUserId, autoApproved: true });
+          const diffs: SlotDiff[] = [];
+          for (const path of paths) {
+            const p = b.field_provenance[path]!;
+            if (isEmptyValue(getPath(b.content, path))) continue;
+            p.slot_state = "confirmed";
+            p.evidence_message_ids = [...new Set([...p.evidence_message_ids, msg.id])];
+            diffs.push({ field_path: path, before: getPath(b.content, path) ?? null, after: getPath(b.content, path) ?? null, origin: p.origin, slot_state: "confirmed" });
+          }
+          b.checks = runDeterministicChecks(b, ports.lists, []);
+          await repo.updateMessage(tx.db, scope, msg.id, { slotUpdates: diffs });
+          s = await repo.updateSession(tx.db, scope, s.id, { workingBrief: b });
+          await audit.record(tx, { novelId: scope.novelId, actor: input.actor, action: "concept_brief.field_edited", target: target(s.id), after: { confirmed: diffs.map((d) => d.field_path) }, details: { ids: diffs.map((d) => d.field_path), count: diffs.length, auto: true, provenance: "자동 승인" } });
+        }
+        const blockers = submitBlockers({ ...b, checks: runDeterministicChecks(b, ports.lists, []) });
+        if (blockers.length) return { submitted: false, reason: blockers.map((x) => x.message).join(" ") };
+        const { taskId } = await startCheck(tx, scope, s, input.actor);
+        await notice(tx, scope, s, "완전 자율: 에이전트가 정한 항목을 확정하고 컨셉 점검·승인 요청을 시작했습니다.");
+        return { submitted: true, taskId };
       });
     },
 

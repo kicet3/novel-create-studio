@@ -7,13 +7,147 @@
  */
 import type { InitialOntology } from "./schemas.js";
 
+/**
+ * Legacy offset repair (kept for callers that only have offsets): the verbatim span at the hint, else the
+ * occurrence of `surface` nearest to the hint (see locateInText). null when it cannot be placed.
+ */
 export function repairOffsets(text: string, m: { char_start: number; char_end: number; surface: string }): { start: number; end: number } | null {
-  if (m.surface === "") return { start: m.char_start, end: m.char_end };
-  const nfc = (s: string) => s.normalize("NFC");
-  if (nfc(text.slice(m.char_start, m.char_end)) === nfc(m.surface)) return { start: m.char_start, end: m.char_end };
-  const first = text.indexOf(m.surface);
-  if (first < 0 || text.indexOf(m.surface, first + 1) >= 0) return null; // not found or not unique → drop
-  return { start: first, end: first + m.surface.length };
+  const r = locateInText(text, { surface: m.surface, charStart: m.char_start, charEnd: m.char_end, mentionKind: "named" });
+  return r.ok ? { start: r.start, end: r.end } : null;
+}
+
+// ── mention location (07 §4.3 "결정적 검증", 설계 추가) ─────────────────────
+// Models cannot count characters reliably (scene text that starts with "\n", long scenes). The model gives the
+// verbatim surface + a short verbatim context quote; its offsets are only hints. The server finds the span.
+
+export interface MentionLocateInput {
+  surface: string;
+  /** short verbatim context containing the surface (disambiguates repeated names) */
+  quote?: string | null;
+  /** offsets from the model: hints only */
+  charStart?: number | null;
+  charEnd?: number | null;
+  mentionKind?: string;
+}
+
+export type LocateHow = "exact" | "quote" | "unique" | "nearest" | "first";
+export type LocateResult =
+  | { ok: true; start: number; end: number; surface: string; how: LocateHow; delta: number | null }
+  | { ok: false; reason: "empty" | "not_found" | "ambiguous"; occurrences: number[]; surface: string };
+
+const WRAP_QUOTES = /^[\s"'“”‘’「」『』《》〈〉()（）[\]]+|[\s"'“”‘’「」『』《》〈〉()（）[\]]+$/gu;
+/** particles that a model sometimes leaves on the surface (longest first) */
+const JOSA = ["으로부터", "에게서는", "에게서", "께서는", "에서는", "으로는", "이라는", "에게는", "에게", "에서", "께서", "으로", "까지", "부터", "처럼", "보다", "이나", "이랑", "하고", "라는", "은", "는", "이", "가", "을", "를", "의", "에", "와", "과", "도", "로", "만", "아", "야", "여"];
+/** mention kinds whose surfaces are short / common: only placed near the hint or by quote */
+const LOOSE_KINDS = new Set(["pronoun", "address", "zero", "descriptive"]);
+const NEAR_TOLERANCE = 3;
+
+const cleanSurface = (s: string) => s.replace(WRAP_QUOTES, "");
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** all match spans of `needle` in `text` (NFC / NFD forms; runs of whitespace match any whitespace) */
+export function findAll(text: string, needle: string): Array<{ start: number; end: number }> {
+  if (!needle) return [];
+  const out = new Map<number, number>();
+  for (const form of new Set([needle, needle.normalize("NFC"), needle.normalize("NFD")])) {
+    let i = text.indexOf(form);
+    while (i >= 0) {
+      out.set(i, i + form.length);
+      i = text.indexOf(form, i + 1);
+    }
+  }
+  if (out.size === 0 && /\s/.test(needle.trim())) {
+    const parts = needle.normalize("NFC").trim().split(/\s+/).map(escapeRe);
+    const re = new RegExp(parts.join("\\s+"), "gu");
+    for (const m of text.normalize("NFC") === text ? text.matchAll(re) : []) out.set(m.index!, m.index! + m[0].length);
+  }
+  return [...out.entries()].sort((a, b) => a[0] - b[0]).map(([start, end]) => ({ start, end }));
+}
+
+function stripJosa(s: string): string | null {
+  for (const j of JOSA) if (s.endsWith(j) && s.length - j.length >= 2) return s.slice(0, -j.length);
+  return null;
+}
+
+/** occurrences of the surface; tolerant of quotes around it and particles left on it */
+function surfaceSpans(text: string, raw: string): { surface: string; spans: Array<{ start: number; end: number }> } {
+  const s = cleanSurface(raw);
+  let spans = findAll(text, s);
+  if (spans.length) return { surface: s, spans };
+  const stem = stripJosa(s);
+  if (stem) {
+    // the stem is a guess: only where it ends a word (or a particle follows) — never inside a longer name
+    // ("서진이" must not land on "서진우")
+    spans = findAll(text, stem).filter((x) => endsWord(text, x.end));
+    if (spans.length) return { surface: stem, spans };
+  }
+  return { surface: s, spans: [] };
+}
+
+/** suffixes that may follow a name inside the same word (particles, honorifics, plural) */
+const NAME_SUFFIX = [...JOSA, "씨", "님", "들", "께", "한테", "이었", "이다", "이야", "이지", "이란", "이랑"];
+/** true when the span ends a word or is followed by a particle / honorific (not inside a longer name) */
+function endsWord(text: string, end: number): boolean {
+  if (end >= text.length || !WORDCHAR.test(text[end]!)) return true;
+  const tail = text.slice(end, end + 4);
+  return NAME_SUFFIX.some((j) => tail.startsWith(j));
+}
+
+/** prefer occurrences that are whole words (not inside a longer name, e.g. "레온" in "흑레온", "서진" in "서진우") */
+function boundaryFirst(text: string, spans: Array<{ start: number; end: number }>) {
+  const left = spans.filter((x) => x.start === 0 || !WORDCHAR.test(text[x.start - 1]!));
+  const l = left.length ? left : spans;
+  const both = l.filter((x) => endsWord(text, x.end));
+  return both.length ? both : l;
+}
+
+function nearest(spans: Array<{ start: number; end: number }>, hint: number) {
+  let best = spans[0]!;
+  for (const x of spans) if (Math.abs(x.start - hint) < Math.abs(best.start - hint)) best = x; // tie → earlier
+  return best;
+}
+
+/** place one mention in one text (scene). Offsets of the model are hints only. */
+export function locateInText(text: string, m: MentionLocateInput): LocateResult {
+  const hint = typeof m.charStart === "number" && m.charStart >= 0 ? m.charStart : null;
+  const kind = m.mentionKind ?? "named";
+  if (m.surface === "" || kind === "zero") {
+    // zero mention: no surface — keep the hinted point (clamped) or the quote start
+    const q = m.quote ? findAll(text, cleanSurface(m.quote))[0] : undefined;
+    const at = hint !== null && hint <= text.length ? hint : q ? q.start : null;
+    if (at === null) return { ok: false, reason: "empty", occurrences: [], surface: "" };
+    const end = typeof m.charEnd === "number" && m.charEnd >= at && m.charEnd <= text.length ? m.charEnd : at;
+    return { ok: true, start: at, end, surface: m.surface, how: "exact", delta: 0 };
+  }
+  const { surface, spans: all } = surfaceSpans(text, m.surface);
+  if (!surface) return { ok: false, reason: "empty", occurrences: [], surface };
+  if (all.length === 0) return { ok: false, reason: "not_found", occurrences: [], surface };
+  // (1) verbatim at the hint
+  if (hint !== null) {
+    const hit = all.find((x) => x.start === hint);
+    if (hit) return { ok: true, ...hit, surface: text.slice(hit.start, hit.end), how: "exact", delta: 0 };
+  }
+  const spans = boundaryFirst(text, all);
+  const done = (x: { start: number; end: number }, how: LocateHow): LocateResult => ({ ok: true, start: x.start, end: x.end, surface: text.slice(x.start, x.end), how, delta: hint === null ? null : x.start - hint });
+  // (2) the quote pins the occurrence
+  const quote = m.quote ? cleanSurface(m.quote) : "";
+  if (quote && quote.length > surface.length) {
+    const inQuote: Array<{ start: number; end: number }> = [];
+    for (const q of findAll(text, quote)) for (const x of all) if (x.start >= q.start && x.end <= q.end) inQuote.push(x);
+    if (inQuote.length === 1) return done(inQuote[0]!, "quote");
+    if (inQuote.length > 1) return done(hint === null ? inQuote[0]! : nearest(inQuote, hint), "quote");
+  }
+  // (3) the only occurrence
+  if (spans.length === 1) return done(spans[0]!, "unique");
+  // (4) nearest to the hint; short / common surfaces only right next to it
+  const loose = LOOSE_KINDS.has(kind) || [...surface].length < 2;
+  if (hint !== null) {
+    const x = nearest(spans, hint);
+    if (!loose || Math.abs(x.start - hint) <= NEAR_TOLERANCE) return done(x, "nearest");
+    return { ok: false, reason: "ambiguous", occurrences: spans.map((s) => s.start), surface };
+  }
+  if (!loose) return done(spans[0]!, "first");
+  return { ok: false, reason: "ambiguous", occurrences: spans.map((s) => s.start), surface };
 }
 
 /** Hangul syllable / latin letter — used to avoid matching inside a longer word on the left */

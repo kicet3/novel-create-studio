@@ -156,7 +156,19 @@ export interface ChangeAutonomyInput {
   autonomyLevel: AutonomyLevel;
   publishPolicy?: PublishPolicy;
   acknowledgedFullAutoWarning: boolean;
+  /** 설계 추가 0014: required when switching full_auto ON */
+  acknowledgedAutoItems?: boolean;
+  /** required when concept confirm / structure auto-approval turns on */
+  acknowledgedStructureAutoWarning?: boolean;
+  /** autopilot settings merged on the switch (AutopilotSettings keys; invalid keys rejected) */
+  autopilot?: Record<string, unknown>;
   reason?: string;
+}
+
+/** 설계 추가 0014: autopilot settings patch (AutopilotSettings keys) */
+export interface AutopilotSettingsPatchInput {
+  settings: Record<string, unknown>;
+  acknowledgedStructureAutoWarning?: boolean;
 }
 
 /** 11 M-01~M-05 fields copied from the approved ConceptBrief (N2 / pre-bible revision). */
@@ -268,6 +280,16 @@ export interface NovelService {
   listNovels(opts?: { includeArchived?: boolean }): Promise<Novel[]>;
   updateSettings(scope: NovelScope, patch: NovelSettingsPatch, actor: ActorRef, tx?: Tx): Promise<Novel>;
   changeAutonomy(scope: NovelScope, input: ChangeAutonomyInput, actor: ActorRef): Promise<Novel>;
+  // ── 설계 추가 0014: 완전 자율(autopilot) 설정·킬 스위치·상태 ──
+  /** merged settings (`autopilot.settings_changed`); turning concept/structure auto-approval on needs the warning ack */
+  updateAutopilotSettings(scope: NovelScope, input: AutopilotSettingsPatchInput, actor: ActorRef): Promise<Novel>;
+  /** kill switch: every auto decision / auto answer / auto step stops (`autopilot.halted`); idempotent */
+  haltAutopilot(scope: NovelScope, reason: import("@ncs/shared").AutopilotHaltReason, actor: ActorRef, opts?: { tx?: Tx; note?: string }): Promise<Novel>;
+  resumeAutopilot(scope: NovelScope, actor: ActorRef, opts?: { note?: string }): Promise<Novel>;
+  /** system bookkeeping of the autopilot loop (no audit, updatedAt untouched): shallow merge, `null` deletes a key */
+  setAutopilotState(scope: NovelScope, patch: Record<string, unknown>, tx?: Tx): Promise<void>;
+  /** row lock (FOR UPDATE) of the novel in the caller's transaction — serializes auto decisions with level changes */
+  lockNovel(tx: Tx, scope: NovelScope): Promise<Novel>;
   /** sets paused_at/pause_reason (INV-NOV-03 is enforced by orchestration when leasing) */
   pause(scope: NovelScope, reason: PauseReason, actor: ActorRef, opts?: { tx?: Tx; note?: string }): Promise<Novel>;
   resume(scope: NovelScope, actor: ActorRef, opts?: { tx?: Tx; note?: string }): Promise<Novel>;

@@ -274,7 +274,10 @@ export const LABELS_KO = {
     deadline_hold: "마감 경과 보류",
     absence_delegated: "부재 위임",
     notice_only: "정보 전달",
+    auto_answer: "자동 응답(완전 자율)",
   }),
+  autopilot_halt_reason: labels("autopilot_halt_reason", { user: "사용자가 멈춤", budget_warning: "월 예산 경고", error: "오류" }),
+  question_sensitivity: labels("question_sensitivity", { normal: "보통", high: "높음(사람만 답함)" }),
   question_delivery_state: labels("question_delivery_state", {
     pending: "발송 대기",
     posted: "발송됨",
@@ -366,6 +369,7 @@ export const LABELS_KO = {
     migrator: "마이그레이션",
     health_check: "연결 점검",
     importer: "가져오기",
+    autopilot: "완전 자율",
   }),
 
   continuity_issue_kind: labels("continuity_issue_kind", {

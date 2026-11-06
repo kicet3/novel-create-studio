@@ -125,8 +125,8 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
     const st = await novel.getStructure(scope);
     if (st && st.status !== "approved") return { ok: false as const, blockReason: "approval" as const, blockedRef: structureGateRef(scope) };
     const arc = await novel.getArc(scope, ep.arcId);
-    const n = await novel.getNovel(scope);
-    if (n.autonomyLevel !== "full_auto" && !["active", "awaiting_approval", "completed"].includes(arc.status)) {
+    // 설계 추가 0014: no full_auto exception — the autopilot decides the arc_plan approval (INV-ARC-02 at every level)
+    if (!["active", "awaiting_approval", "completed"].includes(arc.status)) {
       return arc.planApprovalId
         ? { ok: false as const, blockReason: "approval" as const, blockedRef: { refType: "approval" as const, refId: arc.planApprovalId } }
         : { ok: false as const, blockReason: "approval" as const };

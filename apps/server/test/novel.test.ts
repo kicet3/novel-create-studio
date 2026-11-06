@@ -185,11 +185,26 @@ describe("novel settings", () => {
     await expect(svc.changeAutonomy(scope, { autonomyLevel: "full_auto", acknowledgedFullAutoWarning: false }, t.owner)).rejects.toBeInstanceOf(
       DomainValidationError,
     );
-    const a = await svc.changeAutonomy(scope, { autonomyLevel: "full_auto", publishPolicy: "scheduled", acknowledgedFullAutoWarning: true }, t.owner);
+    // 설계 추가 0014: the auto items must be acknowledged too; the structure/concept opt-in needs its own warning ack
+    await expect(svc.changeAutonomy(scope, { autonomyLevel: "full_auto", acknowledgedFullAutoWarning: true }, t.owner)).rejects.toMatchObject({ code: "full_auto_items_ack_required" });
+    await expect(
+      svc.changeAutonomy(scope, { autonomyLevel: "full_auto", acknowledgedFullAutoWarning: true, acknowledgedAutoItems: true, autopilot: { autoApproveStructure: true } }, t.owner),
+    ).rejects.toMatchObject({ code: "structure_auto_ack_required" });
+    await expect(
+      svc.changeAutonomy(scope, { autonomyLevel: "full_auto", publishPolicy: "batch_question", acknowledgedFullAutoWarning: true, acknowledgedAutoItems: true }, t.owner),
+    ).rejects.toMatchObject({ code: "publish_policy_unavailable" });
+    const a = await svc.changeAutonomy(
+      scope,
+      { autonomyLevel: "full_auto", publishPolicy: "scheduled", acknowledgedFullAutoWarning: true, acknowledgedAutoItems: true, autopilot: { maxEpisodesPerDay: 2 } },
+      t.owner,
+    );
     expect([a.autonomyLevel, a.publishPolicy]).toEqual(["full_auto", "scheduled"]);
+    expect(a.autopilotEnabledByUserId).toBe(t.ownerId);
+    expect(a.autopilotSettings).toMatchObject({ maxEpisodesPerDay: 2, autoApproveEpisodes: true, autoApproveStructure: false });
     const b = await svc.changeAutonomy(scope, { autonomyLevel: "arc_approval", publishPolicy: "scheduled", acknowledgedFullAutoWarning: false }, t.owner);
     expect([b.autonomyLevel, b.publishPolicy]).toEqual(["arc_approval", "manual"]);
     expect((await t.modules.audit.service.list(scope, { actionPrefix: "novel.autonomy_changed" })).items).toHaveLength(2);
+    expect((await t.modules.audit.service.list(scope, { actionPrefix: "autopilot." })).items.map((e) => e.action)).toEqual(["autopilot.disabled", "autopilot.enabled"]);
   });
 
   it("pause/resume set and clear paused_at with audit; settings diff only records changed fields", async () => {

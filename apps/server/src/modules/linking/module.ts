@@ -46,7 +46,7 @@ export function createLinkingModule(deps: LinkingModuleDeps): ServerModule<Linki
     commitLinkerResult: (tx, scope, result, actor, ctx) => commitLinkerResult(d, tx, scope, result, actor, ctx),
   };
 
-  const taskDeps: TaskDeps = { ontology: deps.ontology, llm: deps.llm, hitl: deps.hitl, novel: deps.novel, agents: deps.agents, orchestration: deps.orchestration, sceneSources };
+  const taskDeps: TaskDeps = { ontology: deps.ontology, llm: deps.llm, hitl: deps.hitl, novel: deps.novel, agents: deps.agents, orchestration: deps.orchestration, sceneSources, log: deps.platform.log.child({ module: "linking" }) };
   deps.orchestration.registerTaskKind(defineTask(taskDeps, extractFactsHandler(taskDeps)));
   deps.orchestration.registerTaskKind(defineTask(taskDeps, linkMentionsHandler(taskDeps)));
   deps.orchestration.registerTaskKind(defineTask(taskDeps, buildInitialOntologyHandler(taskDeps)));

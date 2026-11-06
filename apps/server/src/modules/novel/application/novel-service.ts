@@ -1,4 +1,4 @@
-import { DEFAULTS, EPISODE_HARD_MIN_CHARS, EPISODE_HARD_MIN_MESSAGE, type NovelStatus } from "@ncs/shared";
+import { DEFAULTS, EPISODE_HARD_MIN_CHARS, EPISODE_HARD_MIN_MESSAGE, autopilotSettingsPatchSchema, parseAutopilotSettings, type NovelStatus } from "@ncs/shared";
 import {
   ConflictError,
   DomainValidationError,
@@ -37,6 +37,16 @@ import { createStructureMethods } from "./structure-service.js";
 
 /** title of a novel created without one (title_source=provisional) */
 const PROVISIONAL_TITLE = "제목 미정";
+
+/** AutopilotSettings patch (unknown keys / invalid values → 422) */
+function parseSettingsPatch(raw: Record<string, unknown>) {
+  const { acknowledgedStructureAutoWarning: _ack, ...rest } = raw;
+  if (!Object.keys(rest).length) return {};
+  const r = autopilotSettingsPatchSchema.safeParse(rest);
+  if (!r.success) throw new DomainValidationError("invalid_autopilot_settings", "완전 자율 설정 값이 올바르지 않습니다.", r.error.issues);
+  const { acknowledgedStructureAutoWarning: _a, ...settings } = r.data;
+  return Object.fromEntries(Object.entries(settings).filter(([, v]) => v !== undefined)) as Partial<ReturnType<typeof parseAutopilotSettings>>;
+}
 
 export interface NovelServiceDeps {
   platform: Platform;
@@ -223,11 +233,40 @@ export function createNovelService({ platform, audit }: NovelServiceDeps): Novel
       });
     },
     async changeAutonomy(scope, input, actor) {
-      const next = resolveAutonomy(input);
       return uow.run(async (tx) => {
         const before = await mustNovel(tx, scope, true);
-        if (before.autonomyLevel === next.autonomyLevel && before.publishPolicy === next.publishPolicy) return before;
-        const novel = await repo.updateNovel(tx.db, scope.novelId, next);
+        const wasFullAuto = before.autonomyLevel === "full_auto";
+        const prevSettings = parseAutopilotSettings(before.autopilotSettings);
+        const patch = input.autopilot ? parseSettingsPatch(input.autopilot) : {};
+        // the two opt-ins (컨셉 확정·전체 구성 자동 승인) never carry over a disable: turning full_auto on again starts them
+        // off unless this request sets them (with their own acknowledgement)
+        const reenabling = input.autonomyLevel === "full_auto" && !wasFullAuto;
+        const nextSettings = { ...prevSettings, ...(reenabling ? { autoConfirmConcept: false, autoApproveStructure: false } : {}), ...patch };
+        const structureOptInTurnedOn =
+          input.autonomyLevel === "full_auto" &&
+          ((nextSettings.autoConfirmConcept && (!wasFullAuto || !prevSettings.autoConfirmConcept)) || (nextSettings.autoApproveStructure && (!wasFullAuto || !prevSettings.autoApproveStructure)));
+        const next = resolveAutonomy(input, { wasFullAuto, structureOptInTurnedOn });
+        const turningOn = next.autonomyLevel === "full_auto" && !wasFullAuto;
+        const turningOff = wasFullAuto && next.autonomyLevel !== "full_auto";
+        const settingsChanged = next.autonomyLevel === "full_auto" && JSON.stringify(prevSettings) !== JSON.stringify(nextSettings);
+        if (before.autonomyLevel === next.autonomyLevel && before.publishPolicy === next.publishPolicy && !settingsChanged) return before;
+        const at = platform.clock.date();
+        const fields: Partial<typeof before> = { ...next };
+        if (turningOn) {
+          // the delegating author (auto answers / auto decisions are recorded on their behalf); a fresh run
+          Object.assign(fields, {
+            autopilotEnabledByUserId: actor.type === "user" ? actor.id : (before.autopilotEnabledByUserId ?? ownerCache),
+            autopilotAcknowledgedAt: at,
+            autopilotHaltedAt: null,
+            autopilotHaltReason: null,
+            autopilotSettings: nextSettings,
+            autopilotState: {},
+          });
+        } else if (settingsChanged) {
+          fields.autopilotSettings = nextSettings;
+        }
+        if (turningOff) Object.assign(fields, { autopilotHaltedAt: null, autopilotHaltReason: null, autopilotState: {} });
+        const novel = await repo.updateNovel(tx.db, scope.novelId, fields);
         await audit.record(tx, {
           novelId: scope.novelId,
           actor,
@@ -236,11 +275,82 @@ export function createNovelService({ platform, audit }: NovelServiceDeps): Novel
           before: { autonomyLevel: before.autonomyLevel, publishPolicy: before.publishPolicy },
           after: next,
           reason: input.reason ?? null,
-          details: { acknowledgedFullAutoWarning: input.acknowledgedFullAutoWarning },
+          details: {
+            acknowledgedFullAutoWarning: input.acknowledgedFullAutoWarning,
+            ...(next.autonomyLevel === "full_auto" ? { acknowledgedAutoItems: !!input.acknowledgedAutoItems, acknowledgedStructureAutoWarning: !!input.acknowledgedStructureAutoWarning } : {}),
+          },
+        });
+        if (turningOn) {
+          await audit.record(tx, { novelId: scope.novelId, actor, action: "autopilot.enabled", target: target(scope), after: { settings: nextSettings, publishPolicy: next.publishPolicy }, reason: input.reason ?? null });
+        } else if (turningOff) {
+          await audit.record(tx, { novelId: scope.novelId, actor, action: "autopilot.disabled", target: target(scope), before: { autonomyLevel: "full_auto" }, after: { autonomyLevel: next.autonomyLevel }, reason: input.reason ?? null });
+        } else if (settingsChanged) {
+          await audit.record(tx, { novelId: scope.novelId, actor, action: "autopilot.settings_changed", target: target(scope), before: { settings: prevSettings }, after: { settings: nextSettings } });
+        }
+        // on: wake the loop at once; off: approvals the autopilot was holding go out to the messengers now
+        tx.afterCommit(() => {
+          platform.workSignal.notify(turningOff ? "question" : "autopilot", scope.novelId);
+          platform.workSignal.notify("wake", scope.novelId);
         });
         return novel;
       });
     },
+    updateAutopilotSettings(scope, input, actor) {
+      return uow.run(async (tx) => {
+        const before = await mustNovel(tx, scope, true);
+        const prev = parseAutopilotSettings(before.autopilotSettings);
+        const next = { ...prev, ...parseSettingsPatch(input.settings) };
+        const optIn = (next.autoConfirmConcept && !prev.autoConfirmConcept) || (next.autoApproveStructure && !prev.autoApproveStructure);
+        if (optIn && !input.acknowledgedStructureAutoWarning) {
+          throw new DomainValidationError("structure_auto_ack_required", "컨셉 확정·전체 구성 자동 승인을 켜려면 경고를 확인해야 합니다.");
+        }
+        if (JSON.stringify(prev) === JSON.stringify(next)) return before;
+        const novel = await repo.updateNovel(tx.db, scope.novelId, { autopilotSettings: next });
+        const diff = diffFields(prev as unknown as Record<string, unknown>, next as unknown as Record<string, unknown>);
+        await audit.record(tx, { novelId: scope.novelId, actor, action: "autopilot.settings_changed", target: target(scope), before: diff?.before ?? null, after: diff?.after ?? null, details: optIn ? { acknowledgedStructureAutoWarning: true } : null });
+        tx.afterCommit(() => {
+          platform.workSignal.notify("autopilot", scope.novelId);
+          platform.workSignal.notify("question", scope.novelId);
+        });
+        return novel;
+      });
+    },
+    haltAutopilot(scope, reason, actor, opts = {}) {
+      return uow.join(opts.tx, async (tx) => {
+        const before = await mustNovel(tx, scope, true);
+        if (before.autopilotHaltedAt) return before;
+        const novel = await repo.updateNovel(tx.db, scope.novelId, { autopilotHaltedAt: platform.clock.date(), autopilotHaltReason: reason });
+        await audit.record(tx, { novelId: scope.novelId, actor, action: "autopilot.halted", target: target(scope), after: { reason }, reason: opts.note ?? null });
+        // approvals held for an auto decision go to the messengers now
+        tx.afterCommit(() => platform.workSignal.notify("question", scope.novelId));
+        return novel;
+      });
+    },
+    resumeAutopilot(scope, actor, opts = {}) {
+      return uow.run(async (tx) => {
+        const before = await mustNovel(tx, scope, true);
+        if (!before.autopilotHaltedAt) return before;
+        const novel = await repo.updateNovel(tx.db, scope.novelId, { autopilotHaltedAt: null, autopilotHaltReason: null });
+        await audit.record(tx, { novelId: scope.novelId, actor, action: "autopilot.resumed", target: target(scope), before: { reason: before.autopilotHaltReason }, reason: opts.note ?? null });
+        tx.afterCommit(() => {
+          platform.workSignal.notify("autopilot", scope.novelId);
+          platform.workSignal.notify("wake", scope.novelId);
+        });
+        return novel;
+      });
+    },
+    setAutopilotState(scope, patch, outer) {
+      return uow.join(outer, async (tx) => {
+        const n = await mustNovel(tx, scope, true);
+        const state: Record<string, unknown> = { ...((n.autopilotState as Record<string, unknown>) ?? {}) };
+        for (const [k, v] of Object.entries(patch)) {
+          if (v === null) delete state[k];
+          else state[k] = v;
+        }
+        await repo.setAutopilotState(tx.db, scope.novelId, state);
+      });
+    },
+    lockNovel: (tx, scope) => mustNovel(tx, scope, true),
     pause(scope, reason, actor, opts = {}) {
       return uow.join(opts.tx, async (tx) => {
         const before = await mustNovel(tx, scope, true);

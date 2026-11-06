@@ -69,6 +69,7 @@ export const questionDraftSchema = z
     notice: z.boolean().optional(),
     allowFreeText: z.boolean().optional(),
     gradeHints: gradeHintsSchema.optional(),
+    sensitivity: z.literal("high").optional(),
   })
   .superRefine((d, ctx) => {
     const n = d.options.length;

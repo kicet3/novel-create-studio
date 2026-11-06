@@ -4,8 +4,8 @@
  */
 import { z } from "zod";
 import { defaultValue } from "@ncs/shared";
-import { NotImplementedError, actors, type ActorRef, type NovelScope, type Tx } from "../../../platform/index.js";
-import type { AgentTaskHandler, AgentsService, ContextBuilder, ContextPack } from "../../agents/index.js";
+import { NotImplementedError, actors, type ActorRef, type Logger, type NovelScope, type Tx } from "../../../platform/index.js";
+import { callWithRepair, summarizeIssues, type AgentTaskHandler, type AgentsService, type ContextBuilder, type ContextPack } from "../../agents/index.js";
 import type { HitlService } from "../../hitl/index.js";
 import type { LlmService } from "../../llm/index.js";
 import type { NovelService } from "../../novel/index.js";
@@ -13,7 +13,8 @@ import { lookupPredicate, mapPredicateLabel, normalizedKey, type CandidateFactDr
 import { TaskFailure, type CommitOutcome, type OrchestrationService, type RunHandle, type Task, type TaskKindHandler } from "../../orchestration/index.js";
 import type { LinkerInputMention, LinkerResult, SceneSource, SceneText } from "../index.js";
 import { extractionResultSchema, initialOntologySchema, type ExtractionResult, type InitialOntology } from "../domain/schemas.js";
-import { dictionaryMentions, excerpt, parseBibleContent, repairOffsets } from "../domain/text.js";
+import { dictionaryMentions, excerpt, parseBibleContent } from "../domain/text.js";
+import { checkExtraction, normalizeEntityType } from "../domain/extraction-check.js";
 import { commitLinkerResult, disambiguationDraft, duplicateDraft, tryCreateQuestion } from "./commit.js";
 import { runLinker } from "./linker.js";
 
@@ -25,6 +26,7 @@ export interface TaskDeps {
   agents: AgentsService;
   orchestration: OrchestrationService;
   sceneSources: SceneSource[];
+  log?: Logger;
 }
 
 const EMPTY_PACK: ContextPack = { snapshotId: "", system: "", messages: [], handles: { entities: [], names: [] }, tokenEstimate: 0, droppedSections: [] };
@@ -131,10 +133,23 @@ async function followUps(deps: TaskDeps, tx: Tx, scope: NovelScope, task: Task, 
   }
 }
 
-function extractionPrompt(scenes: SceneText[], known: Array<{ surface: string; entityType: string }> = []): string {
+/** below this share of located mentions the answer is unusable → invalid_output (else unlocated ones are dropped) */
+const MIN_LOCATED_RATIO = 0.5;
+
+const EXTRACT_SYSTEM = [
+  "원고의 <scene> 안 본문에서 엔티티 언급(L0)과 새로 드러난 사실을 추출합니다. 엔티티 ID를 정하지 말고, 사실의 주어·목적어는 언급 local_key로만 가리킵니다. predicate는 스키마 키(관계·속성)를 씁니다.",
+  "언급 규칙:",
+  "- surface: 원문에 적힌 표기를 글자 그대로 씁니다(조사·따옴표 제외). 고치거나 줄이거나 지어내지 않습니다.",
+  "- quote: 그 언급을 포함한 원문 그대로의 짧은 구절(10~40자, 한 줄)입니다. 서버는 quote로 위치를 찾으므로 같은 이름이 여러 번 나오면 어느 것인지 알 수 있게 앞뒤 문맥을 넣습니다.",
+  "- char_start/char_end는 선택 힌트입니다. 씬 본문 첫 글자를 0으로 세며, 본문이 줄바꿈으로 시작하면 그 줄바꿈도 1자로 셉니다. 정확히 셀 수 없으면 비워 둡니다.",
+  "- scene_ord는 언급이 실제로 있는 씬의 ord입니다.",
+  "- 사실의 주어·목적어가 되는 언급과 각 씬에 처음 등장하는 인물·장소·조직 언급은 빠짐없이 냅니다.",
+].join("\n");
+
+function extractionPrompt(scenes: SceneText[], known: Array<{ surface: string; entityType: string }> = [], entityTypes: string[] = []): string {
   const names = [...new Map(known.map((k) => [k.surface, k])).values()].slice(0, 200);
   const dict = names.length ? `<known_entities>\n${names.map((k) => `- ${k.surface} | ${k.entityType}`).join("\n")}\n</known_entities>\n\n` : "";
-  return dict + scenes.map((s) => `<scene ord="${s.sceneOrd}" story_point="${s.storyPoint}">\n${s.text}\n</scene>`).join("\n\n");
+  return dict + (entityTypes.length ? `<entity_types>${entityTypes.join(", ")}</entity_types>\n(entity_type_hint는 이 키 중 하나만 씁니다.)\n\n` : "") + scenes.map((s) => `<scene ord="${s.sceneOrd}" story_point="${s.storyPoint}" chars="${s.text.length}">\n${s.text}\n</scene>`).join("\n\n");
 }
 
 export function extractFactsHandler(deps: TaskDeps): AgentTaskHandler<ExtractInput, ExtractProposal> {
@@ -158,49 +173,59 @@ export function extractFactsHandler(deps: TaskDeps): AgentTaskHandler<ExtractInp
       const dict = (await deps.ontology.listEntities(scope, { statuses: ["candidate", "active"], limit: 500 })).map((e) => e.entity);
       const dictNames: Array<{ surface: string; nameKind: string; entityType: string }> = [];
       for (const e of dict) for (const n of await deps.ontology.listEntityNames(scope, e.id)) if (n.status !== "retired" && n.nameKind !== "hidden_variant") dictNames.push({ surface: n.surface, nameKind: n.nameKind, entityType: e.entityType });
-      // P3b: LLM extraction (L0)
-      const out = await llm.call({
-        run,
-        purpose: "extract_facts",
-        system: `${context.system ? `${context.system}\n\n` : ""}원고에서 엔티티 언급(L0)과 사실을 추출합니다. 엔티티 ID를 정하지 말고, 사실의 주어·목적어는 언급 local_key로만 가리킵니다. predicate는 스키마 키(관계·속성)를 씁니다.`,
-        messages: [...context.messages, { role: "user", content: extractionPrompt(scenes, dictNames) }],
-        output: { kind: "object", schemaName: "linking_extraction", schema: extractionResultSchema },
+      // P3b: LLM extraction (L0). The server locates every mention (surface + quote; offsets are hints). Mentions it
+      // cannot place go back to the producer as a validator critique in the same conversation (agent-to-agent repair).
+      const entityTypes = new Set((await deps.ontology.getSchema(scope)).schema.entityTypes.filter((t) => t.enabled).map((t) => t.key as string));
+      const check = (value: ExtractionResult) => {
+        const c = checkExtraction(scenes, value, { entityTypes });
+        return { result: c, issues: c.issues };
+      };
+      const repaired = await callWithRepair({
+        llm,
+        request: {
+          run,
+          purpose: "extract_facts",
+          system: `${context.system ? `${context.system}\n\n` : ""}${EXTRACT_SYSTEM}`,
+          messages: [...context.messages, { role: "user", content: extractionPrompt(scenes, dictNames, [...entityTypes]) }],
+          output: { kind: "object", schemaName: "linking_extraction", schema: extractionResultSchema },
+        },
+        validate: check,
+        label: "언급 위치 검증",
+        instruction: "각 항목을 원문에 적힌 그대로의 surface와, 그 언급을 포함한 원문 그대로의 quote(10~40자, 한 줄)로 다시 지정하거나, 원문에 없는 언급이면 빼세요.",
       });
-      const parsed = extractionResultSchema.safeParse(out.value);
-      if (!parsed.success) throw new TaskFailure("invalid_output", "추출 결과 형식이 맞지 않습니다.", true);
-      const extraction = parsed.data;
-      // deterministic offset check (07 §4.3); dictionary L0 supplement
+      const extraction = repaired.value;
+      const checked = repaired.result;
+      // deterministic check (07 §4.3): unlocated mentions are dropped one by one; only a mostly-unusable answer fails
+      const dropped = checked.unlocated.length;
+      run.noteOutputSummary?.("mentionCheck", { ...checked.stats, repairRounds: repaired.rounds });
+      if (dropped > 0) deps.log?.info({ runId: run.runId, dropped, total: extraction.mentions.length, rounds: repaired.rounds, issues: repaired.issues.slice(0, 5).map((i) => i.item) }, "extract_facts: unlocated mentions dropped");
+      if (extraction.mentions.length > 0 && checked.located.length / extraction.mentions.length < MIN_LOCATED_RATIO) {
+        throw new TaskFailure("invalid_output", `언급 위치가 원문과 맞지 않는 비율이 높습니다(${dropped}/${extraction.mentions.length}, 에이전트 간 수정 대화 ${repaired.rounds}회 후). ${summarizeIssues("언급 위치 검증", repaired.issues)}`, true);
+      }
       const sceneByOrd = new Map(scenes.map((s) => [s.sceneOrd, s]));
       const mentions: LinkerInputMention[] = [];
       const excerpts: Record<number, string> = {};
-      let dropped = 0;
       const taken = new Map<number, Array<[number, number]>>();
-      for (const m of extraction.mentions) {
-        const sc = sceneByOrd.get(m.scene_ord);
-        const fixed = sc ? repairOffsets(sc.text, m) : null;
-        if (!sc || !fixed) {
-          dropped++;
-          continue;
-        }
-        taken.set(sc.sceneOrd, [...(taken.get(sc.sceneOrd) ?? []), [fixed.start, fixed.end]]);
-        excerpts[mentions.length] = excerpt(sc.text, fixed.start, fixed.end);
+      for (const loc of checked.located) {
+        const m = extraction.mentions[loc.index]!;
+        const sc = sceneByOrd.get(loc.sceneOrd)!;
+        taken.set(sc.sceneOrd, [...(taken.get(sc.sceneOrd) ?? []), [loc.start, loc.end]]);
+        excerpts[mentions.length] = excerpt(sc.text, loc.start, loc.end);
         mentions.push({
-          surface: m.mention_kind === "zero" ? "" : m.surface,
-          charStart: sc.charOffset + fixed.start,
-          charEnd: sc.charOffset + fixed.end,
+          surface: loc.surface,
+          charStart: sc.charOffset + loc.start,
+          charEnd: sc.charOffset + loc.end,
           sceneId: sc.sceneId,
           storyPoint: sc.storyPoint,
           mentionKind: m.mention_kind,
           chainKey: m.chain_key ?? null,
           povEntityId: sc.povEntityId ?? null,
           localKey: m.local_key,
-          entityTypeHint: m.entity_type_hint ?? null,
+          // unknown types left after the dialogue → no hint (never an entity of a type the schema lacks)
+          entityTypeHint: normalizeEntityType(m.entity_type_hint, entityTypes) || null,
           sceneParticipantEntityIds: sc.participantEntityIds,
           excerpt: excerpts[mentions.length - 1],
         });
-      }
-      if (extraction.mentions.length > 0 && dropped / extraction.mentions.length > 0.1) {
-        throw new TaskFailure("invalid_output", `언급 위치가 원문과 맞지 않는 비율이 높습니다(${dropped}/${extraction.mentions.length}).`, true);
       }
       for (const sc of scenes) {
         for (const hit of dictionaryMentions(sc.text, dictNames)) {

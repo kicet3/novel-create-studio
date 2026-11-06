@@ -149,6 +149,8 @@ export interface BriefChecks {
   };
   name_duplicates: Array<{ name: string; character_keys: string[] }>;
   checked_by_run_id: string | null;
+  /** 설계 추가 0014: the LLM similarity / safety check answered with a valid result in that run (absent = unchecked) */
+  llm_checked?: boolean;
 }
 
 /** Internal turn state kept with the working brief (not part of the approved content). */

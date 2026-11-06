@@ -193,3 +193,41 @@ export function applyLlmGrade(current: { grade: QuestionGrade; basis: BlockingBa
 }
 
 export const BLOCKING_BASIS_VALUES = ENUMS.blocking_basis;
+
+// ── 설계 추가 0014: 질문 민감도 (완전 자율 자동 응답 대상 판정) ──
+/** topics never auto-answered in full_auto (hold topics + always-human decisions + system failures) */
+export const HIGH_SENSITIVITY_TOPICS: ReadonlySet<QuestionTopic> = new Set<QuestionTopic>([
+  ...HOLD_TOPICS,
+  "retcon",
+  "setup_abandon",
+  "budget",
+  "direction",
+  "schema_change",
+  "identity_change",
+  "safety_review",
+  "provider_outage",
+  "extraction_failure",
+  "publish_batch",
+  "media_gate",
+  "rewrite_limit",
+]);
+/** blocking bases that always need the author */
+export const HIGH_SENSITIVITY_BASES: ReadonlySet<BlockingBasis> = new Set<BlockingBasis>([
+  "ending_direction",
+  "canon_change",
+  "published_canon",
+  "major_character_fate",
+  "budget",
+  "safety_review",
+  "system_failure",
+  "rewrite_limit",
+]);
+
+/** high = the autopilot never answers it (agents may only raise it; hints that touch canon / fate / ending raise it) */
+export function questionSensitivity(i: { topic: QuestionTopic; basis: BlockingBasis; hints?: GradeHints; proposed?: "high" | null }): "normal" | "high" {
+  if (i.proposed === "high") return "high";
+  if (HIGH_SENSITIVITY_TOPICS.has(i.topic) || HIGH_SENSITIVITY_BASES.has(i.basis)) return "high";
+  const h = i.hints ?? {};
+  if (h.touchesApprovedCanon || h.touchesPublishedCanon || h.majorCharacterFate || h.endingDirection || h.budgetChange) return "high";
+  return "normal";
+}

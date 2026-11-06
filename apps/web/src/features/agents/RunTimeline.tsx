@@ -6,6 +6,7 @@ import { Badge, DataTable, formatDateTime, KeyValueList, StatusBadge } from "../
 import { cx } from "../../lib/cx.js";
 import { useTaskRuns } from "./api.js";
 import { describeRun, formatElapsed, formatTokens, LANE_PAD, LANE_ROW_H, layoutTimeline, RUN_STATUS_TONE, RUN_STATUS_VAR, runAttempt, runInterval, type TimelineBar } from "./model.js";
+import { RepairDialogueDisclosure, repairRoundsLabel } from "./RepairDialogue.js";
 
 const LABEL_W = 92;
 
@@ -239,6 +240,7 @@ function RunSummary({ run, now }: { run: AgentRunSpanDto; now: number }) {
         {run.costMicros > 0 ? ` · ${formatUsd(run.costMicros)}` : ""}
       </div>
       {run.errorFamily && <div className="text-danger">{labelKo("error_family", run.errorFamily)}</div>}
+      {run.repairRounds > 0 && <div>{repairRoundsLabel(run.repairRounds)}</div>}
     </>
   );
 }
@@ -274,6 +276,7 @@ function RunDetail({ novelId, run, now, timezone, onClose }: { novelId: string; 
           { label: "토큰", value: `입력 ${formatTokens(run.inputTokens)} · 출력 ${formatTokens(run.outputTokens)}` },
           { label: "비용", value: formatUsd(run.costMicros) },
           { label: "모델", value: run.models.length ? run.models.join(", ") : "—" },
+          ...(run.repairRounds > 0 ? [{ label: "수정 대화", value: <RepairDialogueDisclosure novelId={novelId} taskId={run.taskId} runId={run.id} rounds={run.repairRounds} /> }] : []),
           ...(run.errorFamily || errorMessage
             ? [
                 {

@@ -69,6 +69,11 @@ export interface CastService {
   deleteCharacter(scope: NovelScope, characterId: string, actor: ActorRef): Promise<void>;
   /** accept an AI proposal as is (every filled field → `user`) */
   acceptCharacter(scope: NovelScope, characterId: string, actor: ActorRef): Promise<Character>;
+  /**
+   * 설계 추가 0014 (full_auto): accept complete AI proposals of a plot (`arcId`) or of the initial cast (`null`) WITHOUT
+   * changing field origins (agent stays agent); proposals with empty required fields are skipped
+   */
+  acceptAgentProposals(scope: NovelScope, opts: { arcId: string | null }, actor: ActorRef): Promise<{ accepted: string[] }>;
   reorder(scope: NovelScope, ids: string[], actor: ActorRef): Promise<Character[]>;
   /** protagonist + main characters of the approved brief (skips names already in the cast); also run on N2 */
   importFromBrief(scope: NovelScope, actor: ActorRef, tx?: Tx): Promise<{ created: number }>;

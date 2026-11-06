@@ -95,6 +95,12 @@ export interface ConceptService {
    * until the brief is ready for the manual [승인 요청] or a stop condition (step/turn cap, budget, error, 멈추기, off).
    */
   setAutoApprove(scope: NovelScope, sessionId: string, input: SetAutoApproveInput, actor: ActorRef): Promise<ConceptSession>;
+  /**
+   * 설계 추가 0014 (full_auto + opt-in "컨셉 확정 자동 승인"): on the open initial session, when no turn is in flight and the
+   * auto-approve run is not running — confirm the agent-decided fields ([모두 확정], origin kept) and start the check →
+   * concept_brief approval (decided by the autopilot). Returns why it did not submit otherwise.
+   */
+  autoSubmitForApproval(scope: NovelScope, input: { actor: ActorRef; delegatedByUserId: string }): Promise<{ submitted: true; taskId: string } | { submitted: false; reason: string }>;
   /** 3.9 idle reminder (48h) / paused(idle) after 14 days — run by the `concept.idle_sweeper` loop */
   sweepIdle(now?: Date): Promise<{ reminded: number; paused: number }>;
 }

@@ -491,3 +491,10 @@ export const worldItemStatusSchema = z.enum(WORLD_ITEM_STATUS);
 export const WORLD_ITEM_ORIGIN = ENUMS.world_item_origin;
 export type WorldItemOrigin = (typeof WORLD_ITEM_ORIGIN)[number];
 export const worldItemOriginSchema = z.enum(WORLD_ITEM_ORIGIN);
+/** 설계 추가 0014 */
+export const AUTOPILOT_HALT_REASON = ENUMS.autopilot_halt_reason;
+export type AutopilotHaltReason = (typeof AUTOPILOT_HALT_REASON)[number];
+export const autopilotHaltReasonSchema = z.enum(AUTOPILOT_HALT_REASON);
+export const QUESTION_SENSITIVITY = ENUMS.question_sensitivity;
+export type QuestionSensitivity = (typeof QUESTION_SENSITIVITY)[number];
+export const questionSensitivitySchema = z.enum(QUESTION_SENSITIVITY);

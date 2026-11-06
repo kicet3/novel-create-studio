@@ -349,9 +349,13 @@ export function createStructure(m: ManuscriptInternals, getService: () => Manusc
 
   const story_structure = async (ctx: ApprovalDecisionContext) => {
     const { tx, scope, approval, actor } = ctx;
-    if (actor.type !== "user") throw new DomainValidationError("structure_user_only", "전체 구성은 작가가 직접 승인해야 합니다.");
+    // 설계 추가 0014: the autopilot may approve it (opt-in "구성·결말도 자동 승인") unless the ending changed after an approval
+    if (actor.type !== "user" && !ctx.auto) throw new DomainValidationError("structure_user_only", "전체 구성은 작가가 직접 승인해야 합니다.");
     const s = await novel.getStructure(scope, tx);
     if (!s || s.status !== "awaiting_approval" || (s.approvalId && s.approvalId !== approval.id)) return; // stale approval
+    if (ctx.auto && (s.pendingChanges?.ending || s.pendingChanges?.goalEndingChanged)) {
+      throw new DomainValidationError("structure_ending_human", "결말이 바뀐 전체 구성은 작가가 직접 다시 승인해야 합니다.");
+    }
     // the request names the revision the author was shown; a newer revision is never decided by an older request
     const shown = (approval.payload as { revision?: unknown } | null)?.revision;
     if (typeof shown === "number" && shown !== s.revision) {

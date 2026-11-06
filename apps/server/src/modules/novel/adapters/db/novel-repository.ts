@@ -38,6 +38,10 @@ export const novelRepo = {
       .where(includeArchived ? undefined : ne(novels.status, "archived"))
       .orderBy(desc(novels.updatedAt));
   },
+  /** autopilot loop bookkeeping: updated_at untouched (web forms key on it) */
+  async setAutopilotState(db: Db, novelId: string, state: Record<string, unknown>): Promise<void> {
+    await db.update(novels).set({ autopilotState: state }).where(eq(novels.id, novelId));
+  },
   async updateNovel(db: Db, novelId: string, patch: Partial<NovelInsert>): Promise<Novel> {
     const [n] = await db
       .update(novels)

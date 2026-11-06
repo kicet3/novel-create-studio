@@ -36,6 +36,8 @@ export const questions = pgTable(
     answeredAt: timestamp("answered_at", { withTimezone: true, mode: "date" }),
     resolvedAt: timestamp("resolved_at", { withTimezone: true, mode: "date" }),
     cancelledReason: text("cancelled_reason"),
+    /** 설계 추가 0014: high = 완전 자율에서도 자동 응답하지 않음 */
+    sensitivity: text("sensitivity", { enum: ENUMS.question_sensitivity }).notNull().default("normal"),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
@@ -111,6 +113,8 @@ export const answers = pgTable(
     lateResolution: text("late_resolution", { enum: ENUMS.late_answer_resolution }),
     lateResolutionRefType: text("late_resolution_ref_type", { enum: ENUMS.ref_type }),
     lateResolutionRefId: text("late_resolution_ref_id"),
+    /** 설계 추가 0014: 완전 자율이 위임한 사람 대신 답한 행 */
+    autoAnswered: boolean("auto_answered").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
@@ -218,6 +222,8 @@ export const approvals = pgTable(
     decidedViaChannelId: text("decided_via_channel_id"),
     isAbsenceDelegated: boolean("is_absence_delegated").notNull().default(false),
     supersededById: text("superseded_by_id"),
+    /** 설계 추가 0014: 완전 자율이 결정한 승인(승인만, 허용된 종류만 — approvals_ck_auto) */
+    autoDecided: boolean("auto_decided").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },

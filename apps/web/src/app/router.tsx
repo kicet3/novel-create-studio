@@ -30,6 +30,9 @@ export const routes: RouteObject[] = [
           { path: "dev/ui", lazy: page(() => import("../features/ui-catalog/UiCatalogPage.js"), (m) => m.UiCatalogPage) },
         ],
       },
+      // 읽기(reader): full-screen reading without the sidebar
+      { path: "novels/:novelId/read", lazy: page(() => import("../features/reader/ReaderTocPage.js"), (m) => m.ReaderTocPage) },
+      { path: "novels/:novelId/read/:episodeNo", lazy: page(() => import("../features/reader/ReaderEpisodePage.js"), (m) => m.ReaderEpisodePage) },
       {
         path: "novels/:novelId",
         element: <NovelLayout />,

@@ -49,6 +49,9 @@ export const DEFAULT_DEFS = {
   "run.max_concurrent_per_novel": d(2, "install"),
   "run.max_concurrent_global": d(4, "install"),
   "task.max_attempts": d(3, "system"),
+  // agent-to-agent repair dialogue: rounds of validator critique → producer correction inside one run before the
+  // task falls back to its retry / fail path (agents.callWithRepair)
+  "agents.repair_rounds": d(2, "system"),
   // consecutive runs cut off by a server stop / crash / lease loss before the task fails (crash-loop guard);
   // such interruptions never use task.max_attempts
   "task.max_interruptions": d(10, "system"),

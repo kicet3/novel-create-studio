@@ -326,12 +326,15 @@ export function createOrchestrationEngine(deps: EngineDeps): OrchestrationEngine
     if (s) Object.assign(patch, { costMicros: s.costMicros, inputTokens: s.inputTokens, outputTokens: s.outputTokens });
     if (a?.modelsUsed.length) patch.modelsUsed = a.modelsUsed;
     if (a && a.safePointSeq > 0) patch.safePointSeq = a.safePointSeq;
+    if (a?.outputSummary) patch.outputSummary = a.outputSummary;
     if (Object.keys(patch).length) await repo.updateRun(tx.db, scope, runId, patch);
   };
 
   interface ActiveRunNotes {
     modelsUsed: Array<{ provider: string; modelId: string; modelVersion?: string | null }>;
     safePointSeq: number;
+    /** runs.output_summary keys noted by the handler (RunHandle.noteOutputSummary) */
+    outputSummary?: Record<string, unknown>;
   }
 
   /**
@@ -577,6 +580,9 @@ export function createOrchestrationEngine(deps: EngineDeps): OrchestrationEngine
       },
       noteSafePoint(seq) {
         notes.safePointSeq = Math.max(notes.safePointSeq, seq);
+      },
+      noteOutputSummary(key, value) {
+        notes.outputSummary = { ...notes.outputSummary, [key]: value };
       },
       async attachContextSnapshot(tx, snapshotId) {
         await repo.updateRun(tx?.db ?? uow.db, scope, run.id, { contextSnapshotId: snapshotId });

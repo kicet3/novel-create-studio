@@ -5,6 +5,7 @@ import { novelPath } from "../../components/layout/nav.js";
 import { QueryView } from "../../components/ui/index.js";
 import { useNovel } from "../novels/api.js";
 import { AutonomySection } from "./sections/AutonomySection.js";
+import { AutopilotSection } from "./sections/AutopilotSection.js";
 import { BudgetSection } from "./sections/BudgetSection.js";
 import { ChannelsSection } from "./sections/ChannelsSection.js";
 import { HealthChecksSection } from "./sections/HealthChecksSection.js";
@@ -35,6 +36,7 @@ export function NovelSettingsPage() {
               <NovelBasicsSection key={n.updatedAt} novel={n} />
               <WebSearchSection key={`web-${n.updatedAt}`} novel={n} />
               <AutonomySection novel={n} />
+              <AutopilotSection novel={n} />
               <BudgetSection novelId={novelId} />
               <LengthProfileSection novelId={novelId} />
             </div>

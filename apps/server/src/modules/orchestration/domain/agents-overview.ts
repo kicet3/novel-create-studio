@@ -99,6 +99,8 @@ export interface RunSpanRow {
   outputTokens: number;
   costMicros: number;
   modelsUsed: unknown;
+  /** agent-to-agent repair rounds (runs.output_summary.repairRounds); 0 when absent */
+  repairRounds?: number;
 }
 
 export interface RoleUsageRow {
@@ -322,6 +324,7 @@ export function buildAgentsTimeline(i: TimelineInput) {
       outputTokens: live ? live.outputTokens : r.outputTokens,
       costMicros: live ? live.costMicros : r.costMicros,
       models: live?.model ? [live.model.modelId] : modelLabels(modelsUsed),
+      repairRounds: r.repairRounds ?? 0,
     };
   });
   return { now: i.now, since: i.since, timezone: i.timezone, runs, runsTruncated: truncated };

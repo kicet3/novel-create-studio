@@ -112,6 +112,7 @@ export const overviewRepo = {
       outputTokens: runs.outputTokens,
       costMicros: runs.costMicros,
       modelsUsed: runs.modelsUsed,
+      repairRounds: sql<number>`coalesce((${runs.outputSummary}->>'repairRounds')::int, 0)`,
     };
     const join = and(eq(tasks.novelId, runs.novelId), eq(tasks.id, runs.taskId));
     const [recent, open] = await Promise.all([
@@ -141,7 +142,7 @@ export const overviewRepo = {
     return [...byId.values()]
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || b.id.localeCompare(a.id))
       .slice(0, limit + 1)
-      .map((r) => ({ ...r, inputTokens: num(r.inputTokens), outputTokens: num(r.outputTokens), costMicros: num(r.costMicros) }));
+      .map((r) => ({ ...r, inputTokens: num(r.inputTokens), outputTokens: num(r.outputTokens), costMicros: num(r.costMicros), repairRounds: num(r.repairRounds) }));
   },
 
   /**

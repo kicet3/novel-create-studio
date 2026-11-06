@@ -77,6 +77,7 @@ export const hitlQuestionDtoSchema = z.object({
   parentQuestionId: z.string().nullable(),
   acceptedAnswerId: z.string().nullable(),
   resolutionSource: z.enum(ENUMS.resolution_source).nullable(),
+  sensitivity: z.enum(ENUMS.question_sensitivity).default("normal"),
   sentAt: isoDateTime.nullable(),
   answeredAt: isoDateTime.nullable(),
   resolvedAt: isoDateTime.nullable(),
@@ -99,6 +100,8 @@ export const hitlAnswerDtoSchema = z.object({
   }).passthrough(),
   disposition: z.enum(ENUMS.answer_disposition),
   lateResolution: z.enum(ENUMS.late_answer_resolution).nullable(),
+  /** 설계 추가 0014: answered by the autopilot on the author's behalf */
+  autoAnswered: z.boolean().default(false),
 });
 
 const previewDto = z.object({ label: z.string(), text: z.string(), ref: z.object({ refType: z.string(), refId: z.string() }).optional() });
@@ -117,6 +120,8 @@ export const hitlApprovalDtoSchema = z.object({
   decisionNote: z.string().nullable(),
   reworkFrom: z.enum(ENUMS.rework_from).nullable(),
   supersededById: z.string().nullable(),
+  /** 설계 추가 0014: decided by the autopilot ("자동 승인") */
+  autoDecided: z.boolean().default(false),
   createdAt: isoDateTime,
 });
 export type HitlApprovalDto = z.infer<typeof hitlApprovalDtoSchema>;
@@ -141,6 +146,9 @@ export const hitlQuestionViewSchema = z.object({
   deadline: z.object({ at: isoDateTime, wallClock: z.string(), afterLabel: z.string() }).nullable(),
   webUrl: z.string(),
   status: z.enum(ENUMS.question_status),
+  /** 설계 추가 0014: auto_answer = 자동 응답 / 자동 승인 */
+  resolutionSource: z.enum(ENUMS.resolution_source).nullable().default(null),
+  sensitivity: z.enum(ENUMS.question_sensitivity).default("normal"),
   answers: z.array(hitlAnswerDtoSchema),
   approval: hitlApprovalDtoSchema.nullable().optional(),
   reflection: z

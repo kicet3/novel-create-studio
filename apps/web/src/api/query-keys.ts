@@ -29,6 +29,7 @@ export const queryKeys = {
       setups: (filter?: Record<string, unknown>) => [...all, "setups", filter ?? {}] as const,
       activity: (filter?: Record<string, unknown>) => [...all, "activity", filter ?? {}] as const,
       settings: () => [...all, "settings"] as const,
+      autopilot: () => [...all, "autopilot"] as const,
     };
   },
   installSettings: ["settings", "install"] as const,

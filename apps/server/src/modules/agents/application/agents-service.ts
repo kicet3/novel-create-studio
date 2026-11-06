@@ -11,6 +11,7 @@ import { AGENT_ROLES, disallowedWrites, hop2Predicates, roleDefinition } from ".
 import { PROMPT_TEMPLATE_DATA, buildTemplate } from "../domain/prompt-templates.js";
 import { snapshotRepo } from "../adapters/db/snapshot-repository.js";
 import { createContextBuilder } from "./context-builder.js";
+import { priorFailureFeedback, withRetryFeedback, type PriorFailureFeedback } from "./retry-feedback.js";
 
 export interface AgentsServiceDeps {
   platform: Platform;
@@ -60,6 +61,15 @@ export function createAgentsService(deps: AgentsServiceDeps): AgentsService {
     if (prior.contextSnapshotId) return prior.contextSnapshotId;
     const [snap] = await snapshotRepo.latestForRuns(platform.uow.db, scope, [prior.id]);
     return snap?.id ?? null;
+  }
+
+  async function retryFeedback(scope: NovelScope, task: Task, run: RunHandle): Promise<PriorFailureFeedback | null> {
+    try {
+      return priorFailureFeedback(await deps.orchestration.listRuns(scope, task.id), run.runId);
+    } catch (err) {
+      if (!(err instanceof NotImplementedError)) log.warn({ err, taskId: task.id }, "previous failure feedback unavailable");
+      return null;
+    }
   }
 
   const service: AgentsService = {
@@ -138,7 +148,16 @@ export function createAgentsService(deps: AgentsServiceDeps): AgentsService {
           }
           if (!context) context = await h.buildContext(ctx.run, ctx.input, builder, ctx.task);
           await ctx.run.checkpoint();
-          const proposal = await h.execute(ctx.run, ctx.input, context, deps.llm.modelCalls);
+          // retry after invalid_output: tell the producer what failed instead of repeating the identical prompt
+          let llm = deps.llm.modelCalls;
+          if (ctx.run.attempt > 1) {
+            const fb = await retryFeedback(ctx.scope, ctx.task, ctx.run);
+            if (fb) {
+              ctx.log.info({ fromRunId: fb.fromRunId, purpose: fb.purpose }, "retry after invalid_output: previous failure feedback added to the prompt");
+              llm = withRetryFeedback(llm, fb);
+            }
+          }
+          const proposal = await h.execute(ctx.run, ctx.input, context, llm);
           return { context, proposal };
         },
         async commit(tx, ctx, p) {

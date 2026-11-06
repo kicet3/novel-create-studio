@@ -168,9 +168,11 @@ describe("3,000-char floor: full_auto keeps the structure approval, no auto appr
   });
   afterAll(() => t.close());
 
-  it("full_auto: the structure still needs the user; plots start without a plan approval (AR4)", async () => {
+  it("full_auto: the structure still needs the user (opt-in off); the plot plan approval is decided by the autopilot", async () => {
     const { scope } = await planningNovel(t, { title: "분량 미달 작품" });
-    expect((await t.http("PUT", `/api/novels/${scope.novelId}/autonomy`, { autonomyLevel: "full_auto", acknowledgedFullAutoWarning: true })).status).toBe(200);
+    expect(
+      (await t.http("PUT", `/api/novels/${scope.novelId}/autonomy`, { autonomyLevel: "full_auto", acknowledgedFullAutoWarning: true, acknowledgedAutoItems: true, autopilot: { autoApproveBible: false } })).status,
+    ).toBe(200);
     await bibleApproved(t, scope);
     await drain(t, scope, async () => (await t.modules.novel.service.getStructure(scope))?.status === "awaiting_approval");
     await drain(t, scope, async () => true, 3);
@@ -178,6 +180,10 @@ describe("3,000-char floor: full_auto keeps the structure approval, no auto appr
     expect((await t.http("GET", `/api/novels/${scope.novelId}/approvals?status=pending&type=story_structure`)).body.items).toHaveLength(1);
     await approveStructure(t, scope);
     await drain(t, scope, async () => (await t.modules.novel.service.listArcs(scope)).some((a) => a.status === "active"));
+    // AR4 is gone: the plan went through an arc_plan approval decided by the autopilot ("자동 승인")
+    const plan = (await t.modules.hitl.service.listApprovals(scope, { types: ["arc_plan"] }))[0]!;
+    expect(plan).toMatchObject({ status: "approved", autoDecided: true, decidedByUserId: null });
+    expect((await t.modules.audit.service.list(scope, { actionPrefix: "autopilot.approval_decided" })).items.length).toBeGreaterThan(0);
 
     // short draft: continuation gave nothing; polish would shrink it further → kept; no E9(c)
     await drain(t, scope, async () => (await t.modules.manuscript.service.getEpisodeByNo(scope, 1)).status === "awaiting_approval", 100);
@@ -195,6 +201,14 @@ describe("3,000-char floor: full_auto keeps the structure approval, no auto appr
     expect(pending.body.items).toHaveLength(1);
     const q = await t.http("GET", `/api/novels/${scope.novelId}/questions/${pending.body.items[0].questionId}`);
     expect(JSON.stringify(q.body)).toContain("분량 미달");
+    // 설계 추가 0014: the autopilot hands it to the author (held + gate notice), it never decides it
+    await t.modules.autopilot.service.tick(scope);
+    const held = await t.modules.hitl.service.getApproval(scope, pending.body.items[0].id);
+    expect(held).toMatchObject({ status: "pending", autoDecided: false });
+    expect((held.payload as { autopilot?: { heldReason?: string } }).autopilot?.heldReason).toContain("분량 하한");
+    const hits = (await t.modules.audit.service.list(scope, { actionPrefix: "autopilot.gate_hit" })).items;
+    expect(hits.some((h) => h.targetId === held.id && (h.details as { gate?: string }).gate === "length_below_floor")).toBe(true);
+    expect(hits.some((h) => (h.details as { gate?: string }).gate === "setting_off")).toBe(true); // the structure (opt-in off)
 
     // an agent / system can neither approve nor publish it; the user can
     await expect(t.platform.uow.run((tx) => t.modules.manuscript.service.transitionEpisode(tx, scope, ep.id, "approved", actors.agent("showrunner", "run_x")))).rejects.toMatchObject({ code: "length_below_floor" });

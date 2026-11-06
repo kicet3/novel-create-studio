@@ -46,6 +46,7 @@ import {
   isEmptyValue,
   mergeOrigins,
   normalizeName,
+  PLACEHOLDER_NAME,
   originsFor,
   parseAge,
   relationPredicate,
@@ -528,8 +529,9 @@ export function createCastService(deps: CastServiceDeps) {
   const fillTargets = (cast: Character[], ids: readonly string[]) =>
     cast
       .filter((c) => !ids.length || ids.includes(c.id))
-      .map((c) => ({ c, missing: missingRequirements(c, cast) }))
-      .filter((t) => t.missing.length);
+      // 설계 추가 0014: a character still named "이름 미정" also gets a name proposal (the cast cannot be confirmed without one)
+      .map((c) => ({ c, missing: missingRequirements(c, cast), needsName: c.name.trim() === PLACEHOLDER_NAME }))
+      .filter((t) => t.missing.length || t.needsName);
 
   const proposalProfile = (pc: CastDraftProposal["characters"][number]): Partial<CharacterProfile> => ({
     age: clip(pc.age, 40),
@@ -556,7 +558,11 @@ export function createCastService(deps: CastServiceDeps) {
     const targets = fillTargets(cast, ids);
     const updatedIds: string[] = [];
     for (const t of targets) {
-      const pc = proposal.characters.find((x) => x.existing_id === t.c.id) ?? proposal.characters.find((x) => normalizeName(x.name) === normalizeName(t.c.name));
+      const pc =
+        proposal.characters.find((x) => x.existing_id === t.c.id) ??
+        proposal.characters.find((x) => normalizeName(x.name) === normalizeName(t.c.name)) ??
+        // one target, one answer without an id (e.g. the "이름 미정" character got its new name): that one
+        (targets.length === 1 && proposal.characters.length === 1 && !proposal.characters[0]!.existing_id ? proposal.characters[0] : undefined);
       if (!pc) continue;
       const cur = profileOf(t.c) as unknown as Record<string, unknown>;
       const wanted = new Set(t.missing.map((f) => REQUIREMENT_PROFILE_FIELD[f]));
@@ -574,6 +580,11 @@ export function createCastService(deps: CastServiceDeps) {
         }
         const rel = sanitizeRelationships(resolved, t.c.id, cast);
         if (rel.length > (t.c.relationships ?? []).length) accepted.relationships = rel;
+      }
+      if (t.needsName) {
+        const name = clip(pc.name ?? "", 80).trim();
+        const taken = cast.some((x) => x.id !== t.c.id && normalizeName(x.name) === normalizeName(name));
+        if (name && name !== PLACEHOLDER_NAME && !taken) accepted.name = name;
       }
       if (!Object.keys(accepted).length) continue;
       const row = await repo.update(tx.db, scope, t.c.id, {
@@ -634,7 +645,7 @@ export function createCastService(deps: CastServiceDeps) {
           subProtagonistCount: ctx.input.sub_protagonist_count ?? undefined,
           includeAntagonist: ctx.input.include_antagonist,
           instructions: ctx.input.instructions || undefined,
-          fillMissing: fill?.map((t) => ({ id: t.c.id, name: t.c.name, fields: t.missing.map((f) => FIELD_LABEL_KO[f]) })),
+          fillMissing: fill?.map((t) => ({ id: t.c.id, name: t.c.name, fields: [...(t.needsName ? ["이름(name)"] : []), ...t.missing.map((f) => FIELD_LABEL_KO[f])] })),
         },
       });
       const out = await llm.modelCalls.call({
@@ -914,6 +925,33 @@ export function createCastService(deps: CastServiceDeps) {
         const row = await repo.update(tx.db, scope, id, { proposed: false, fieldOrigins: origins, updatedAt: clock.date() });
         await audit.record(tx, { novelId: scope.novelId, actor, action: "character.updated", target: target(id), before: { proposed: before.proposed }, after: { proposed: false }, reason: "AI 제안 수락" });
         return row;
+      });
+    },
+
+    async acceptAgentProposals(scope, opts, actor) {
+      return uow.run(async (tx) => {
+        await assertEditable(tx, scope);
+        const cast = await repo.list(tx.db, scope);
+        const accepted: string[] = [];
+        for (const c of cast) {
+          if (!c.proposed || c.introducedArcId !== opts.arcId) continue;
+          if (missingRequirements(c, cast).length) continue; // incomplete proposals wait for the fill
+          // origins stay as they are (agent fields remain agent; a user field was never overwritten by the agent)
+          await repo.update(tx.db, scope, c.id, { proposed: false, updatedAt: clock.date() });
+          accepted.push(c.id);
+        }
+        if (accepted.length) {
+          await audit.record(tx, {
+            novelId: scope.novelId,
+            actor,
+            action: "character.updated",
+            target: { type: "novel", id: scope.novelId },
+            after: { proposed: false },
+            reason: "AI 제안 자동 수락(완전 자율)",
+            details: { ids: accepted, count: accepted.length, arcId: opts.arcId, provenance: "자동 승인" },
+          });
+        }
+        return { accepted };
       });
     },
 

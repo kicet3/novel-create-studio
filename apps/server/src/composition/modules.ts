@@ -25,6 +25,7 @@ import { createExportModule, type ExportService } from "../modules/export/index.
 import { createImagingModule, type ImagingService } from "../modules/imaging/index.js";
 import { createCastModule, type CastService } from "../modules/cast/index.js";
 import { createWorldModule, type WorldService } from "../modules/world/index.js";
+import { createAutopilotModule, type AutopilotService } from "../modules/autopilot/index.js";
 
 export interface Modules {
   audit: ServerModule<AuditService>;
@@ -46,6 +47,8 @@ export interface Modules {
   imaging: ServerModule<ImagingService>;
   cast: ServerModule<CastService>;
   world: ServerModule<WorldService>;
+  /** 설계 추가 0014: 완전 자율 진행 (last: reads every module) */
+  autopilot: ServerModule<AutopilotService>;
 }
 
 export interface BuildModulesOptions {
@@ -154,6 +157,20 @@ export function buildModules({ platform, runtime, databaseMode, database, llmAda
     manuscript: manuscript.service,
     world: world.service,
   });
+  const autopilot = createAutopilotModule({
+    platform,
+    audit: a,
+    novel: n,
+    budget: budget.service,
+    orchestration: o,
+    messaging: messaging.service,
+    hitl: hitl.service,
+    manuscript: manuscript.service,
+    continuity: continuity.service,
+    concept: concept.service,
+    world: world.service,
+    cast: cast.service,
+  });
   return {
     audit,
     system,
@@ -174,6 +191,7 @@ export function buildModules({ platform, runtime, databaseMode, database, llmAda
     imaging,
     cast,
     world,
+    autopilot,
   };
 }
 
