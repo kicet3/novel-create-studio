@@ -171,11 +171,58 @@ export function duplicateApplier(d: DecisionDeps): AnswerApplier {
   };
 }
 
+type IdentityDecisionRow = Awaited<ReturnType<OntologyService["getIdentityDecision"]>>;
+
+/**
+ * A "same" answer on a proposed merge: the survivor must be an ACTIVE entity (INV-ONT-09). The decision may have been
+ * proposed between two candidates (dedupe of not-yet-established entities) or its survivor may have been merged /
+ * retired since. Re-resolve the sources (merged ids → their survivor) and:
+ * - fewer than two live sources left → `stale` (the decision is rejected; nothing to merge);
+ * - the proposed survivor (or the oldest active source) is active → keep it;
+ * - no active source (all candidates) → the proposed survivor candidate is established (EN3 "같음 답변": the thing is
+ *   real, it appears under two candidates) and the other candidates merge into it (EN4);
+ * - the survivor or the set changed → the old decision is rejected and an equivalent one is proposed (same question).
+ */
+export async function mergeReadyDecision(d: DecisionDeps, tx: Tx, scope: NovelScope, dec: IdentityDecisionRow, actor: ActorRef, questionId: string | null): Promise<{ dec: IdentityDecisionRow } | { stale: string }> {
+  const resolved = await d.ontology.resolveEntityIds(scope, dec.sourceEntityIds, tx);
+  const ids = [...new Set(dec.sourceEntityIds.map((id) => resolved.get(id) ?? id))];
+  const ents = (await d.ontology.getEntities(scope, ids, tx)).filter((e) => e.status === "active" || e.status === "candidate");
+  if (ents.length < 2) {
+    await d.ontology.rejectIdentityDecision(tx, scope, dec.id, actor, "병합 대상이 이미 하나로 정리되었습니다");
+    return { stale: "병합 대상이 이미 하나로 정리되었습니다" };
+  }
+  const proposed = dec.survivorEntityId ? (resolved.get(dec.survivorEntityId) ?? dec.survivorEntityId) : null;
+  const byAge = [...ents].sort((x, y) => x.createdAt.getTime() - y.createdAt.getTime());
+  const active = byAge.filter((e) => e.status === "active");
+  let survivor = active.find((e) => e.id === proposed) ?? active[0];
+  if (!survivor) {
+    survivor = byAge.find((e) => e.id === proposed) ?? byAge[0]!;
+    await d.ontology.setEquivalenceCheck(tx, scope, survivor.id, { status: "passed", duplicateOf: null });
+    await d.ontology.setEntityStatus(tx, scope, survivor.id, "active", actor, "중복 확인 같음(후보끼리): 병합 생존 엔티티로 확정");
+  }
+  const liveIds = byAge.map((e) => e.id);
+  const unchanged = survivor.id === dec.survivorEntityId && liveIds.length === dec.sourceEntityIds.length && liveIds.every((id) => dec.sourceEntityIds.includes(id));
+  if (unchanged) return { dec };
+  await d.ontology.rejectIdentityDecision(tx, scope, dec.id, actor, "병합 생존 엔티티 조정(활성 엔티티로)");
+  const next = await d.ontology.proposeIdentityDecision(
+    tx,
+    scope,
+    { kind: "merge", entityIds: [survivor.id, ...liveIds.filter((id) => id !== survivor.id)], survivorEntityId: survivor.id, rationale: dec.rationale ?? "중복 확인: 같음", evidence: { ...((dec.evidence ?? {}) as Record<string, unknown>), replacesDecisionId: dec.id }, questionId: questionId ?? dec.questionId ?? undefined },
+    actor,
+  );
+  return { dec: next };
+}
+
 /** a proposed merge decision: same → apply (identity_change approval when it touches published canon), distinct → confirm_distinct */
 export async function applyDuplicateDecision(d: DecisionDeps, tx: Tx, scope: NovelScope, decisionId: string, same: boolean, actor: ActorRef, questionId: string | null): ReturnType<AnswerApplier> {
   {
-    const dec = await d.ontology.getIdentityDecision(scope, decisionId, tx);
+    let dec = await d.ontology.getIdentityDecision(scope, decisionId, tx);
     if (dec.status !== "proposed") return { status: "not_applied", reason: "대상 결정이 이미 처리되었습니다", items: [] };
+    if (same) {
+      const ready = await mergeReadyDecision(d, tx, scope, dec, actor, questionId);
+      if ("stale" in ready) return { status: "not_applied", reason: ready.stale, items: [] };
+      dec = ready.dec;
+    }
     const question = { id: questionId };
     if (!same) {
       await d.ontology.rejectIdentityDecision(tx, scope, dec.id, actor, "다른 대상");

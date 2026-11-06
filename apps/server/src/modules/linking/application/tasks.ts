@@ -482,7 +482,8 @@ export function dedupeHandler(deps: TaskDeps): TaskKindHandler<DedupeInput, Arra
         // (the representative names themselves — `name=1` also means a single shared alias / variant, which is not enough)
         const preferredKey = async (id: string) => (await deps.ontology.listEntityNames(ctx.scope, id, tx)).find((n) => n.isPreferred)?.normalizedKey ?? null;
         const sameName = agent && /^name=1\b/.test(pr.reason) && a!.entityType === b!.entityType && (await preferredKey(a!.id)) !== null && (await preferredKey(a!.id)) === (await preferredKey(b!.id));
-        if (sameName && b!.status === "candidate" && (a!.disambiguator ?? null) === (b!.disambiguator ?? null)) {
+        // the survivor must be active (INV-ONT-09): two same-name candidates are asked (the resolver backlog settles them)
+        if (sameName && a!.status === "active" && b!.status === "candidate" && (a!.disambiguator ?? null) === (b!.disambiguator ?? null)) {
           const dec = await deps.ontology.proposeIdentityDecision(tx, ctx.scope, { kind: "merge", entityIds: [a!.id, b!.id], survivorEntityId: a!.id, rationale: `같은 이름 자동 병합(${pr.reason})`, evidence: { score: pr.score, auto: "exact_name" } }, actor);
           try {
             await deps.ontology.applyIdentityDecision(tx, ctx.scope, dec.id, actor);

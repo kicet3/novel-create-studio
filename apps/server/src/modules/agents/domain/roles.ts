@@ -51,6 +51,15 @@ export const AGENT_ROLES: readonly AgentRoleDefinition[] = [
       "hitl.recordInterpretation",
       "hitl.recordReflection",
       "ontology.createApprovedFactFromAnswer",
+      // 설계 추가 0015 entity resolver (`resolve_entities`): closes its own entity questions as the agent
+      // (agent_resolved answer / cancel), confirms mention links, remembers aliases and applies the merge of a
+      // "same" duplicate (its survivor established when both were candidates)
+      "hitl.agentResolveQuestion",
+      "hitl.cancelQuestion",
+      "ontology.decideMention",
+      "ontology.addEntityName",
+      "ontology.applyIdentityDecision",
+      "ontology.setEntityStatus",
     ],
     contextLayer: "canon",
     mvp: true,

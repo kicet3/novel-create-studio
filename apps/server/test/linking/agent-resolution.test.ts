@@ -10,6 +10,8 @@ import { newId } from "@ncs/shared";
 import type { NovelScope } from "../../src/platform/index.js";
 import { createTestCore, type TestCore } from "../support/test-core.js";
 import type { ClaudeRequest } from "../support/scripted-claude.js";
+import { disallowedWrites } from "../../src/modules/agents/domain/roles.js";
+import { resolveEntitiesHandler } from "../../src/modules/linking/application/backlog.js";
 
 let t: TestCore;
 beforeAll(async () => {
@@ -466,6 +468,138 @@ describe("review fixes", () => {
     const qs = await entityQs(nv.scope);
     expect(qs.length).toBeGreaterThan(0);
     expect(qs.every((q) => q.sensitivity === "high")).toBe(true);
+  });
+});
+
+describe("backlog robustness (live failures)", () => {
+  /** agent off → dedupe asks (no auto-merge) about two same-name candidates; returns the question id + decision */
+  async function candidateDuplicate(nv: Novel, name: string): Promise<{ older: string; newer: string; questionId: string; decisionId: string }> {
+    const older = await character(nv, name, { status: "candidate" });
+    const newer = await character(nv, name, { status: "candidate" });
+    await dedupe(nv);
+    const dec = (await t.modules.ontology.service.listIdentityDecisions(nv.scope, { statuses: ["proposed"] })).find((d) => d.kind === "merge" && d.sourceEntityIds.includes(older) && d.sourceEntityIds.includes(newer));
+    expect(dec?.questionId).toBeTruthy();
+    // the proposed survivor is a candidate: applying it as is throws survivor_not_active (INV-ONT-09)
+    expect([older, newer]).toContain(dec!.survivorEntityId);
+    return { older, newer, questionId: dec!.questionId!, decisionId: dec!.id };
+  }
+  const runBacklog = async (nv: Novel) => {
+    const res = await t.http("POST", `/api/novels/${nv.scope.novelId}/linking/resolve-backlog`);
+    expect(res.status).toBe(201);
+    await until(nv.scope, res.body.taskId);
+    const task = await t.modules.orchestration.service.getTask(nv.scope, res.body.taskId);
+    const [r] = await t.testDb.query<{ output_summary: { entityBacklogCommit?: { handled: number; failed: number; failures: Array<{ questionId: string; error: string }> } } }>(`SELECT output_summary FROM runs WHERE task_id = '${task.id}' ORDER BY created_at DESC LIMIT 1`);
+    return { task, summary: r?.output_summary?.entityBacklogCommit };
+  };
+  const question = async (id: string) => (await t.testDb.db.select().from(questions).where(eq(questions.id, id)))[0]!;
+
+  it("a 'same' duplicate whose proposed survivor is a candidate merges into an active entity (both candidates → the survivor is established; an active other → it becomes the survivor)", async () => {
+    const nv = await newNovel({ agent: false });
+    const ion = await candidateDuplicate(nv, "서이온");
+    const org = await candidateDuplicate(nv, "관리 기구");
+    // meanwhile the newer '관리 기구' was established; the decision still names the older candidate as survivor
+    await run((tx) => t.modules.ontology.service.setEntityStatus(tx, nv.scope, org.newer, "active", t.owner, "test"));
+    expect((await t.http("PATCH", `/api/novels/${nv.scope.novelId}`, { entityAgentResolution: true })).status).toBe(200);
+    t.claude.reset();
+
+    const { task, summary } = await runBacklog(nv);
+    expect(task.latestRun?.errorMessage ?? null).toBeNull();
+    expect(task.status).toBe("done");
+    expect(summary).toMatchObject({ handled: 2, failed: 0 });
+    for (const qid of [ion.questionId, org.questionId]) expect(await question(qid)).toMatchObject({ resolutionSource: "agent_resolved" });
+
+    const ents = new Map((await t.testDb.db.select().from(entities).where(eq(entities.novelId, nv.scope.novelId))).map((e) => [e.id, e]));
+    // both candidates: the proposed survivor is established, the other merges into it
+    const ionSurvivor = (await t.modules.ontology.service.getIdentityDecision(nv.scope, ion.decisionId)).survivorEntityId!;
+    const ionOther = ionSurvivor === ion.older ? ion.newer : ion.older;
+    expect(ents.get(ionSurvivor)!.status).toBe("active");
+    expect(ents.get(ionOther)).toMatchObject({ status: "merged", mergedIntoId: ionSurvivor });
+    // candidate survivor + active other: the decision is re-proposed with the active one as survivor
+    expect(ents.get(org.newer)!.status).toBe("active");
+    expect(ents.get(org.older)).toMatchObject({ status: "merged", mergedIntoId: org.newer });
+    const decs = await t.modules.ontology.service.listIdentityDecisions(nv.scope);
+    expect(decs.find((d) => d.id === org.decisionId)!.status).toBe("rejected");
+    expect(decs.find((d) => d.kind === "merge" && d.status === "applied" && d.survivorEntityId === org.newer)?.questionId).toBe(org.questionId);
+    expect(decs.find((d) => d.id === ion.decisionId)!.status).toBe("applied");
+    expect(t.claude.requests.filter(isResolve)).toHaveLength(0);
+  });
+
+  it("a duplicate whose sources were merged meanwhile is closed (decision rejected), not applied", async () => {
+    const nv = await newNovel({ agent: false });
+    const dup = await candidateDuplicate(nv, "서이온");
+    const keeper = await character(nv, "이온");
+    for (const id of [dup.older, dup.newer]) {
+      const d = await run<{ id: string }>((tx) => t.modules.ontology.service.proposeIdentityDecision(tx, nv.scope, { kind: "merge", entityIds: [keeper, id], survivorEntityId: keeper, rationale: "test" }, t.owner));
+      await run((tx) => t.modules.ontology.service.applyIdentityDecision(tx, nv.scope, d.id, t.owner));
+    }
+    expect((await t.http("PATCH", `/api/novels/${nv.scope.novelId}`, { entityAgentResolution: true })).status).toBe(200);
+    const { task } = await runBacklog(nv);
+    expect(task.status).toBe("done");
+    expect(await question(dup.questionId)).toMatchObject({ status: "cancelled" });
+    expect((await t.modules.ontology.service.getIdentityDecision(nv.scope, dup.decisionId)).status).toBe("rejected");
+  });
+
+  it("one failing action is skipped (its question stays open) while the rest commits; the task succeeds and a rerun makes no new model call", async () => {
+    const nv = await newNovel({ agent: false });
+    const link = t.modules.linking.service;
+    const ask = async (surface: string, p: number) => {
+      const r = await link.linkMentions(nv.scope, { manuscriptVersionId: null, sourceKind: "user_input", anchor: { storyPoint: p, timelineId: nv.tl }, mentions: [{ surface, charStart: 0, charEnd: surface.length, sceneId: "", storyPoint: p, mentionKind: "descriptive", entityTypeHint: "place" }] });
+      const ids = (await run<{ questionIds: string[] }>((tx) => link.commitLinkerResult(tx, nv.scope, r, t.owner))).questionIds;
+      for (const id of ids) await t.testDb.db.update(questions).set({ askedByRole: "world_keeper" }).where(eq(questions.id, id));
+      return ids;
+    };
+    const [placeQ] = await ask("판정소", 1001);
+    const [hallQ] = await ask("검은 탑", 1001);
+    const dup = await candidateDuplicate(nv, "서이온");
+    expect((await t.http("PATCH", `/api/novels/${nv.scope.novelId}`, { entityAgentResolution: true })).status).toBe(200);
+    t.claude.reset();
+    t.claude.reply({
+      when: { schemaHas: ["resolutions"] },
+      times: Infinity,
+      json: (r: ClaudeRequest) => ({
+        resolutions: [
+          ...(/"판정소"/.test(r.prompt) ? [{ mention: handle(r, /(M\d+) "판정소"/), action: "create_entity", entity_type: "place", canonical_name: "판정소", confidence: 0.9, rationale: "반복되는 장소" }] : []),
+          ...(/"검은 탑"/.test(r.prompt) ? [{ mention: handle(r, /(M\d+) "검은 탑"/), action: "create_entity", entity_type: "place", canonical_name: "검은 탑", confidence: 0.9, rationale: "랜드마크" }] : []),
+        ],
+      }),
+    });
+    // the merge of the duplicate is refused by the ontology this time
+    const svc = t.modules.ontology.service;
+    const orig = svc.applyIdentityDecision;
+    svc.applyIdentityDecision = async () => {
+      throw new Error("boom: ontology refused");
+    };
+    let first: Awaited<ReturnType<typeof runBacklog>>;
+    try {
+      first = await runBacklog(nv);
+    } finally {
+      svc.applyIdentityDecision = orig;
+    }
+    expect(first.task.latestRun?.errorMessage ?? null).toBeNull();
+    expect(first.task.status).toBe("done");
+    expect(first.summary).toMatchObject({ handled: 2, failed: 1 });
+    expect(first.summary!.failures[0]).toMatchObject({ questionId: dup.questionId });
+    expect(first.summary!.failures[0]!.error).toContain("boom");
+    expect(t.claude.requests.filter(isResolve)).toHaveLength(1);
+    // the other actions committed; the failing one rolled back alone (no half-applied state) and stays open
+    for (const qid of [placeQ!, hallQ!]) expect(["answered", "resolved", "cancelled"]).toContain((await question(qid)).status);
+    expect(["pending", "open"]).toContain((await question(dup.questionId)).status);
+    const ents = await t.testDb.db.select().from(entities).where(eq(entities.novelId, nv.scope.novelId));
+    expect(ents.filter((e) => e.status === "merged")).toHaveLength(0);
+    expect(ents.filter((e) => e.entityType === "place").map((e) => e.status).sort()).toEqual(["active", "active"]);
+    expect((await t.modules.ontology.service.getIdentityDecision(nv.scope, dup.decisionId)).status).toBe("proposed");
+
+    // rerun: only the left-open duplicate remains (a rule decision) → merged, no further model call
+    const second = await runBacklog(nv);
+    expect(second.task.status).toBe("done");
+    expect(second.summary).toMatchObject({ handled: 1, failed: 0 });
+    expect(await question(dup.questionId)).toMatchObject({ resolutionSource: "agent_resolved" });
+    expect(t.claude.requests.filter(isResolve)).toHaveLength(1);
+  });
+
+  it("the resolve_entities handler declares only writes its role (world_keeper) may call", () => {
+    const h = resolveEntitiesHandler({} as never);
+    expect(disallowedWrites(h.role, h.allowedWrites ?? [])).toEqual([]);
   });
 });
 

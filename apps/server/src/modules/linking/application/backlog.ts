@@ -8,7 +8,7 @@
  */
 import { z } from "zod";
 import type { MentionKind, QuestionTopic } from "@ncs/shared";
-import { actors, DomainValidationError, InvalidTransitionError, type ActorRef, type NovelScope, type Tx } from "../../../platform/index.js";
+import { actors, DomainValidationError, InvalidTransitionError, savepoint, type ActorRef, type NovelScope, type Tx } from "../../../platform/index.js";
 import type { AgentTaskHandler } from "../../agents/index.js";
 import type { AnswerApplier, Question } from "../../hitl/index.js";
 import { normalizedKey, type Mention } from "../../ontology/index.js";
@@ -45,6 +45,8 @@ export interface BacklogAction {
   confidence: number;
   rationale: string;
   source: "rule" | "memory" | "agent";
+  /** duplicate_entity stale: the proposed merge decision to reject with the question */
+  decisionId?: string;
 }
 
 export interface BacklogProposal {
@@ -190,8 +192,17 @@ export async function planBacklog(deps: BacklogDeps, run: Parameters<AgentTaskHa
   }
   // ── duplicate_entity: identical names → same (deterministic), else the resolver ──
   for (const t of dupTargets) {
-    const { a, b } = t.decision!;
-    const [ea, eb] = await deps.ontology.getEntities(scope, [a, b]);
+    const { a: a0, b: b0 } = t.decision!;
+    // a source merged / retired since the proposal: nothing (or something else) to merge → close the question
+    const resolved = await deps.ontology.resolveEntityIds(scope, [a0, b0]);
+    const a = resolved.get(a0) ?? a0;
+    const b = resolved.get(b0) ?? b0;
+    const live = a === b ? [] : (await deps.ontology.getEntities(scope, [a, b])).filter((e) => e.status === "active" || e.status === "candidate");
+    if (live.length < 2) {
+      act(t, { kind: "stale", decisionId: t.decision!.id, confidence: 1, rationale: "병합 대상이 이미 하나로 정리되었습니다", source: "rule" });
+      continue;
+    }
+    const [ea, eb] = live;
     // the representative (preferred) names themselves are identical — a shared alias is not enough
     const pa = ea ? (await deps.ontology.listEntityNames(scope, ea.id)).find((n) => n.isPreferred)?.normalizedKey : undefined;
     const pb = eb ? (await deps.ontology.listEntityNames(scope, eb.id)).find((n) => n.isPreferred)?.normalizedKey : undefined;
@@ -291,11 +302,41 @@ async function applyMentionDecision(deps: BacklogDeps, tx: Tx, scope: NovelScope
   return { status: "applied", items };
 }
 
-export async function commitBacklog(deps: BacklogDeps, tx: Tx, scope: NovelScope, p: BacklogProposal, actor: ActorRef): Promise<{ handled: string[]; skipped: number }> {
+export interface BacklogFailure {
+  questionId: string;
+  topic: QuestionTopic;
+  kind: DecisionKind;
+  error: string;
+}
+
+/**
+ * Applies the plan. Every action runs in its own SAVEPOINT: an action that throws (e.g. an identity decision the
+ * ontology refuses) rolls back alone, its question stays open, and the rest of the backlog is still committed — one bad
+ * item never fails the task (which would re-run the whole plan).
+ */
+export async function commitBacklog(deps: BacklogDeps, tx: Tx, scope: NovelScope, p: BacklogProposal, actor: ActorRef): Promise<{ handled: string[]; skipped: number; failed: BacklogFailure[] }> {
   const handled: string[] = [];
   let skipped = 0;
-  const createdMap: CreatedMap = new Map();
-  const audit = async (a: BacklogAction, outcome: string) => {
+  const failed: BacklogFailure[] = [];
+  let createdMap: CreatedMap = new Map();
+  for (const a of p.actions) {
+    const before = new Map(createdMap);
+    try {
+      if (await savepoint(tx, (sp) => commitAction(deps, sp, scope, a, actor, createdMap))) handled.push(a.questionId);
+      else skipped++;
+    } catch (err) {
+      createdMap = before; // entities created in the rolled-back savepoint are gone
+      const error = err instanceof Error ? `${(err as { code?: string }).code ? `${(err as { code?: string }).code}: ` : ""}${err.message}` : String(err);
+      failed.push({ questionId: a.questionId, topic: a.topic, kind: a.kind, error: error.slice(0, 300) });
+      deps.log?.warn({ err, questionId: a.questionId, topic: a.topic, decision: a.kind }, "resolve_entities: action failed — question left open, continuing");
+    }
+  }
+  return { handled, skipped, failed };
+}
+
+/** one backlog action in the given (savepoint) transaction; true = the question was handled */
+async function commitAction(deps: BacklogDeps, tx: Tx, scope: NovelScope, a: BacklogAction, actor: ActorRef, createdMap: CreatedMap): Promise<boolean> {
+  const audit = async (outcome: string) => {
     await deps.audit?.record(tx, {
       novelId: scope.novelId,
       actor,
@@ -307,7 +348,7 @@ export async function commitBacklog(deps: BacklogDeps, tx: Tx, scope: NovelScope
       questionId: a.questionId,
     });
   };
-  const cancel = async (a: BacklogAction, why: string) => {
+  const cancel = async (why: string) => {
     try {
       await deps.hitl.cancelQuestion(tx, scope, a.questionId, `${AGENT_CANCEL_REASON}: ${why}`.slice(0, 500), actor);
       return true;
@@ -316,75 +357,59 @@ export async function commitBacklog(deps: BacklogDeps, tx: Tx, scope: NovelScope
       throw err;
     }
   };
-  for (const a of p.actions) {
-    if (a.topic === "interpretation_confirm") {
-      // the root was answered with free text; its interpretation waits for confirmation → decide it here, never ask again
-      const r = await deps.hitl.agentCloseInterpretation(tx, scope, a.questionId, actor, `${AGENT_CANCEL_REASON}: ${a.rationale}`.slice(0, 500));
-      if (!r) {
-        skipped++;
-        continue;
-      }
-      let refl: Awaited<ReturnType<AnswerApplier>>;
-      if (a.kind === "stale" || a.kind === "close") refl = { status: "not_applied", reason: a.kind === "close" ? `묻지 않고 보류합니다(에이전트): ${a.rationale}`.slice(0, 500) : "이미 처리된 항목입니다", items: [] };
-      else if (a.kind === "same" || a.kind === "distinct") {
-        const dec = (await deps.ontology.listIdentityDecisions(scope, { statuses: ["proposed"] }, tx)).find((d) => d.questionId === a.rootQuestionId);
-        refl = dec ? await applyDuplicateDecision(deps, tx, scope, dec.id, a.kind === "same", actor, a.rootQuestionId) : { status: "not_applied", reason: "병합 제안이 이미 처리되었습니다", items: [] };
-      } else refl = await applyMentionDecision(deps, tx, scope, a.rootQuestionId, a, actor, r.rootAnswerId ?? undefined, createdMap);
-      if (r.rootAnswerId && r.rootStatus === "answered") await deps.hitl.recordReflection(tx, scope, r.rootAnswerId, refl, actor);
-      await audit(a, "interpretation_closed");
-      handled.push(a.questionId);
-      continue;
-    }
-    if (a.kind === "stale" || a.kind === "close") {
-      if (await cancel(a, a.rationale)) {
-        await audit(a, "cancelled");
-        handled.push(a.questionId);
-      } else skipped++;
-      continue;
-    }
-    if (a.topic === "duplicate_entity") {
-      const r = await deps.hitl.agentResolveQuestion(tx, scope, a.questionId, { optionIdx: a.optionIdx ?? (a.kind === "same" ? 0 : 1), actor, note: a.rationale });
-      if (r.decided) {
-        await audit(a, "answered");
-        handled.push(a.questionId);
-      } else skipped++;
-      continue;
-    }
-    // entity_disambiguation
-    if (a.optionIdx === null || a.optionIdx === undefined) {
-      // the decision is not one of the question's options (e.g. an entity that was not a candidate card): apply it
-      // directly and close the question
-      const r = await applyMentionDecision(deps, tx, scope, a.questionId, a, actor, undefined, createdMap);
-      if (r.status !== "applied") {
-        skipped++;
-        continue;
-      }
-      if (await cancel(a, `"${a.surface ?? ""}" ${a.kind === "entity" ? "연결" : a.kind === "new_entity" ? "새 엔티티" : "엔티티 아님"}(${a.rationale})`)) {
-        await audit(a, "applied_and_cancelled");
-        handled.push(a.questionId);
-      } else skipped++;
-      continue;
-    }
-    try {
-      const r = await deps.hitl.agentResolveQuestion(tx, scope, a.questionId, {
-        optionIdx: a.optionIdx,
-        actor,
-        note: a.rationale,
-        applier: ({ tx: t, scope: s, question, answer, actor: who }) => applyMentionDecision(deps, t, s, question.id, a, who, answer.id, createdMap),
-      });
-      if (r.decided) {
-        await audit(a, "answered");
-        handled.push(a.questionId);
-      } else skipped++;
-    } catch (err) {
-      if (err instanceof DomainValidationError && err.code === "auto_answer_lost") {
-        skipped++;
-        continue;
-      }
-      throw err;
-    }
+  if (a.topic === "interpretation_confirm") {
+    // the root was answered with free text; its interpretation waits for confirmation → decide it here, never ask again
+    const r = await deps.hitl.agentCloseInterpretation(tx, scope, a.questionId, actor, `${AGENT_CANCEL_REASON}: ${a.rationale}`.slice(0, 500));
+    if (!r) return false;
+    let refl: Awaited<ReturnType<AnswerApplier>>;
+    if (a.kind === "stale" || a.kind === "close") refl = { status: "not_applied", reason: a.kind === "close" ? `묻지 않고 보류합니다(에이전트): ${a.rationale}`.slice(0, 500) : "이미 처리된 항목입니다", items: [] };
+    else if (a.kind === "same" || a.kind === "distinct") {
+      const dec = (await deps.ontology.listIdentityDecisions(scope, { statuses: ["proposed"] }, tx)).find((d) => d.questionId === a.rootQuestionId);
+      refl = dec ? await applyDuplicateDecision(deps, tx, scope, dec.id, a.kind === "same", actor, a.rootQuestionId) : { status: "not_applied", reason: "병합 제안이 이미 처리되었습니다", items: [] };
+    } else refl = await applyMentionDecision(deps, tx, scope, a.rootQuestionId, a, actor, r.rootAnswerId ?? undefined, createdMap);
+    if (r.rootAnswerId && r.rootStatus === "answered") await deps.hitl.recordReflection(tx, scope, r.rootAnswerId, refl, actor);
+    await audit("interpretation_closed");
+    return true;
   }
-  return { handled, skipped };
+  if (a.kind === "stale" || a.kind === "close") {
+    if (a.decisionId) {
+      const dec = await deps.ontology.getIdentityDecision(scope, a.decisionId, tx).catch(() => null);
+      if (dec?.status === "proposed") await deps.ontology.rejectIdentityDecision(tx, scope, dec.id, actor, a.rationale.slice(0, 200));
+    }
+    if (!(await cancel(a.rationale))) return false;
+    await audit("cancelled");
+    return true;
+  }
+  if (a.topic === "duplicate_entity") {
+    const r = await deps.hitl.agentResolveQuestion(tx, scope, a.questionId, { optionIdx: a.optionIdx ?? (a.kind === "same" ? 0 : 1), actor, note: a.rationale });
+    if (!r.decided) return false;
+    await audit("answered");
+    return true;
+  }
+  // entity_disambiguation
+  if (a.optionIdx === null || a.optionIdx === undefined) {
+    // the decision is not one of the question's options (e.g. an entity that was not a candidate card): apply it
+    // directly and close the question
+    const r = await applyMentionDecision(deps, tx, scope, a.questionId, a, actor, undefined, createdMap);
+    if (r.status !== "applied") return false;
+    if (!(await cancel(`"${a.surface ?? ""}" ${a.kind === "entity" ? "연결" : a.kind === "new_entity" ? "새 엔티티" : "엔티티 아님"}(${a.rationale})`))) return false;
+    await audit("applied_and_cancelled");
+    return true;
+  }
+  try {
+    const r = await deps.hitl.agentResolveQuestion(tx, scope, a.questionId, {
+      optionIdx: a.optionIdx,
+      actor,
+      note: a.rationale,
+      applier: ({ tx: t, scope: s, question, answer, actor: who }) => applyMentionDecision(deps, t, s, question.id, a, who, answer.id, createdMap),
+    });
+    if (!r.decided) return false;
+    await audit("answered");
+    return true;
+  } catch (err) {
+    if (err instanceof DomainValidationError && err.code === "auto_answer_lost") return false;
+    throw err;
+  }
 }
 
 export function resolveEntitiesHandler(deps: BacklogDeps): AgentTaskHandler<BacklogInput, BacklogProposal> {
@@ -393,7 +418,7 @@ export function resolveEntitiesHandler(deps: BacklogDeps): AgentTaskHandler<Back
     role: "world_keeper",
     promptTemplateVersion: "world_keeper.resolve_entities@0.1.0",
     inputSchema: resolveEntitiesInputSchema,
-    allowedWrites: ["hitl.agentResolveQuestion", "hitl.cancelQuestion", "ontology.decideMention", "ontology.addEntityName", "ontology.applyIdentityDecision"],
+    allowedWrites: ["hitl.agentResolveQuestion", "hitl.cancelQuestion", "ontology.decideMention", "ontology.addEntityName", "ontology.applyIdentityDecision", "ontology.setEntityStatus"],
     async buildContext() {
       return { snapshotId: "", system: "", messages: [], handles: { entities: [], names: [] }, tokenEstimate: 0, droppedSections: [] };
     },
@@ -407,6 +432,7 @@ export function resolveEntitiesHandler(deps: BacklogDeps): AgentTaskHandler<Back
     async commit(tx, run, _input, p): Promise<CommitOutcome> {
       const scope = { novelId: run.novelId };
       const r = await commitBacklog(deps, tx, scope, p, actors.agent("world_keeper", run.runId));
+      run.noteOutputSummary?.("entityBacklogCommit", { handled: r.handled.length, skipped: r.skipped, failed: r.failed.length, failures: r.failed.slice(0, 20) });
       return { kind: "done", outputRefs: r.handled.slice(0, 200).map((id) => ({ refType: "question" as const, refId: id })) };
     },
   };

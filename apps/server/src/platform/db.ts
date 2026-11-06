@@ -61,6 +61,18 @@ export function isCheckViolation(err: unknown): boolean {
   return pgCode(err) === "23514";
 }
 
+/**
+ * Run `fn` inside a SAVEPOINT of the caller's transaction: when `fn` throws, only its writes roll back (the outer
+ * transaction stays usable) and the error is rethrown. `afterCommit` hooks registered inside are kept only when the
+ * savepoint is released. Used where one failing item of a batch must not abort the rest.
+ */
+export async function savepoint<T>(tx: Tx, fn: (tx: Tx) => Promise<T>): Promise<T> {
+  const hooks: Array<() => void | Promise<void>> = [];
+  const result = await tx.db.transaction(async (t) => fn({ db: t as unknown as Db, afterCommit: (h) => void hooks.push(h) }));
+  for (const h of hooks) tx.afterCommit(h);
+  return result;
+}
+
 export function createUnitOfWork(db: Db, onHookError: (err: unknown) => void = () => {}): UnitOfWork {
   const run = async <T>(fn: (tx: Tx) => Promise<T>, opts: RunOptions = {}): Promise<T> => {
     const attempts = opts.attempts ?? 3;
