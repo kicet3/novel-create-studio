@@ -174,6 +174,7 @@ export const LABELS_KO = {
     draft_design_sheet: "디자인 시트 초안",
     plan_structure: "전체 구성 기획",
     build_world_ontology: "세계관 온톨로지 생성",
+    resolve_entities: "엔티티 판정 정리",
   }),
   task_status: labels("task_status", {
     pending: "대기",
@@ -275,6 +276,7 @@ export const LABELS_KO = {
     absence_delegated: "부재 위임",
     notice_only: "정보 전달",
     auto_answer: "자동 응답(완전 자율)",
+    agent_resolved: "에이전트 처리",
   }),
   autopilot_halt_reason: labels("autopilot_halt_reason", { user: "사용자가 멈춤", budget_warning: "월 예산 경고", error: "오류" }),
   question_sensitivity: labels("question_sensitivity", { normal: "보통", high: "높음(사람만 답함)" }),

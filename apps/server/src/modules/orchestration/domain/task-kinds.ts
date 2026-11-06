@@ -44,6 +44,8 @@ export const TASK_KIND_ROLE: Readonly<Record<TaskKind, AgentRole>> = {
   plan_structure: "planner",
   // 설계 추가: 컨셉 승인 뒤 세계관 온톨로지 후보(module world)
   build_world_ontology: "world_keeper",
+  // 설계 추가 0015: 엔티티 판정 백로그 정리
+  resolve_entities: "world_keeper",
 };
 
 /** target_type per task_kind (04 §2.2 표; build_initial_ontology uses target novel + input.series_bible_id). */
@@ -75,12 +77,13 @@ export const TASK_KIND_TARGET: Readonly<Partial<Record<TaskKind, TargetType>>> =
   draft_design_sheet: "character",
   plan_structure: "novel",
   build_world_ontology: "novel",
+  resolve_entities: "novel",
 };
 
 /** Concept tasks are the only ones allowed without goal_id (INV-TSK-01 / INV-CON-08). */
 export const CONCEPT_TASK_KINDS: readonly TaskKind[] = ["concept_turn", "import_concept", "check_concept_brief"];
 
 /** Kinds allowed without goal_id: concept tasks + the cast step and world ontology that come before the goal (설계 추가, 0006/0012 tasks_ck_1). */
-export const GOAL_OPTIONAL_TASK_KINDS: readonly TaskKind[] = [...CONCEPT_TASK_KINDS, "draft_cast", "draft_design_sheet", "build_world_ontology"];
+export const GOAL_OPTIONAL_TASK_KINDS: readonly TaskKind[] = [...CONCEPT_TASK_KINDS, "draft_cast", "draft_design_sheet", "build_world_ontology", "resolve_entities"];
 
 export const MVP_ALPHA_TASK_KINDS: readonly TaskKind[] = Object.keys(TASK_KIND_TARGET) as TaskKind[];

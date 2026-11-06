@@ -175,6 +175,8 @@ export function scriptPipeline(claude: ScriptedClaude): void {
     // L4: the bible's names found by the dictionary pass ("한결", "서린") each have exactly one candidate card
     sticky({ when: { schemaHas: ["choice"], prompt: '표기: "한결"' }, json: { choice: "C1", rationale: "주인공 한결" } }),
     sticky({ when: { schemaHas: ["choice"], prompt: '표기: "서린"' }, json: { choice: "C1", rationale: "기록관 서린" } }),
+    // 설계 추가 0015: entity resolver — nothing to decide beyond the deterministic rules
+    sticky({ when: { schemaHas: ["resolutions"] }, json: { resolutions: [] } }),
     sticky({ when: { schemaHas: ["verdicts"] }, json: { verdicts: [], issues: [] } }),
     sticky({ when: { schemaHas: ["findings"] }, json: { findings: [], unplanned: [] } }),
     sticky({ when: { schemaHas: ["blocking"] }, json: { blocking: false, basis: "none", reason_ko: "" } }),

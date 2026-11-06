@@ -1,6 +1,6 @@
 // Drizzle mirror of the SQL migrations (columns only — constraints, FKs and indexes live in SQL).
 // Owning module: novel (design/08 §2.3).
-import { bigint, boolean, integer, jsonb, pgTable, primaryKey, text, time, timestamp } from "drizzle-orm/pg-core";
+import { bigint, boolean, integer, jsonb, pgTable, primaryKey, real, text, time, timestamp } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import { ENUMS } from "@ncs/shared/enums";
 
@@ -60,6 +60,9 @@ export const novels = pgTable(
     /** 설계 추가 0011: 인터넷 검색(기본 켬)과 LLM 호출 1회당 검색 상한(1~10) */
     webSearchEnabled: boolean("web_search_enabled").notNull().default(true),
     webSearchMaxUses: integer("web_search_max_uses").notNull().default(3),
+    /** 설계 추가 0015: 엔티티 판정 에이전트(기본 켬)와 자동 적용 신뢰도 기준(0~1) */
+    entityAgentResolution: boolean("entity_agent_resolution").notNull().default(true),
+    entityAgentMinConfidence: real("entity_agent_min_confidence").notNull().default(0.75),
     defaultNarrationMode: text("default_narration_mode", { enum: ENUMS.narration_mode }).notNull().default("third_limited"),
     timezone: text("timezone").notNull().default("Asia/Seoul"),
     lengthProfileId: text("length_profile_id").notNull(),

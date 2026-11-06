@@ -27,7 +27,7 @@ export const OPTION_VALUE_SCHEMAS: Partial<Record<QuestionTopic, z.ZodType>> = {
   entity_disambiguation: z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("entity"), entity_id: z.string(), matched_name_id: z.string().optional(), holder_basis: z.unknown().optional() }),
     z.object({ kind: z.literal("title_itself"), entity_id: z.string() }),
-    z.object({ kind: z.literal("new_entity") }),
+    z.object({ kind: z.literal("new_entity"), entity_type: z.string().optional() }),
     z.object({ kind: z.literal("not_entity") }),
     z.object({ kind: z.literal("hold") }),
   ]),

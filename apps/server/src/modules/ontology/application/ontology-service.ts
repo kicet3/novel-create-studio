@@ -14,6 +14,7 @@ import * as E from "../adapters/db/entities.js";
 import * as F from "../adapters/db/fact-writes.js";
 import * as I from "../adapters/db/identity.js";
 import { checkIntegrity, proposeSchemaChange } from "../adapters/db/integrity.js";
+import * as N from "../adapters/db/non-entity.js";
 
 export function createOntologyService(deps: OntologyModuleDeps): OntologyService {
   const d: OntoDeps = { platform: deps.platform, audit: deps.audit };
@@ -70,6 +71,9 @@ export function createOntologyService(deps: OntologyModuleDeps): OntologyService
 
     // ── mentions ──
     listMentions: (scope, q, tx) => R.listMentions(db(tx), scope, q),
+    recordNonEntitySurface: (tx, scope, surface, actor, note) => N.recordNonEntitySurface(d, tx, scope, surface, actor, note),
+    listNonEntitySurfaces: (scope, tx) => N.listNonEntitySurfaces(db(tx), scope),
+    findExactNamedEntities: (scope, surface, opts, tx) => N.findExactNamedEntities(db(tx), scope, surface, opts?.entityType),
     writeMentions: (tx, scope, mentions, actor) => E.writeMentions(d, tx, scope, mentions, actor),
     decideMention: (tx, scope, mentionId, decision, actor, ctx) => E.decideMention(d, tx, scope, mentionId, decision, actor, ctx),
     setMentionQuestion: (tx, scope, ids, questionId) => E.setMentionQuestion(d, tx, scope, ids, questionId),

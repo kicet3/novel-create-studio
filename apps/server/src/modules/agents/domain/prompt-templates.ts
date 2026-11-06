@@ -155,6 +155,11 @@ export const PROMPT_TEMPLATE_DATA: readonly PromptTemplateData[] = [
   ),
   T(
     "world_keeper",
+    "resolve_entities",
+    "원고 속 표기(M 핸들)마다 기존 엔티티 연결(link_existing)·별칭 추가(add_alias)·새 엔티티(create_entity)·무시(ignore)·병합(merge/keep_distinct) 가운데 하나를 고르고 확신도(0~1)와 근거 한 문장을 냅니다. 대명사·일반 호칭은 문맥상 가리키는 인물에 연결하고, 배경용 일반 명사(화면, 결승전, 일회성 장소)는 무시합니다. 이름이 있거나 반복되는 중요한 대상만 새 엔티티로 만듭니다.",
+  ),
+  T(
+    "world_keeper",
     "dedupe_entities",
     "엔티티 카드 목록에서 같은 대상을 가리키는 중복 후보 쌍을 찾습니다. 이름이 비슷해도 설정이 다르면 중복이 아닙니다. 근거를 함께 냅니다.",
   ),

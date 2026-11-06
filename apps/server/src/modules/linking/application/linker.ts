@@ -65,11 +65,29 @@ function cardLine(c: LinkCandidate, i: number): string {
   return `C${i + 1}: ${c.label}${tags.length ? ` [${tags.join(", ")}]` : ""}`;
 }
 
+/**
+ * 설계 추가 0015 alias memory: one candidate reached through an active name with exactly this key (incl. aliases the
+ * resolver or the author confirmed), live (active or candidate) entity, no confusable / distinct / hidden / death / usability flag → the link
+ * is deterministic (no L4 model call).
+ */
+export function safeExactCandidate(cands: LinkCandidate[]): string | null {
+  if (cands.length !== 1) return null;
+  const c = cands[0]!;
+  const f = c.features;
+  if (f.matchKind !== "exact" && f.matchKind !== "normalized") return null;
+  if (f.baseScore < 1 || f.hiddenVariant || f.nameKind === "hidden_variant" || f.confusable || f.distinctPair || f.deadAtPoint || f.nameNotUsable || f.nameOutOfRange || f.noNameMatch) return null;
+  // a still-candidate entity is fine too: rememberAlias stores names on candidates, and decide() keeps such a link pending
+  // (new_entity_candidate) until EN3
+  if (f.candidateEntityStatus !== "active" && f.candidateEntityStatus !== "candidate") return null;
+  return c.entityId;
+}
+
 export async function runLinker(
   deps: LinkerDeps,
   scope: NovelScope,
   input: { manuscriptVersionId: string | null; anchor: StoryAnchor; mentions: LinkerInputMention[]; sourceKind?: MentionSourceKind; answerId?: string | null },
   run?: RunHandle,
+  opts: { exactShortcut?: boolean } = {},
 ): Promise<LinkerResult> {
   const { ontology } = deps;
   const th = thresholds();
@@ -176,7 +194,9 @@ export async function runLinker(
   for (const list of groups.values()) {
     const head = list[0]!;
     let vote: Vote;
+    const exact = opts.exactShortcut ? safeExactCandidate(head.candidates) : null;
     if (head.candidates.length === 0) vote = { kind: "NIL" };
+    else if (exact) vote = { kind: "entity", entityId: exact };
     else if (run && (head.kind === "named" || head.kind === "title" || head.kind === "address")) {
       vote = await llmJudge(deps, run, head, input.anchor);
     } else vote = ruleJudge(head.candidates);
@@ -184,11 +204,12 @@ export async function runLinker(
   }
   sceneConsistency(built.map((b) => Object.assign(b, { decision: b.decision! })));
 
-  const result: LinkerResult = { mentions: [], questionsNeeded: [], linkerVersion: LINKER_VERSION, newEntities: [], localKeys: {}, reportHold: [] };
+  const result: LinkerResult = { mentions: [], questionsNeeded: [], linkerVersion: LINKER_VERSION, newEntities: [], localKeys: {}, reportHold: [], entityTypeHints: {} };
   for (const b of built) {
     const d = b.decision!;
     const m = b.m;
     if (m.localKey) result.localKeys![m.localKey] = b.index;
+    if (m.entityTypeHint) result.entityTypeHints![b.index] = m.entityTypeHint;
     result.mentions.push({
       sourceKind,
       manuscriptVersionId: input.manuscriptVersionId,

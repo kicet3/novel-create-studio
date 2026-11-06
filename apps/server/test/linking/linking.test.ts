@@ -255,8 +255,9 @@ describe("tasks via orchestration (scripted Claude responses)", () => {
     expect((await t.testDb.db.select().from(facts).where(and(eq(facts.novelId, scope.novelId), eq(facts.canonStatus, "candidate"))))).toHaveLength(0);
   });
 
-  it("dedupe_entities proposes merges as questions only (P-4)", async () => {
+  it("dedupe_entities proposes merges as questions only (P-4) — entity resolver off (on: identical names merge, agent-resolution.test.ts)", async () => {
     const { scope } = await newNovel();
+    await t.modules.novel.service.updateSettings(scope, { entityAgentResolution: false }, t.owner);
     const db = t.testDb.db;
     await db.insert(goals).values({ id: newId("gol"), novelId: scope.novelId, totalEpisodesMin: 10, cadenceEpisodesPerWeek: 3, endingDirection: "끝" });
     await run((tx) => onto.createEntity(tx, scope, { entityType: "character", preferredName: { surface: "한서윤" }, status: "active" }, t.owner));

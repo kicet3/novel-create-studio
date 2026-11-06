@@ -40,6 +40,7 @@ export const TASK_KIND_STAGE: Readonly<Partial<Record<TaskKind, AgentPipelineSta
   import_concept: "concept",
   check_concept_brief: "concept",
   build_world_ontology: "world",
+  resolve_entities: "world",
   build_initial_ontology: "world",
   dedupe_entities: "world",
   draft_cast: "cast",

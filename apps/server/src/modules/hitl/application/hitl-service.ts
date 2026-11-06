@@ -37,7 +37,7 @@ import type {
   Question,
   QuestionDraft,
 } from "../index.js";
-import { hitlRepo as repo, type Interpretation, type Reflection } from "../adapters/db/hitl-repository.js";
+import { AGENT_CANCEL_PREFIX, hitlRepo as repo, type Interpretation, type Reflection } from "../adapters/db/hitl-repository.js";
 import { approvalQuestionShape, gradeQuestion, HOLD_TOPICS, questionSensitivity, TOPIC_RULES } from "../domain/grading.js";
 import {
   buildRecommendation,
@@ -95,6 +95,10 @@ const SYS_ORCH = actors.system("orchestrator");
 interface AutoAnswerMode {
   actor: ActorRef;
   note?: string;
+  /** 설계 추가 0015: `agent_resolved` = an agent (entity resolver) decided it at any autonomy level */
+  source?: "auto_answer" | "agent_resolved";
+  /** 설계 추가 0015: applies the decision instead of the registered topic applier (the agent's exact decision) */
+  applier?: AnswerApplier;
 }
 
 export function createHitlCore(deps: HitlServiceDeps) {
@@ -662,8 +666,8 @@ export function createHitlCore(deps: HitlServiceDeps) {
   }
 
   /** choice answers: registered applier, else generic (wake blocked tasks with the answer in context) */
-  async function applyChoice(tx: Tx, scope: NovelScope, q: Question, answer: Answer, actor: ActorRef) {
-    const applier = answerAppliers.get(q.topic);
+  async function applyChoice(tx: Tx, scope: NovelScope, q: Question, answer: Answer, actor: ActorRef, override?: AnswerApplier) {
+    const applier = override ?? answerAppliers.get(q.topic);
     let r: ReflectionInput;
     if (applier) {
       const opts = await repo.listOptions(tx.db, scope, q.id);
@@ -697,7 +701,12 @@ export function createHitlCore(deps: HitlServiceDeps) {
     const via = `${labelKo("channel_kind", chan.kind)}, ${clockText}`;
     if (auto) {
       // 설계 추가 0014: provenance on every channel the question reached ("자동 승인" / "자동 응답")
-      const text = p.decision ? `자동 승인(완전 자율, ${clockText})` : `자동 응답(완전 자율, ${clockText}): 추천안 "${choice}"`;
+      const text =
+        auto.source === "agent_resolved"
+          ? `에이전트가 처리(${clockText}): "${choice}"`
+          : p.decision
+            ? `자동 승인(완전 자율, ${clockText})`
+            : `자동 응답(완전 자율, ${clockText}): 추천안 "${choice}"`;
       await closeDeliveries(tx, scope, q, { state: "closed", text });
     } else {
       await closeDeliveries(tx, scope, q, { answeredVia: answer.channelId, state: "answered", text: `답변 완료(${via})`, hereText: `선택: ${choice} (${via})` }); // I7, QD3/QD4
@@ -708,7 +717,7 @@ export function createHitlCore(deps: HitlServiceDeps) {
     if (q.topic === "interpretation_confirm") return handleConfirmAnswer(tx, scope, q, answer, p, actor);
     if (q.topic === "late_answer_conflict") return handleLateConflictAnswer(tx, scope, q, answer, p, actor);
     if (needsInterpretation(q.questionType, p)) return startInterpretation(tx, scope, q, answer); // INV-AI-01
-    return applyChoice(tx, scope, q, answer, actor);
+    return applyChoice(tx, scope, q, answer, actor, auto?.applier);
   }
 
   // ── acceptAnswer (05 §6.2) ──
@@ -754,7 +763,7 @@ export function createHitlCore(deps: HitlServiceDeps) {
       // CAS (Q3): one statement decides the race (05 §6.2)
       const won =
         q.status === "open"
-          ? await repo.updateQuestion(tx.db, scope, q.id, ["open"], { status: "answered", acceptedAnswerId: answer.id, answeredAt: at, resolutionSource: auto ? "auto_answer" : "user_answer", updatedAt: at })
+          ? await repo.updateQuestion(tx.db, scope, q.id, ["open"], { status: "answered", acceptedAnswerId: answer.id, answeredAt: at, resolutionSource: auto ? (auto.source ?? "auto_answer") : "user_answer", updatedAt: at })
           : null;
       const actor = auto?.actor ?? actors.user(input.responderUserId);
       if (won) {
@@ -765,11 +774,18 @@ export function createHitlCore(deps: HitlServiceDeps) {
           action: "question.answered",
           target: { type: "question", id: q.id },
           before: { status: "open" },
-          after: { status: "answered", channelId: channel.id, ...(auto ? { resolutionSource: "auto_answer" } : {}) },
+          after: { status: "answered", channelId: channel.id, ...(auto ? { resolutionSource: auto.source ?? "auto_answer" } : {}) },
           questionId: q.id,
           answerId: answer.id,
           approvalId: q.approvalId,
-          ...(auto ? { details: { auto: true, provenance: q.approvalId ? "자동 승인" : "자동 응답", delegatedBy: input.responderUserId } } : {}),
+          ...(auto
+            ? {
+                details:
+                  auto.source === "agent_resolved"
+                    ? { agent: true, provenance: "에이전트 처리", note: auto.note ?? null }
+                    : { auto: true, provenance: q.approvalId ? "자동 승인" : "자동 응답", delegatedBy: input.responderUserId },
+              }
+            : {}),
         });
         await afterAccepted(tx, scope, won, accepted, p, actor, auto);
         return { disposition: "accepted" as const, answerId: answer.id };
@@ -1175,6 +1191,9 @@ export function createHitlCore(deps: HitlServiceDeps) {
           if (q.questionType !== "single_choice" && q.questionType !== "multi_choice") return { decided: false, code: "not_choice", reason: "선택형 질문만 자동 응답합니다." };
           const rec = readRecommendation(q.recommendation);
           if (rec.option_idx === null) return { decided: false, code: "no_recommendation", reason: "추천안이 없습니다." };
+          // 설계 추가 0015: a "보류" recommendation is not a decision — answering it would only close the question
+          const recOpt = (await repo.listOptions(tx.db, scope, q.id)).find((o) => o.idx === rec.option_idx);
+          if ((recOpt?.value as { kind?: unknown } | null | undefined)?.kind === "hold") return { decided: false, code: "hold_recommendation", reason: "추천안이 보류라서 자동 응답하지 않습니다." };
           const ok = await decider.confirmAnswer(tx, scope, q);
           if (!ok.ok) return { decided: false, code: "not_eligible", reason: ok.reason };
           const { web } = await channels(tx, scope);
@@ -1194,6 +1213,43 @@ export function createHitlCore(deps: HitlServiceDeps) {
         return { decided: false, code, reason: (err as Error).message };
       }
     },
+    async agentResolveQuestion(tx, scope, questionId, opts): Promise<AutoDecisionResult> {
+      const q = await mustQuestion(tx, scope, questionId, true);
+      if (q.status !== "open" && q.status !== "pending") return { decided: false, code: "not_open", reason: "열린 질문이 아닙니다." };
+      if (q.approvalId || q.questionType === "approve_reject" || q.questionType === "attachment_review") return { decided: false, code: "approval", reason: "승인 질문은 에이전트가 답하지 않습니다." };
+      // questions_ck_4: blocking questions only take a human (or the narrow full_auto) answer
+      if (q.grade !== "non_blocking") return { decided: false, code: "not_non_blocking", reason: "비차단 질문만 에이전트가 처리합니다." };
+      if (q.questionType !== "single_choice" && q.questionType !== "multi_choice") return { decided: false, code: "not_choice", reason: "선택형 질문만 에이전트가 처리합니다." };
+      const options = await repo.listOptions(tx.db, scope, q.id);
+      if (!options.some((o) => o.idx === opts.optionIdx)) return { decided: false, code: "no_option", reason: "선택지가 없습니다." };
+      const owner = await repo.ownerUserId(tx.db);
+      if (!owner) return { decided: false, code: "no_owner", reason: "작품 소유자가 없습니다." };
+      const { web } = await channels(tx, scope);
+      if (!web) return { decided: false, code: "web_channel_missing", reason: "웹 인박스 채널이 없습니다." };
+      const r = await acceptAnswer(
+        scope,
+        { questionId: q.id, channelId: web.id, responderUserId: owner, optionIds: [String(opts.optionIdx)], sourceKey: `agent:${q.id}` },
+        tx,
+        { actor: opts.actor, note: opts.note, source: "agent_resolved", applier: opts.applier },
+      );
+      if (r.disposition !== "accepted") return { decided: false, code: "not_accepted", reason: "에이전트 처리가 반영되지 않았습니다." };
+      return { decided: true, answerId: r.answerId };
+    },
+    async agentCloseInterpretation(tx, scope, confirmQuestionId, actor, reason) {
+      const q = await mustQuestion(tx, scope, confirmQuestionId, true);
+      if (q.topic !== "interpretation_confirm" || (q.status !== "open" && q.status !== "pending")) return null;
+      const root = await rootOf(tx, scope, q);
+      const at = now();
+      await cancelQ(tx, scope, q, reason.startsWith(AGENT_CANCEL_PREFIX) ? reason : `${AGENT_CANCEL_PREFIX}: ${reason}`, actor);
+      const itp = await repo.interpretationByConfirmQuestion(tx.db, scope, q.id);
+      if (itp && itp.status === "proposed") {
+        findRule(INTERPRETATION_TRANSITIONS, "answer_interpretation", itp.status, "rejected");
+        await repo.updateInterpretation(tx.db, scope, itp.id, ["proposed"], { status: "rejected", updatedAt: at }); // IT4 (no T7 follow-up)
+        await audit.record(tx, { novelId: scope.novelId, actor, action: "answer.interpretation_decided", target: { type: "answer", id: itp.answerId }, after: { status: "rejected", agent: true }, reason, questionId: root.id, answerId: itp.answerId });
+      }
+      await closeFollowups(tx, scope, root, actor, "에이전트가 원 질문을 처리");
+      return { rootQuestionId: root.id, rootAnswerId: root.acceptedAnswerId ?? null, rootStatus: root.status };
+    },
     async markAutoHeld(scope, approvalId, reason, tx) {
       await uow.join(tx, (t) => markHeld(t, scope, approvalId, reason));
     },
@@ -1201,7 +1257,7 @@ export function createHitlCore(deps: HitlServiceDeps) {
       if (answerAppliers.has(topic)) throw new Error(`answer applier already registered: ${topic}`);
       answerAppliers.set(topic, applier);
     },
-    listQuestions: (scope, filter) => repo.listQuestions(uow.db, scope, filter),
+    listQuestions: (scope, filter, tx) => repo.listQuestions(tx?.db ?? uow.db, scope, filter),
     async getQuestionView(scope, questionId) {
       const q = await mustQuestion(undefined, scope, questionId);
       const view = await viewOf(undefined, scope, q);
@@ -1234,6 +1290,7 @@ export function createHitlCore(deps: HitlServiceDeps) {
         pending: qs.filter((q) => q.status === "pending").length,
         lateAnswers: await repo.countLate(uow.db, scope),
         pendingReflections: await repo.countPendingReflections(uow.db, scope),
+        agentResolved: await repo.countAgentResolved(uow.db, scope, new Date(now().getTime() - 7 * 24 * 3600_000)),
       };
     },
     resolveLateAnswer(scope, answerId, resolution, actor) {

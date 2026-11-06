@@ -67,6 +67,20 @@ export interface LinkerResult {
   localKeys?: Record<string, number>;
   /** report-hold mention indexes (리포트 보류, no question) */
   reportHold?: number[];
+  // ── 설계 추가 0015 (entity resolver agent) ──
+  /** extraction entity_type_hint per mention index (question wording 누구/무엇, new-entity type) */
+  entityTypeHints?: Record<number, string>;
+  /** resolver judgement of mentions that still go to a question (recommended option, confidence) */
+  agentHints?: Record<number, AgentQuestionHint>;
+  /** "type|normalizedKey" of new entities the resolver decided to create (no same-name reuse, no duplicate question) */
+  agentCreatedKeys?: string[];
+}
+
+/** 설계 추가 0015: what the resolver thought of a mention it was not sure enough about */
+export interface AgentQuestionHint {
+  recommend: { kind: "entity"; entityId: string } | { kind: "new_entity"; entityType?: string | null } | { kind: "not_entity" } | null;
+  confidence: number;
+  rationale: string;
 }
 
 /** widened (A3): what commitLinkerResult wrote */
@@ -84,7 +98,7 @@ export interface DisambiguationOptions {
   mentionId: string;
   surface: string;
   excerpt: string;
-  options: Array<{ label: string; value: { kind: "entity"; entityId: string } | { kind: "new_entity" } | { kind: "not_entity" } }>;
+  options: Array<{ label: string; value: { kind: "entity"; entityId: string } | { kind: "new_entity"; entityType?: string } | { kind: "not_entity" } }>;
 }
 
 export interface LinkingService {
@@ -116,7 +130,7 @@ export interface LinkingService {
     scope: NovelScope,
     result: LinkerResult,
     actor: ActorRef,
-    ctx?: { taskId?: string | null; runId?: string | null; sourceKind?: MentionSourceKind; createQuestions?: boolean },
+    ctx?: { taskId?: string | null; runId?: string | null; sourceKind?: MentionSourceKind; createQuestions?: boolean; agentResolution?: boolean },
   ): Promise<LinkerCommitResult>;
 }
 

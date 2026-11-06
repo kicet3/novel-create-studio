@@ -49,6 +49,10 @@ export const novelDtoSchema = z.object({
   webSearchEnabled: z.boolean().default(true),
   /** LLM 호출 1회당 검색 상한 (1~10, 기본 3) */
   webSearchMaxUses: z.number().int().default(3),
+  /** 설계 추가 0015: 엔티티 판정 에이전트(대명사·흔한 명사 걸러내기, 모호한 언급 자동 판정) — 기본 켬 */
+  entityAgentResolution: z.boolean().default(true),
+  /** 에이전트 판정을 바로 적용하는 신뢰도 기준(0~1, 기본 0.75) */
+  entityAgentMinConfidence: z.number().min(0).max(1).default(0.75),
   defaultNarrationMode: z.enum(ENUMS.narration_mode),
   timezone: z.string(),
   lengthProfileId: z.string(),
@@ -185,6 +189,9 @@ export const updateNovelSettingsRequestSchema = z
     webSearchEnabled: z.boolean(),
     /** 호출 1회당 검색 상한 (1~10) */
     webSearchMaxUses: z.number().int().min(1).max(10),
+    /** 설계 추가 0015: 엔티티 판정 에이전트 켜기/끄기와 자동 적용 신뢰도 기준 */
+    entityAgentResolution: z.boolean(),
+    entityAgentMinConfidence: z.number().min(0.3).max(1),
   })
   .partial()
   .refine((v) => Object.keys(v).length > 0, "변경할 항목이 없습니다.");

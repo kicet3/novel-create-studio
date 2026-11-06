@@ -44,7 +44,12 @@ describe("0014 migration backfill", () => {
       const m = new RegExp(`${col} IN \\(([^)]*)\\)`).exec(update);
       return new Set([...(m?.[1] ?? "").matchAll(/'([a-z_]+)'/g)].map((x) => x[1]));
     };
-    expect(list("topic")).toEqual(new Set(HIGH_SENSITIVITY_TOPICS));
+    // 설계 추가 0015: entity_disambiguation / duplicate_entity left the topic rule (a new question is normal only with the
+    // resolver's recommendation, see the drafts); rows 0014 raised stay high — 0015 does not lower them
+    const sql15 = readFileSync(fileURLToPath(new URL("../../../../packages/db/src/migrations/0015_entity_agent_resolution.sql", import.meta.url)), "utf8");
+    expect(sql15).not.toMatch(/UPDATE questions SET sensitivity/);
+    const moved = new Set(["entity_disambiguation", "duplicate_entity"]);
+    expect(new Set([...list("topic")].filter((x) => !moved.has(x ?? "")))).toEqual(new Set(HIGH_SENSITIVITY_TOPICS));
     expect(list("blocking_basis")).toEqual(new Set(HIGH_SENSITIVITY_BASES));
   });
 });
@@ -87,6 +92,23 @@ describe("review fixes (questions, approvals, switches)", () => {
     expect((await t.modules.autopilot.service.tick(scope)).answered).toEqual([]);
     expect((await qrow(q.questionId)).resolutionSource).not.toBe("auto_answer");
     expect(await t.modules.hitl.service.autoAnswerQuestion(scope, q.questionId, { actor: actors.system("autopilot") })).toMatchObject({ decided: false, code: "high_sensitivity" });
+  });
+
+  it("설계 추가 0015: a '보류' recommendation is never auto-answered", async () => {
+    const scope = await fullAutoNovel();
+    const q = await ask(
+      scope,
+      draft(scope, {
+        title: "보류가 추천인 질문",
+        options: [
+          { label: "윤서", value: { kind: "choice", key: "a" } },
+          { label: "보류", value: { kind: "hold" }, isRecommended: true },
+        ],
+      }),
+    );
+    expect((await qrow(q.questionId)).sensitivity).toBe("normal");
+    expect(await t.modules.hitl.service.autoAnswerQuestion(scope, q.questionId, { actor: actors.system("autopilot") })).toMatchObject({ decided: false, code: "hold_recommendation" });
+    expect(["pending", "open"]).toContain((await qrow(q.questionId)).status);
   });
 
   it("a question that depends on an open question waits for it", async () => {

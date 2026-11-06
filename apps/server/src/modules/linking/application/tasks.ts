@@ -6,6 +6,7 @@ import { z } from "zod";
 import { defaultValue } from "@ncs/shared";
 import { NotImplementedError, actors, type ActorRef, type Logger, type NovelScope, type Tx } from "../../../platform/index.js";
 import { callWithRepair, summarizeIssues, type AgentTaskHandler, type AgentsService, type ContextBuilder, type ContextPack } from "../../agents/index.js";
+import type { AuditService } from "../../audit/index.js";
 import type { HitlService } from "../../hitl/index.js";
 import type { LlmService } from "../../llm/index.js";
 import type { NovelService } from "../../novel/index.js";
@@ -15,8 +16,10 @@ import type { LinkerInputMention, LinkerResult, SceneSource, SceneText } from ".
 import { extractionResultSchema, initialOntologySchema, type ExtractionResult, type InitialOntology } from "../domain/schemas.js";
 import { dictionaryMentions, excerpt, parseBibleContent } from "../domain/text.js";
 import { checkExtraction, normalizeEntityType } from "../domain/extraction-check.js";
-import { commitLinkerResult, disambiguationDraft, duplicateDraft, tryCreateQuestion } from "./commit.js";
+import { agentSettings, commitLinkerResult, disambiguationDraft, duplicateDraft, openQuestionsBySurface, tryCreateQuestion } from "./commit.js";
 import { runLinker } from "./linker.js";
+import { AGENT_HOLD_TAG, applyPlanToLinker, finishPlan, planExtraction, type ExtractionPlan } from "./agent-resolution.js";
+import { classifySurface, isCoreferenceOnly } from "../domain/salience.js";
 
 export interface TaskDeps {
   ontology: OntologyService;
@@ -27,6 +30,8 @@ export interface TaskDeps {
   orchestration: OrchestrationService;
   sceneSources: SceneSource[];
   log?: Logger;
+  /** 설계 추가 0015: agent decisions are audited (mention.agent_resolved / question.agent_resolved) */
+  audit?: AuditService;
 }
 
 const EMPTY_PACK: ContextPack = { snapshotId: "", system: "", messages: [], handles: { entities: [], names: [] }, tokenEstimate: 0, droppedSections: [] };
@@ -97,6 +102,8 @@ interface ExtractProposal {
   scenes: Array<Pick<SceneText, "sceneId" | "sceneOrd" | "storyPoint" | "timelineId">>;
   excerpts: Record<number, string>;
   dropped: number;
+  /** 설계 추가 0015: entity resolver plan (absent = setting off / nothing to decide) */
+  agent?: ExtractionPlan | null;
 }
 
 async function loadScenes(deps: TaskDeps, scope: NovelScope, input: ExtractInput): Promise<SceneText[]> {
@@ -237,13 +244,24 @@ export function extractFactsHandler(deps: TaskDeps): AgentTaskHandler<ExtractInp
       await run.checkpoint();
       // P3c: linker (L4 through the model port)
       const tl = scenes[0]!.timelineId;
-      const linker = await runLinker({ ontology: deps.ontology, llm: deps.llm }, scope, { manuscriptVersionId: input.manuscript_version_id, anchor: { storyPoint: scenes[0]!.storyPoint, timelineId: tl, povEntityId: scenes[0]!.povEntityId ?? undefined }, mentions, sourceKind: "manuscript" }, run);
-      return { linker, extraction, scenes: scenes.map(({ sceneId, sceneOrd, storyPoint, timelineId }) => ({ sceneId, sceneOrd, storyPoint, timelineId })), excerpts, dropped };
+      const settings = await agentSettings(deps.novel, scope);
+      const linker = await runLinker({ ontology: deps.ontology, llm: deps.llm }, scope, { manuscriptVersionId: input.manuscript_version_id, anchor: { storyPoint: scenes[0]!.storyPoint, timelineId: tl, povEntityId: scenes[0]!.povEntityId ?? undefined }, mentions, sourceKind: "manuscript" }, run, { exactShortcut: settings.enabled });
+      // 설계 추가 0015: entity resolver (salience filter → one model call for what is left)
+      let agent: ExtractionPlan | null = null;
+      if (settings.enabled) {
+        agent = await planExtraction({ ontology: deps.ontology, hitl: deps.hitl, novel: deps.novel, audit: deps.audit, log: deps.log }, run, llm, scope, { linker, excerpts, settings, context, entityTypes });
+        run.noteOutputSummary?.("entityResolution", { decided: agent.entries.filter((e) => e.action !== "keep").length, calls: agent.calls, failed: agent.failed });
+      }
+      return { linker, extraction, scenes: scenes.map(({ sceneId, sceneOrd, storyPoint, timelineId }) => ({ sceneId, sceneOrd, storyPoint, timelineId })), excerpts, dropped, agent };
     },
     async commit(tx, run, input, p, task) {
       const scope = { novelId: run.novelId };
       const actor = agentActor(run);
-      const written = await commitLinkerResult({ ontology: deps.ontology, hitl: deps.hitl }, tx, scope, p.linker, actor, { taskId: task.id, runId: run.runId, excerpts: p.excerpts });
+      const rd = { ontology: deps.ontology, hitl: deps.hitl, novel: deps.novel, audit: deps.audit, log: deps.log };
+      const settings = await agentSettings(deps.novel, scope, tx);
+      const planned = p.agent && settings.enabled ? await applyPlanToLinker(rd, tx, scope, p.linker, p.agent) : null;
+      const written = await commitLinkerResult({ ontology: deps.ontology, hitl: deps.hitl, novel: deps.novel }, tx, scope, planned?.result ?? p.linker, actor, { taskId: task.id, runId: run.runId, excerpts: p.excerpts, agentResolution: settings.enabled });
+      if (planned) await finishPlan(rd, tx, scope, planned.entries, written, actor);
       const facts = await materializeFacts(deps, tx, scope, p, written.byLocalKey, input, actor);
       // identity assertions (06 §3.12 경로 B): two linked mentions, different entities → proposed merge + question
       for (const ia of p.extraction.identity_assertions) {
@@ -385,29 +403,47 @@ export function linkMentionsHandler(deps: TaskDeps): AgentTaskHandler<LinkInput,
         return { linker, pendingMentionIds: [] };
       }
       const pending = input.manuscript_version_id ? await deps.ontology.listMentions(scope, { manuscriptVersionId: input.manuscript_version_id, linkStatus: ["ambiguous"] }) : [];
-      return { linker: null, pendingMentionIds: pending.filter((m) => !m.questionId && m.mentionKind !== "zero").map((m) => m.id) };
+      // 설계 추가 0015: held by the resolver, pronouns / generic words → never re-asked
+      const agent = (await agentSettings(deps.novel, scope)).enabled;
+      const nonEntity = agent ? new Set(await deps.ontology.listNonEntitySurfaces(scope)) : new Set<string>();
+      const askable = (m: (typeof pending)[number]) => {
+        if (!agent) return true;
+        if ((m.rationale ?? "").startsWith(AGENT_HOLD_TAG)) return false;
+        const c = classifySurface(m.surface, m.mentionKind, nonEntity);
+        return !isCoreferenceOnly(c) && c !== "generic" && c !== "generic_hint";
+      };
+      return { linker: null, pendingMentionIds: pending.filter((m) => !m.questionId && m.mentionKind !== "zero" && askable(m)).map((m) => m.id) };
     },
     async commit(tx, run, _input, p, task) {
       const scope = { novelId: run.novelId };
       const actor = agentActor(run);
-      const cd = { ontology: deps.ontology, hitl: deps.hitl };
+      const cd = { ontology: deps.ontology, hitl: deps.hitl, novel: deps.novel };
+      const agent = (await agentSettings(deps.novel, scope, tx)).enabled;
       const refs: Array<{ refType: "mention" | "question"; refId: string }> = [];
       if (p.linker) {
-        const w = await commitLinkerResult(cd, tx, scope, p.linker, actor, { taskId: task.id, runId: run.runId });
+        const w = await commitLinkerResult(cd, tx, scope, p.linker, actor, { taskId: task.id, runId: run.runId, agentResolution: agent });
         refs.push(...w.mentionIds.map((id) => ({ refType: "mention" as const, refId: id })), ...w.questionIds.map((id) => ({ refType: "question" as const, refId: id })));
       }
       if (p.pendingMentionIds.length) {
         const ms = (await deps.ontology.listMentions(scope, { ids: p.pendingMentionIds }, tx)).filter((m) => m.linkStatus === "ambiguous" && !m.questionId);
         const groups = new Map<string, typeof ms>();
         for (const m of ms) {
-          const k = `${m.sceneId}|${m.chainKey ?? ""}|${normalizedKey(m.surface)}|${JSON.stringify(m.candidates)}`;
+          const k = agent ? `${normalizedKey(m.surface)}|${JSON.stringify(m.candidates)}` : `${m.sceneId}|${m.chainKey ?? ""}|${normalizedKey(m.surface)}|${JSON.stringify(m.candidates)}`;
           groups.set(k, [...(groups.get(k) ?? []), m]);
         }
+        const openBySurface = agent ? await openQuestionsBySurface(cd, tx, scope) : new Map<string, string>();
         for (const g of groups.values()) {
-          const draft = await disambiguationDraft(cd, tx, scope, g.map((m) => ({ id: m.id, surface: m.surface, mentionKind: m.mentionKind, storyPoint: m.storyPoint, candidates: (m.candidates ?? []) as Array<{ entityId: string; score: number }> })));
+          const sk = normalizedKey(g[0]!.surface);
+          const existing = openBySurface.get(sk);
+          if (existing) {
+            await deps.ontology.setMentionQuestion(tx, scope, g.map((m) => m.id), existing); // 설계 추가 0015: already asked
+            continue;
+          }
+          const draft = await disambiguationDraft(cd, tx, scope, g.map((m) => ({ id: m.id, surface: m.surface, mentionKind: m.mentionKind, storyPoint: m.storyPoint, candidates: (m.candidates ?? []) as Array<{ entityId: string; score: number }> })), agent ? { agent: true } : {});
           const qid = await tryCreateQuestion(cd, tx, scope, draft, actor, { taskId: task.id, runId: run.runId });
           if (!qid) continue;
           await deps.ontology.setMentionQuestion(tx, scope, g.map((m) => m.id), qid);
+          if (agent) openBySurface.set(sk, qid);
           refs.push({ refType: "question", refId: qid });
         }
       }
@@ -435,12 +471,29 @@ export function dedupeHandler(deps: TaskDeps): TaskKindHandler<DedupeInput, Arra
       const actor = agentActor(ctx.run);
       const open = await deps.ontology.listIdentityDecisions(ctx.scope, { statuses: ["proposed"] }, tx);
       const refs: Array<{ refType: "identity_decision" | "question"; refId: string }> = [];
+      const agent = (await agentSettings(deps.novel, ctx.scope, tx)).enabled;
       for (const pr of pairs) {
         if (open.some((d) => d.kind === "merge" && pr.entityIds.every((id) => d.sourceEntityIds.includes(id)))) continue;
         const ents = await deps.ontology.getEntities(ctx.scope, pr.entityIds, tx);
         if (ents.length < 2 || ents.some((e) => e.status === "merged" || e.status === "retired")) continue;
         // survivor: the active / older one (P-4: no automatic merge — only a proposal + question)
         const [a, b] = [...ents].sort((x, y) => (x.status === "active" ? 0 : 1) - (y.status === "active" ? 0 : 1) || x.createdAt.getTime() - y.createdAt.getTime());
+        // 설계 추가 0015: an identical normalized name of a not-yet-established candidate is the same thing → merge, never ask
+        // (the representative names themselves — `name=1` also means a single shared alias / variant, which is not enough)
+        const preferredKey = async (id: string) => (await deps.ontology.listEntityNames(ctx.scope, id, tx)).find((n) => n.isPreferred)?.normalizedKey ?? null;
+        const sameName = agent && /^name=1\b/.test(pr.reason) && a!.entityType === b!.entityType && (await preferredKey(a!.id)) !== null && (await preferredKey(a!.id)) === (await preferredKey(b!.id));
+        if (sameName && b!.status === "candidate" && (a!.disambiguator ?? null) === (b!.disambiguator ?? null)) {
+          const dec = await deps.ontology.proposeIdentityDecision(tx, ctx.scope, { kind: "merge", entityIds: [a!.id, b!.id], survivorEntityId: a!.id, rationale: `같은 이름 자동 병합(${pr.reason})`, evidence: { score: pr.score, auto: "exact_name" } }, actor);
+          try {
+            await deps.ontology.applyIdentityDecision(tx, ctx.scope, dec.id, actor);
+            refs.push({ refType: "identity_decision", refId: dec.id });
+            await deps.audit?.record(tx, { novelId: ctx.scope.novelId, actor, action: "mention.agent_resolved", target: { type: "identity_decision", id: dec.id }, after: { action: "merge", survivorEntityId: a!.id, mergedEntityId: b!.id }, reason: "정규화한 이름이 같은 후보 엔티티", details: { confidence: 1, source: "rule" } });
+            continue;
+          } catch (err) {
+            if ((err as { code?: string }).code !== "identity_change_approval_required") throw err;
+            await deps.ontology.rejectIdentityDecision(tx, ctx.scope, dec.id, actor, "공개 사실에 닿아 질문으로 돌림");
+          }
+        }
         const dec = await deps.ontology.proposeIdentityDecision(tx, ctx.scope, { kind: "merge", entityIds: [a!.id, b!.id], survivorEntityId: a!.id, rationale: `중복 의심(${pr.reason})`, evidence: { score: pr.score } }, actor);
         refs.push({ refType: "identity_decision", refId: dec.id });
         const qid = await tryCreateQuestion({ ontology: deps.ontology, hitl: deps.hitl }, tx, ctx.scope, await duplicateDraft({ ontology: deps.ontology, hitl: deps.hitl }, tx, ctx.scope, { newEntityId: b!.id, existingId: a!.id, decisionId: dec.id, score: pr.score }), actor, { taskId: ctx.task.id, runId: ctx.run.runId });
@@ -511,6 +564,7 @@ export async function commitInitialOntology(deps: TaskDeps, tx: Tx, scope: Novel
   for (const e of existing) for (const n of await deps.ontology.listEntityNames(scope, e.id, tx)) if (n.status !== "retired") nameIndex.set(`${e.entityType}|${n.normalizedKey}`, [...(nameIndex.get(`${e.entityType}|${n.normalizedKey}`) ?? []), e.id]);
   const cd = { ontology: deps.ontology, hitl: deps.hitl };
   const dupQuestions: string[] = [];
+  const agent = (await agentSettings(deps.novel, scope, tx)).enabled;
   for (const e of p.entities) {
     if (!schema.entityTypes.some((t) => t.key === e.entity_type && t.enabled)) continue;
     // 06 §3.14: same character_key → reuse (rename path), never a second entity
@@ -532,6 +586,21 @@ export async function commitInitialOntology(deps: TaskDeps, tx: Tx, scope: Novel
         : undefined;
     if (byWorldName) {
       keyToEntity.set(e.key, byWorldName.id);
+      continue;
+    }
+    // 설계 추가 0015: the identical (type, normalized name) — same disambiguator, no conflicting character key — is the
+    // same thing: reuse it instead of a duplicate_entity question
+    const byExactName =
+      !byKey && agent
+        ? existing.find(
+            (x) =>
+              sameName.includes(x.id) &&
+              (x.disambiguator ?? null) === (e.disambiguator ?? null) &&
+              !(e.entity_type === "character" && e.character_key && x.conceptCharacterKey && x.conceptCharacterKey !== e.character_key),
+          )
+        : undefined;
+    if (byExactName) {
+      keyToEntity.set(e.key, byExactName.id);
       continue;
     }
     if (byKey) {

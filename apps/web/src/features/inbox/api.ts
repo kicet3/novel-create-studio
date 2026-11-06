@@ -4,7 +4,11 @@ import {
   hitlInboxSummarySchema,
   hitlQuestionDtoSchema,
   hitlQuestionViewSchema,
+  linkingBacklogDtoSchema,
+  linkingResolveBacklogResponseSchema,
   type HitlAnswerRequest,
+  type HitlQuestionDto,
+  type LinkingResolveBacklogResponse,
   type HitlAnswerResult,
   type HitlQuestionView,
   type QuestionStatus,
@@ -80,6 +84,24 @@ export function useAnswerQuestion(novelId: string) {
       if (args.status === "pending") await api.post(`/novels/${novelId}/questions/${args.questionId}/open`, {});
       return api.post<HitlAnswerResult>(`/novels/${novelId}/questions/${args.questionId}/answers`, { ...args.body, requestId: requestId() });
     },
+    onSettled: () => void invalidate(),
+  });
+}
+
+/** 설계 추가 0015: open entity questions the resolver agent can clean up (the server filters interpretation_confirm by its root) */
+export function useEntityBacklog(novelId: string) {
+  return useQuery({
+    queryKey: queryKeys.novel(novelId).inbox({ entityBacklog: true }),
+    queryFn: ({ signal }) => api.get(`/novels/${novelId}/linking/backlog`, { signal, schema: lenient(linkingBacklogDtoSchema) }),
+    refetchInterval: POLL_INTERVAL_MS,
+  });
+}
+
+/** "에이전트가 정리": POST …/linking/resolve-backlog (resolve_entities task; an active one is returned) */
+export function useResolveEntityBacklog(novelId: string) {
+  const invalidate = useInvalidateNovel(novelId);
+  return useMutation({
+    mutationFn: () => api.post<LinkingResolveBacklogResponse>(`/novels/${novelId}/linking/resolve-backlog`, {}, { schema: lenient(linkingResolveBacklogResponseSchema) }),
     onSettled: () => void invalidate(),
   });
 }

@@ -69,7 +69,7 @@ describe("question auto answer", () => {
   it("never answers high-sensitivity questions (major character fate, hold topics, agent-raised)", async () => {
     const scope = await fullAutoNovel();
     const fate = await ask(scope, draft(scope, { topic: "character_fate", gradeHints: { majorCharacterFate: true } }));
-    const hold = await ask(scope, draft(scope, { topic: "duplicate_entity", options: [{ label: "같은 인물", value: { kind: "same" } }, { label: "다른 인물", value: { kind: "distinct" }, isRecommended: true }] }));
+    const hold = await ask(scope, draft(scope, { topic: "interpretation_confirm", options: [{ label: "맞습니다", value: { kind: "choice", key: "confirm" } }, { label: "취소", value: { kind: "choice", key: "cancel" }, isRecommended: true }] }));
     const raised = await ask(scope, draft(scope, { sensitivity: "high" }));
     for (const q of [fate, hold, raised]) expect((await row(q.questionId)).sensitivity).toBe("high");
     clock.advance(24 * 60 * 60_000);

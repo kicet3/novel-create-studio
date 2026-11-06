@@ -134,6 +134,8 @@ export const ENUMS = {
     "plan_structure",
     // 설계 추가: 컨셉 승인 뒤 세계관 온톨로지 후보 생성(module world)
     "build_world_ontology",
+    // 설계 추가 0015: 엔티티 판정 백로그 정리(world_keeper)
+    "resolve_entities",
   ],
   target_type: ["novel", "goal", "arc", "episode", "scene", "shot", "setup", "entity", "question", "concept_session", "character"],
   task_status: ["pending", "ready", "running", "blocked", "done", "failed", "cancelled"],
@@ -229,7 +231,7 @@ export const ENUMS = {
     "system_failure",
     "none",
   ],
-  resolution_source: ["user_answer", "default_applied", "deadline_hold", "absence_delegated", "notice_only", "auto_answer"],
+  resolution_source: ["user_answer", "default_applied", "deadline_hold", "absence_delegated", "notice_only", "auto_answer", "agent_resolved"],
   question_delivery_state: ["pending", "posted", "answered_here", "closed_elsewhere", "withdrawn", "failed"],
   answer_session_status: ["active", "completed", "expired", "cancelled"],
   answer_disposition: ["accepted", "late", "duplicate"],

@@ -197,7 +197,10 @@ export const BLOCKING_BASIS_VALUES = ENUMS.blocking_basis;
 // ── 설계 추가 0014: 질문 민감도 (완전 자율 자동 응답 대상 판정) ──
 /** topics never auto-answered in full_auto (hold topics + always-human decisions + system failures) */
 export const HIGH_SENSITIVITY_TOPICS: ReadonlySet<QuestionTopic> = new Set<QuestionTopic>([
-  ...HOLD_TOPICS,
+  // 설계 추가 0015: entity_disambiguation / duplicate_entity are non-canon link decisions (normal: the autopilot may answer
+  // them with the recommendation). They stay HOLD topics (never applied at the deadline). A merge that touches
+  // published/approved canon is raised by gradeHints / the identity_change approval.
+  ...[...HOLD_TOPICS].filter((t) => t !== "entity_disambiguation" && t !== "duplicate_entity"),
   "retcon",
   "setup_abandon",
   "budget",

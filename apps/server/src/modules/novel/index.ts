@@ -150,6 +150,9 @@ export interface NovelSettingsPatch {
   /** 설계 추가 0011: 인터넷 검색(기본 켬)과 호출 1회당 검색 상한(1~10) */
   webSearchEnabled?: boolean;
   webSearchMaxUses?: number;
+  /** 설계 추가 0015: 엔티티 판정 에이전트(기본 켬)와 자동 적용 신뢰도 기준 */
+  entityAgentResolution?: boolean;
+  entityAgentMinConfidence?: number;
 }
 
 export interface ChangeAutonomyInput {

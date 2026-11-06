@@ -193,18 +193,30 @@ export interface HitlService {
   autoDecideApproval(scope: NovelScope, approvalId: string, opts: { actor: ActorRef; note?: string }): Promise<AutoDecisionResult>;
   /** answer an open (non-approval) choice question with its recommended option (`auto_answer`) */
   autoAnswerQuestion(scope: NovelScope, questionId: string, opts: { actor: ActorRef }): Promise<AutoDecisionResult>;
+  /**
+   * 설계 추가 0015: an agent (entity resolver) answers an open non-blocking choice question in the CALLER's transaction, at
+   * any autonomy level (answer auto_answered on behalf of the owner, question resolution_source=agent_resolved). `applier`
+   * replaces the registered topic applier (the agent's exact decision); the reflection is recorded as usual.
+   */
+  agentResolveQuestion(tx: Tx, scope: NovelScope, questionId: string, opts: { optionIdx: number; actor: ActorRef; note?: string; applier?: AnswerApplier }): Promise<AutoDecisionResult>;
+  /**
+   * 설계 추가 0015: close an open interpretation_confirm question without asking again: the confirm question is cancelled
+   * (reason prefixed "에이전트가 정리"), its interpretation rejected (no follow-up is created) and waiting followups of the
+   * root closed. The caller applies the decision to the root and records the root reflection (recordReflection).
+   */
+  agentCloseInterpretation(tx: Tx, scope: NovelScope, confirmQuestionId: string, actor: ActorRef, reason: string): Promise<{ rootQuestionId: string; rootAnswerId: string | null; rootStatus: QuestionStatus } | null>;
   /** the autopilot will not decide this approval: payload.autopilot.heldReason (the dispatcher sends it to messengers) */
   markAutoHeld(scope: NovelScope, approvalId: string, reason: string, tx?: Tx): Promise<void>;
   registerAnswerApplier(topic: QuestionTopic, applier: AnswerApplier): void;
 
   // read side (web inbox, home)
-  listQuestions(scope: NovelScope, filter?: QuestionFilter): Promise<Question[]>;
+  listQuestions(scope: NovelScope, filter?: QuestionFilter, tx?: Tx): Promise<Question[]>;
   getQuestionView(scope: NovelScope, questionId: string): Promise<QuestionView & { status: QuestionStatus; resolutionSource: Question["resolutionSource"]; sensitivity: Question["sensitivity"]; answers: Answer[] }>;
   listApprovals(scope: NovelScope, filter?: { statuses?: ApprovalStatus[]; types?: ApprovalType[] }): Promise<Approval[]>;
   getApproval(scope: NovelScope, approvalId: string, tx?: Tx): Promise<Approval>;
   pendingCounts(scope: NovelScope): Promise<PendingCounts>;
   /** web inbox summary (counts + late answers + reflections waiting) */
-  inboxSummary(scope: NovelScope): Promise<PendingCounts & { lateAnswers: number; pendingReflections: number; open: number; pending: number }>;
+  inboxSummary(scope: NovelScope): Promise<PendingCounts & { lateAnswers: number; pendingReflections: number; open: number; pending: number; agentResolved: number }>;
   /** user decision on a late answer (05 §6.5 AN2: dismiss) */
   resolveLateAnswer(scope: NovelScope, answerId: string, resolution: "dismissed", actor: ActorRef): Promise<Answer>;
 

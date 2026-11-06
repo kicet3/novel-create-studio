@@ -39,7 +39,7 @@ export const ACTIVITY_ACTIONS = [
   "fact.created", "fact.status_changed", "fact.version_created", "fact.retconned", "fact.reverted",
   "entity.created", "entity.status_changed", "entity.preferred_name_changed", "entity.updated",
   "entity_name.added", "entity_name.updated", "entity_name.retired",
-  "mention.batch_linked", "mention.link_decided", "mention.relinked",
+  "mention.batch_linked", "mention.link_decided", "mention.relinked", "mention.agent_resolved", "question.agent_resolved",
   "identity.proposed", "identity.applied", "identity.rejected", "identity.reverted",
   "schema.change_proposed", "schema.change_decided", "schema.version_published",
   "glossary.term_created", "glossary.term_updated",

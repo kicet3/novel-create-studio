@@ -82,3 +82,31 @@ export const initialOntologySchema = z.object({
     .default([]),
 });
 export type InitialOntology = z.infer<typeof initialOntologySchema>;
+
+/**
+ * 설계 추가 0015: entity resolver decision per mention handle (M1 …), one call per batch. Entities are referenced by the
+ * handles of the prompt's entity list (E1 …). Relations are not decided here (open / untyped, validated elsewhere).
+ */
+export const ENTITY_RESOLUTION_ACTIONS = ["link_existing", "add_alias", "create_entity", "ignore", "merge", "keep_distinct"] as const;
+export type EntityResolutionAction = (typeof ENTITY_RESOLUTION_ACTIONS)[number];
+export const entityResolutionSchema = z.object({
+  resolutions: z
+    .array(
+      z.object({
+        mention: z.string().min(1),
+        action: z.enum(ENTITY_RESOLUTION_ACTIONS),
+        /** link_existing / add_alias target (E handle) */
+        entity: z.string().nullable().optional(),
+        /** create_entity: schema entity type key */
+        entity_type: z.string().nullable().optional(),
+        /** create_entity: canonical name (default: the surface) */
+        canonical_name: z.string().nullable().optional(),
+        /** merge: the entity to keep (E handle) */
+        merge_with: z.string().nullable().optional(),
+        confidence: z.number().min(0).max(1),
+        rationale: z.string().default(""),
+      }),
+    )
+    .default([]),
+});
+export type EntityResolution = z.infer<typeof entityResolutionSchema>;

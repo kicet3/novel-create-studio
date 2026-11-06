@@ -1,5 +1,5 @@
 /** drizzle access to the tables owned by `hitl`. Every novel-owned query filters by novel_id (03 T-3). */
-import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from "@ncs/db/orm";
+import { and, asc, desc, eq, gte, inArray, isNull, like, lte, or, sql } from "@ncs/db/orm";
 import {
   answerInterpretations,
   answerReflectionItems,
@@ -12,6 +12,7 @@ import {
   questionLinks,
   questionOptions,
   questions,
+  users,
 } from "@ncs/db/schema";
 import type { ApprovalStatus, ApprovalType, QuestionDeliveryState, QuestionStatus } from "@ncs/shared";
 import type { Db, NovelScope } from "../../../../platform/index.js";
@@ -27,6 +28,9 @@ export type AnswerSession = typeof answerSessions.$inferSelect;
 export type DigestBatch = typeof digestBatches.$inferSelect;
 
 const nq = (scope: NovelScope) => eq(questions.novelId, scope.novelId);
+
+/** 설계 추가 0015: cancelled_reason prefix of questions an agent closed without an answer */
+export const AGENT_CANCEL_PREFIX = "에이전트가 정리";
 
 export const hitlRepo = {
   // ── questions ──
@@ -211,6 +215,19 @@ export const hitlRepo = {
       .from(answerReflectionItems)
       .where(and(eq(answerReflectionItems.novelId, scope.novelId), eq(answerReflectionItems.reflectionId, reflectionId)))
       .orderBy(asc(answerReflectionItems.id)),
+  /** 설계 추가 0015: questions an agent closed since `since` (answered as agent_resolved, or cancelled with the agent reason) */
+  async countAgentResolved(db: Db, scope: NovelScope, since: Date): Promise<number> {
+    const [r] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(questions)
+      .where(and(nq(scope), gte(questions.updatedAt, since), or(eq(questions.resolutionSource, "agent_resolved"), and(eq(questions.status, "cancelled"), like(questions.cancelledReason, `${AGENT_CANCEL_PREFIX}%`)))));
+    return r?.n ?? 0;
+  },
+  /** the delegating author of agent decisions (answers.responder_user_id NOT NULL) — read in the caller's tx */
+  async ownerUserId(db: Db): Promise<string | null> {
+    const [u] = await db.select({ id: users.id }).from(users).where(eq(users.role, "owner")).orderBy(asc(users.createdAt)).limit(1);
+    return u?.id ?? null;
+  },
   async countPendingReflections(db: Db, scope: NovelScope): Promise<number> {
     const [r] = await db
       .select({ n: sql<number>`count(*)::int` })

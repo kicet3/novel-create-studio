@@ -387,6 +387,14 @@ export interface OntologyService extends OntologyRepository {
   approveCandidateFacts(tx: Tx, scope: NovelScope, factIds: string[], actor: ActorRef): Promise<{ promoted: number; held: string[]; heldReasons: Record<string, string> }>;
   /** facts by id (any status) rendered like getCanonAt */
   getFactsByIds(scope: NovelScope, factIds: string[], tx?: Tx): Promise<FactAtAnchor[]>;
+
+  // ── 설계 추가 0015 (linking: 엔티티 판정 에이전트 메모리) ──
+  /** remember a surface as "not an entity" (glossary_terms category non_entity; idempotent per normalized key) */
+  recordNonEntitySurface(tx: Tx, scope: NovelScope, surface: string, actor: ActorRef, note?: string): Promise<{ termId: string; created: boolean } | null>;
+  /** normalized keys remembered as not an entity */
+  listNonEntitySurfaces(scope: NovelScope, tx?: Tx): Promise<string[]>;
+  /** live entities with a (non-retired, non-hidden) name of exactly this normalized key — readable inside a commit */
+  findExactNamedEntities(scope: NovelScope, surface: string, opts?: { entityType?: string }, tx?: Tx): Promise<Array<{ entityId: string; entityType: string; status: string; nameId: string }>>;
 }
 
 export type { OntologyModuleDeps } from "./module.js";

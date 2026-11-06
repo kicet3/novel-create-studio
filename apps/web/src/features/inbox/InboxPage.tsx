@@ -4,10 +4,11 @@ import { labelKo, type HitlApprovalDto, type HitlQuestionDto } from "@ncs/shared
 import { useNovelId } from "../../app/novel-context.js";
 import { PageHeader } from "../../components/layout/PageHeader.js";
 import { novelPath } from "../../components/layout/nav.js";
-import { Badge, Checkbox, Dialog, EmptyState, formatRelative, Kbd, QueryView, Split, StatusBadge } from "../../components/ui/index.js";
+import { Badge, Button, Checkbox, Dialog, EmptyState, formatRelative, Kbd, QueryView, Split, StatusBadge } from "../../components/ui/index.js";
+import { errorMessage } from "../../api/client.js";
 import { cx } from "../../lib/cx.js";
 import { useNovel } from "../novels/api.js";
-import { CLOSED_STATUSES, OPEN_STATUSES, useInboxSummary, usePendingApprovals, useQuestions, useQuestionView } from "./api.js";
+import { CLOSED_STATUSES, OPEN_STATUSES, useEntityBacklog, useInboxSummary, usePendingApprovals, useQuestions, useQuestionView, useResolveEntityBacklog } from "./api.js";
 import { QuestionDetail, type QuestionDetailHandle } from "./QuestionDetail.js";
 
 interface Group {
@@ -55,6 +56,10 @@ export function InboxPage() {
   const view = useQuestionView(novelId, questionId);
   const detailRef = useRef<QuestionDetailHandle>(null);
   const tz = novel.data?.timezone;
+  // 설계 추가 0015: entity questions the resolver agent can clean up
+  const cleanup = useResolveEntityBacklog(novelId);
+  const backlog = useEntityBacklog(novelId);
+  const resolvable = backlog.data?.openQuestions ?? 0;
 
   const approvalByQ = useMemo(() => {
     const m = new Map<string, HitlApprovalDto>();
@@ -112,6 +117,16 @@ export function InboxPage() {
         actions={
           <>
             {novel.data && <StatusBadge enum="autonomy_level" value={novel.data.autonomyLevel} />}
+            {resolvable > 0 && (
+              <Button
+                size="sm"
+                loading={cleanup.isPending}
+                title="열린 엔티티 판별·중복 질문을 판정 에이전트가 문맥으로 판단해 처리합니다. 확신이 낮은 질문은 그대로 남깁니다."
+                onClick={() => cleanup.mutate()}
+              >
+                에이전트가 정리 ({resolvable})
+              </Button>
+            )}
             <button type="button" className="text-xs text-muted underline" onClick={() => setHelp(true)}>
               단축키 <Kbd>?</Kbd>
             </button>
@@ -138,6 +153,13 @@ export function InboxPage() {
             </Badge>
           )}
           {s.earliestDeadlineAt && <span className="text-xs text-muted">가장 이른 마감 {formatRelative(s.earliestDeadlineAt)}</span>}
+          {(s.agentResolved ?? 0) > 0 && (
+            <span className="text-xs text-muted">
+              에이전트가 처리한 질문 {s.agentResolved}건(7일) · <Link to={novelPath(novelId, "audit?actionPrefix=question.agent_resolved")}>감사 타임라인 보기</Link>
+            </span>
+          )}
+          {cleanup.isSuccess && <span className="text-xs text-muted">{cleanup.data.created ? "정리 작업을 시작했습니다." : "이미 정리 작업이 진행 중입니다."}</span>}
+          {cleanup.error && <span className="text-xs text-danger">{errorMessage(cleanup.error)}</span>}
           <Checkbox className="ml-auto" label="답변 완료 보기" checked={showClosed} onChange={(e) => setShowClosed(e.target.checked)} />
         </div>
       )}

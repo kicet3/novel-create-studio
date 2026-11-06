@@ -78,6 +78,8 @@ export const hitlQuestionDtoSchema = z.object({
   acceptedAnswerId: z.string().nullable(),
   resolutionSource: z.enum(ENUMS.resolution_source).nullable(),
   sensitivity: z.enum(ENUMS.question_sensitivity).default("normal"),
+  /** agent role that asked (null = system / user) — 설계 추가 0015: the inbox offers "에이전트가 정리" for world_keeper questions */
+  askedByRole: z.string().nullable().default(null),
   sentAt: isoDateTime.nullable(),
   answeredAt: isoDateTime.nullable(),
   resolvedAt: isoDateTime.nullable(),
@@ -174,5 +176,7 @@ export const hitlInboxSummarySchema = z.object({
   pending: z.number().int(),
   lateAnswers: z.number().int(),
   pendingReflections: z.number().int(),
+  /** 설계 추가 0015: 최근 7일 동안 엔티티 판정 에이전트가 처리한 질문 수 */
+  agentResolved: z.number().int().default(0),
 });
 export type HitlInboxSummary = z.infer<typeof hitlInboxSummarySchema>;

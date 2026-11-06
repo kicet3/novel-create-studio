@@ -140,6 +140,11 @@ export const DEFAULT_DEFS = {
   "linking.report_hold_digest_days": d(3, "calibrated"),
   "linking.no_name_match_top_n": d(4, "calibrated"),
   "linking.hidden_variant_rule_score_cap": d(0.7, "calibrated"),
+  /** 설계 추가 0015: 엔티티 판정 에이전트(작품 설정 novels.entity_agent_resolution / entity_agent_min_confidence의 기본값) */
+  "linking.agent_resolution": d(true, "novel"),
+  "linking.agent_resolution_min_confidence": d(0.75, "novel"),
+  /** 판정 에이전트 LLM 호출 1회에 넣는 표기 묶음 상한 */
+  "linking.agent_resolution_batch_max": d(60, "system"),
   "dedup.similar_entity_min_score": d(0.75, "calibrated"),
   "dedup.short_name_max_syllables": d(3, "calibrated"),
   "dedup.equivalence_check_top_k": d(8, "calibrated"),

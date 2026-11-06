@@ -93,7 +93,11 @@ describe("questions", () => {
   it("sensitivity: hold topics, always-human topics and bases, canon / fate / ending hints and agent-raised → high", () => {
     expect(questionSensitivity({ topic: "creative_choice", basis: "none" })).toBe("normal");
     expect(questionSensitivity({ topic: "creative_choice", basis: "arc_goal" })).toBe("normal");
-    expect(questionSensitivity({ topic: "duplicate_entity", basis: "none" })).toBe("high");
+    expect(questionSensitivity({ topic: "identity_change", basis: "none" })).toBe("high");
+    expect(questionSensitivity({ topic: "interpretation_confirm", basis: "none" })).toBe("high");
+    // 설계 추가 0015: entity link decisions are normal (the autopilot may answer them with the recommendation)
+    expect(questionSensitivity({ topic: "duplicate_entity", basis: "none" })).toBe("normal");
+    expect(questionSensitivity({ topic: "entity_disambiguation", basis: "none" })).toBe("normal");
     expect(questionSensitivity({ topic: "retcon", basis: "published_canon" })).toBe("high");
     expect(questionSensitivity({ topic: "character_fate", basis: "major_character_fate" })).toBe("high");
     expect(questionSensitivity({ topic: "creative_choice", basis: "none", hints: { touchesApprovedCanon: true } })).toBe("high");
