@@ -166,7 +166,21 @@ export function createSystemService(deps: SystemServiceDeps): SystemService & { 
       }
       return results;
     },
-    latestHealthResults: (opts = {}) => healthRepo.latest(platform.uow.db, opts.novelId),
+    // Only results of checks that still apply: a stored result for a check that is no longer registered (removed
+    // provider) or no longer active (e.g. llm.anthropic after the default switched to the Claude subscription) is
+    // stale — runHealthChecks skips it, so it would otherwise keep showing its last (possibly failed) state forever.
+    async latestHealthResults(opts = {}) {
+      const rows = await healthRepo.latest(platform.uow.db, opts.novelId);
+      const active = new Map<string, boolean>();
+      const out: HealthCheckResult[] = [];
+      for (const r of rows) {
+        const c = checks.get(r.name);
+        if (!c) continue;
+        if (!active.has(c.name)) active.set(c.name, c.isActive ? await c.isActive().catch(() => true) : true);
+        if (active.get(c.name)) out.push(r);
+      }
+      return out;
+    },
     info: () => ({
       version: platform.appVersion,
       deploymentMode: platform.config.deployment_mode,

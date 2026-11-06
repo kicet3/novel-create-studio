@@ -123,4 +123,15 @@ describe("system module", () => {
     expect(http.body.checks.map((c: { name: string }) => c.name)).toEqual(expect.arrayContaining(["database", "storage", "test.flaky"]));
     expect((await t.http("GET", "/api/system/info")).body.deploymentMode).toBe("local_trusted");
   });
+
+  it("hides stale results of checks that are no longer active (e.g. llm.anthropic after switching to the subscription)", async () => {
+    const sys = t.modules.system.service;
+    let active = true;
+    sys.registerHealthCheck({ name: "test.toggled", kind: "llm_key", scope: "install", isActive: async () => active, run: async () => ({ status: "fail", message: "키 없음" }) });
+    await sys.runHealthChecks({ names: ["test.toggled"] });
+    expect((await sys.latestHealthResults()).find((r) => r.name === "test.toggled")?.status).toBe("fail");
+    active = false;
+    expect((await sys.latestHealthResults()).find((r) => r.name === "test.toggled")).toBeUndefined();
+    expect((await t.http("GET", "/api/system/health-checks")).body.items.some((r: { name: string }) => r.name === "test.toggled")).toBe(false);
+  });
 });
