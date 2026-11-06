@@ -7,6 +7,7 @@
  *   t.claude.reply({ when: { schemaHas: ["episodes"] }, json: { title: "1부", ... } });
  *   t.claude.reply({ when: { system: /초고/ }, text: "본문…" });
  *   t.claude.reply({ error: { status: 529 } });             // next request (any) fails once
+ *   t.claude.reply({ json: {...}, chunkSize: 8, chunkDelayMs: 20 }); // streamed in several text deltas
  *
  * Matching: scripts are tried in the order they were added; the first unexhausted one whose `when`
  * matches is used (`times` defaults to 1; `Infinity` = sticky).
@@ -58,6 +59,10 @@ export interface ClaudeScript {
   hang?: boolean;
   /** delay before answering (ms) */
   delayMs?: number;
+  /** stream the text as several `text_delta` events of this many characters (default: one delta) */
+  chunkSize?: number;
+  /** pause between streamed chunks (ms) */
+  chunkDelayMs?: number;
   usage?: { input_tokens?: number; output_tokens?: number };
 }
 
@@ -131,7 +136,7 @@ function decode(body: Record<string, unknown>, headers: IncomingMessage["headers
 
 let msgSeq = 0;
 
-function writeMessage(res: ServerResponse, r: ClaudeRequest, text: string, s: ClaudeScript) {
+async function writeMessage(res: ServerResponse, r: ClaudeRequest, text: string, s: ClaudeScript) {
   const id = `msg_scripted_${++msgSeq}`;
   res.writeHead(200, { "content-type": "text/event-stream", "request-id": `req_scripted_${msgSeq}` });
   const ev = (type: string, data: unknown) => res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -142,7 +147,13 @@ function writeMessage(res: ServerResponse, r: ClaudeRequest, text: string, s: Cl
     message: { id, type: "message", role: "assistant", model: r.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: inputTokens, output_tokens: 1 } },
   });
   ev("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
-  if (text) ev("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } });
+  const size = s.chunkSize && s.chunkSize > 0 ? s.chunkSize : Math.max(1, text.length);
+  const chars = [...text]; // never split a surrogate pair
+  for (let i = 0; i < chars.length; i += size) {
+    if (i > 0 && s.chunkDelayMs) await new Promise((ok) => setTimeout(ok, s.chunkDelayMs));
+    if (res.destroyed) return;
+    ev("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: chars.slice(i, i + size).join("") } });
+  }
   ev("content_block_stop", { type: "content_block_stop", index: 0 });
   ev("message_delta", { type: "message_delta", delta: { stop_reason: s.stop ?? "end_turn", stop_sequence: null }, usage: { output_tokens: outputTokens } });
   ev("message_stop", { type: "message_stop" });
@@ -189,7 +200,7 @@ export async function startScriptedClaude(): Promise<ScriptedClaude> {
     }
     const json = typeof s.json === "function" ? (s.json as (r: ClaudeRequest) => unknown)(r) : s.json;
     const text = s.text !== undefined ? (typeof s.text === "function" ? s.text(r) : s.text) : json !== undefined ? JSON.stringify(json) : "";
-    writeMessage(res, r, text, s);
+    await writeMessage(res, r, text, s);
   };
 
   const server: Server = createServer((req, res) => {

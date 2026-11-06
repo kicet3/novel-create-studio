@@ -14,6 +14,7 @@ import { useInvalidateNovel, useNovel } from "../novels/api.js";
 import { WorkingTitleBar } from "./WorkingTitleBar.js";
 import { BriefPanel } from "./BriefPanel.js";
 import { ChatPanel } from "./ChatPanel.js";
+import { ConceptModelPicker } from "./ConceptModelPicker.js";
 import {
   useAbandonSession,
   useConceptMessages,
@@ -161,6 +162,7 @@ function ConceptBody({ novelId, novel, view }: { novelId: string; novel?: NovelD
         }
         actions={
           <>
+            {(s.status === "active" || s.status === "paused") && !s.llmDisabled && <ConceptModelPicker novelId={novelId} busy={s.inFlightTaskId !== null} />}
             <StatusBadge enum="concept_session_status" value={s.status} />
             {s.status === "active" && (
               <Button onClick={() => cmd.mutate("pause")} loading={cmd.isPending && cmd.variables === "pause"}>

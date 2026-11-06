@@ -1,13 +1,14 @@
 /** llm tables: provider_profiles, role_model_bindings, provider_calls (drizzle). Novel-owned queries always filter novel_id (T-3). */
-import { and, asc, desc, eq, inArray, like, ne, sql } from "@ncs/db/orm";
-import { providerCalls, providerProfiles, roleModelBindings, type ProviderCallsInsert } from "@ncs/db/schema";
+import { and, asc, desc, eq, inArray, like, or, sql } from "@ncs/db/orm";
+import { providerCalls, providerProfiles, roleModelBindings, roleModelDefaults, type ProviderCallsInsert, type RoleModelDefaultsRow } from "@ncs/db/schema";
 import type { AgentRole, ProviderCallStatus } from "@ncs/shared";
 import type { Db, NovelScope } from "../../../../platform/index.js";
 import type { ProviderCall, ProviderProfile, RoleModelBinding } from "../../index.js";
 
 export const llmRepo = {
-  async getProfile(db: Db, id: string): Promise<ProviderProfile | null> {
-    const [p] = await db.select().from(providerProfiles).where(eq(providerProfiles.id, id)).limit(1);
+  async getProfile(db: Db, id: string, forUpdate = false): Promise<ProviderProfile | null> {
+    const q = db.select().from(providerProfiles).where(eq(providerProfiles.id, id)).limit(1);
+    const [p] = forUpdate ? await q.for("update") : await q;
     return p ?? null;
   },
 
@@ -44,6 +45,38 @@ export const llmRepo = {
       .set({ providerProfileId: toProfileId, updatedAt: now })
       .where(eq(roleModelBindings.providerProfileId, fromProfileId))
       .returning({ id: roleModelBindings.id });
+    return rows.length;
+  },
+
+  /** install-level (every novel): bindings on `profileId` whose model or fallback model is one of `modelIds` */
+  async bindingsUsingModels(db: Db, profileId: string, modelIds: readonly string[]): Promise<RoleModelBinding[]> {
+    if (!modelIds.length) return [];
+    return db
+      .select()
+      .from(roleModelBindings)
+      .where(
+        and(
+          eq(roleModelBindings.providerProfileId, profileId),
+          or(inArray(roleModelBindings.modelId, [...modelIds]), inArray(roleModelBindings.fallbackModelId, [...modelIds])),
+        ),
+      )
+      .orderBy(asc(roleModelBindings.novelId), asc(roleModelBindings.agentRole));
+  },
+
+  // ── role_model_defaults (install level) ──
+  async listRoleDefaults(db: Db): Promise<RoleModelDefaultsRow[]> {
+    return db.select().from(roleModelDefaults).orderBy(asc(roleModelDefaults.agentRole));
+  },
+
+  async upsertRoleDefault(db: Db, row: { agentRole: AgentRole; provider: string; modelId: string }, now: Date): Promise<void> {
+    await db
+      .insert(roleModelDefaults)
+      .values({ ...row, createdAt: now, updatedAt: now })
+      .onConflictDoUpdate({ target: roleModelDefaults.agentRole, set: { provider: row.provider, modelId: row.modelId, updatedAt: now } });
+  },
+
+  async deleteRoleDefaults(db: Db, role?: AgentRole): Promise<number> {
+    const rows = await (role ? db.delete(roleModelDefaults).where(eq(roleModelDefaults.agentRole, role)) : db.delete(roleModelDefaults)).returning({ r: roleModelDefaults.agentRole });
     return rows.length;
   },
 

@@ -26,8 +26,40 @@
   → invoke → P3 responded + settle / P4 failed + release / P5 unknown + closeUnknown (timeout, interrupted) /
   P6 abandoned (stop before sending) / P7 responded_late; zod validation + repair retry (RU-4); backoff retry for
   `rate_limited`/`provider_unavailable`; one safety-reinforced retry for `content_filtered`.
-- RoleModelBinding CRUD (`model_binding.changed`) — a role may point at ANY active provider profile;
-  ProviderProfile edit (`provider_profile.changed`, install level).
+- Optional live output (설계 추가: 스트리밍): `ModelCallInput.onStream` / `LlmInvokeOptions.onStream` receive
+  `delta {text}` (raw output text; JSON text for object outputs) and `reset`. The gateway streams every attempt and
+  emits `reset` before a retry/repair attempt and when the call finally fails (redundant resets collapsed; a throwing
+  callback never breaks the call). The returned, zod-validated value stays the only result. Adapters:
+  `anthropic` forwards the SDK stream's events (`adapters/shared/stream-relay.ts`); `claude_code` switches to
+  `--output-format stream-json --include-partial-messages --verbose` only when `onStream` is given (text blocks, or the
+  `StructuredOutput` tool's `input_json_delta` with `--json-schema`; a second tool block/message → `reset`) and maps
+  the final `result` line exactly like `--output-format json`; `openai` / `xai` / `google` do not stream (no deltas).
+- RoleModelBinding CRUD (`model_binding.changed`) — a role may point at an active provider profile of a CONNECTED provider
+  (`providers.isCallProviderConnected`; checked before the transaction because secrets read `uow.db`), at a model the
+  profile lists and has not switched off. Errors: 422 `model_not_in_profile` / `model_disabled` / `provider_not_connected`
+  / `provider_profile_inactive` / `oauth_dev_only` (claude_code outside dev mode). Only a change of profile or model is
+  checked against the connection (a max-token edit on an unconnected provider still works).
+- ProviderProfile edit (`provider_profile.changed`, install level). Model-list edits (install settings → 모델 관리,
+  `domain/model-catalog.ts`): add / edit (label, prices, limits, `disabled`) / remove / reset to the built-in list. Each is
+  a NEW profile version (old row deactivated and never edited; bindings repointed; audit `details.op`). Removing or
+  switching off a model a binding (model or fallback, any novel) or a 새 작품 기본 모델 uses → 409 `model_in_use`
+  (`details.usage[]`: novel id/title, role, asFallback, default roles); a stale (replaced) profile id → 409
+  `profile_outdated`. Unpriced models (null prices) keep the budget's `unpriced` confirmation.
+- Provider model catalogs (`adapters/catalog/list-models.ts`, fetch): Anthropic / OpenAI / xAI `GET /v1/models`, Gemini
+  `GET /v1beta/models` — only with an API-key connection (422 `model_list_unavailable`; upstream failure 502
+  `model_list_failed`). `claude_code` answers a fixed list (`claudeCliKnownModels`: the 5.5 ids + the aliases
+  `opus`/`sonnet`/`fable` that `claude --help` documents for `--model`); the CLI is never run for it.
+- 새 작품 기본 모델 (`role_model_defaults`, migration 0007, install level): provider + model per role. N1
+  (`createDefaultBindings`) uses a role's default when the provider is callable here, connected right now (read before
+  the creation transaction by the participant's `prepare` → `roleDefaultConnections`; `listRoleDefaults.usable` says
+  the same) and its active profile lists the model switched on; otherwise the install default provider's built-in model (`resolveRoleModel`: the tier default, or
+  the profile's first enabled model when the user removed / switched it off). Setting a default is validated like a
+  binding; audit `settings.changed` (`target settings:llm.role_model_defaults`).
+- Profile PATCH guards: models / price source on an inactive (old) version → 409 `profile_outdated` (history is never
+  edited), re-activating an old version beside the active one → 409, `isActive:false` on a profile a binding / default
+  uses → 409 `model_in_use`. Model edits and binding changes lock the profile row (`FOR UPDATE`, order profile →
+  binding). A binding PATCH that switches the model without `maxOutputTokens` clamps the role's limit to the new
+  model's cap; a limit-only PATCH does not re-validate the (unchanged) profile.
 - For other modules calling provider APIs outside the gateway (module `imaging`): `resolveCredential(provider)` (active
   method, OAuth refreshed; never log it) and `ensureImageProviderProfile(provider, models, url)` (`provider_kind='image'`).
 - health checks `llm_key`: `llm.<default provider>` always, `llm.<other>` while that provider is connected
@@ -70,7 +102,8 @@ move to the `claude_code` profile (`rebindUnconnectedTo`, profiles stay active);
 call (e.g. a provider this version no longer ships) are moved to the default provider on boot.
 No connection → calls fail with `auth_failed`, the provider's `llm_key` health check fails.
 
-Default models: showrunner/planner/writer `claude-opus-5-5`, others `claude-sonnet-5-5`; prices (micro-USD/MTok):
+Built-in default models (no 새 작품 기본 모델 set): every role `claude-opus-5-5` on Claude (other providers: premium tier for
+showrunner/planner/writer, standard tier for the rest — `PROVIDER_ROLE_DEFAULTS`); prices (micro-USD/MTok):
 Opus 5.5 4,000,000 / 20,000,000, Sonnet 5.5 2,000,000 / 10,000,000, Haiku 5.5 100,000 / 500,000.
 
 ## Calling an LLM from a task handler
@@ -96,7 +129,7 @@ If validation fails the gateway retries with the zod errors appended (up to `llm
 `ModelCallError("invalid_output")`.
 
 ## Owned tables (`@ncs/db/schema/llm.ts`)
-- provider_profiles, role_model_bindings, provider_calls
+- provider_profiles, role_model_bindings, provider_calls, role_model_defaults (0007)
   (`idempotency_key = <taskId>:<runId>:<seq>` — RU-2 reuse looks up the same task's responded calls by request hash)
 
 ## Depends on (via their `index.ts` only)
@@ -110,7 +143,12 @@ If validation fails the gateway retries with the zod errors appended (up to `llm
 - `DELETE /api/providers/:provider/connection?method=` (`claude_cli`: switch off in the app) · `POST /api/providers/:provider/test` `{modelId?, method?}` (`anthropic` + `claude_cli` → tests `claude_code`)
 - `POST /api/providers/:provider/oauth` `{flow: "browser"|"device"}` → 201 session · `GET|DELETE /api/providers/:provider/oauth/:sessionId`
 - `POST /api/providers/openai/import-codex` (one-time copy of `$CODEX_HOME/auth.json`)
-- `GET /api/llm/provider-profiles` → `{items}` · `PATCH /api/llm/provider-profiles/:profileId` (`llmUpdateProviderProfileRequestSchema`)
+- `GET /api/llm/provider-profiles` → `{items}` · `PATCH /api/llm/provider-profiles/:profileId` (`llmUpdateProviderProfileRequestSchema`; same in-use guard)
+- `POST /api/llm/provider-profiles/:profileId/models` (`llmAddModelRequestSchema`) → 201 new version · `PATCH|DELETE …/models/:modelId`
+  (`llmEditModelRequestSchema`) · `POST …/reset-models` — all answer the new active profile version
+- `GET /api/llm/providers/:provider/available-models` → `llmAvailableModelsSchema` (`provider` incl. `claude_code`)
+- `GET /api/llm/role-defaults` → `{items: RoleModelDefaultDto[]}` (10 roles, `source` custom|builtin, `usable`) ·
+  `PUT /api/llm/role-defaults` `{items:[{agentRole, provider, modelId}]}` · `DELETE /api/llm/role-defaults?role=` (all when omitted)
 - `POST /api/llm/test` `{provider?, modelId?}` → `llmTestResponseSchema`
 - `GET …/model-bindings` → `{items}` · `PATCH …/model-bindings/:role` (`updateRoleModelBindingRequestSchema`, 422 for unknown model / too many tokens)
 - `GET …/runs/:runId/provider-calls` → `{items}`

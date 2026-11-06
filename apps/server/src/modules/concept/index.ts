@@ -35,6 +35,11 @@ export interface PostMessageInput {
   channelId: string;
   /** messenger_inbox id / web request key for idempotent replays */
   sourceKey?: string;
+  /**
+   * web chat: reject (409 `concept_turn_in_flight`) while an agent turn of the session is still queued/running.
+   * Messenger messages keep the X-7 behavior (queued, the running turn's reply is marked superseded).
+   */
+  rejectWhileTurnInFlight?: boolean;
 }
 
 export interface ConceptService {
@@ -77,6 +82,13 @@ export interface ConceptService {
   requestTitleSuggestions(scope: NovelScope, sessionId: string, actor: ActorRef): Promise<{ taskId: string }>;
   /** 설계 추가: the user picks/edits a (suggested) title → brief `title` (user_edited) + novel title_source=user */
   chooseTitle(scope: NovelScope, sessionId: string, title: string, actor: ActorRef): Promise<ConceptSession>;
+  /** 설계 추가 (답변 스트리밍): id of the session's agent turn/import task while it is still queued or running, else null */
+  inFlightTurnTaskId(scope: NovelScope, sessionId: string): Promise<string | null>;
+  /**
+   * 설계 추가: "답변 멈추기" — cancels the in-flight turn (a running one is dropped at its next safe point, before its
+   * commit), clears `inFlightTaskId` and leaves a notice. Unprocessed user messages stay for the next turn. Idempotent.
+   */
+  stopTurn(scope: NovelScope, sessionId: string, actor: ActorRef): Promise<ConceptSession>;
   /** 3.9 idle reminder (48h) / paused(idle) after 14 days — run by the `concept.idle_sweeper` loop */
   sweepIdle(now?: Date): Promise<{ reminded: number; paused: number }>;
 }

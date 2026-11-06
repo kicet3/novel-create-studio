@@ -19,6 +19,7 @@ import {
   type LlmMessage,
   type LlmRequest,
   type LlmResult,
+  type LlmStreamEvent,
   type LlmUsage,
   type ModelCallInput,
   type ModelCallOutput,
@@ -164,6 +165,43 @@ function isRerunOf(run: RunHandle): boolean {
   return run.rerunOfRunId != null || (run.runChain?.length ?? 0) > 0;
 }
 
+interface LiveStream {
+  /** adapter hook (undefined when the caller does not stream) */
+  sink?: (ev: LlmStreamEvent) => void;
+  /** emit `reset` once if anything was streamed since the last reset */
+  reset(): void;
+}
+
+/** wraps the caller's stream callback: never throws into the adapter, collapses redundant resets */
+function liveStream(onStream: ((ev: LlmStreamEvent) => void) | undefined): LiveStream {
+  if (!onStream) return { reset() {} };
+  let dirty = false;
+  const emit = (ev: LlmStreamEvent) => {
+    try {
+      onStream(ev);
+    } catch {
+      /* display-only hook */
+    }
+  };
+  return {
+    sink(ev) {
+      if (ev.type === "delta") {
+        if (!ev.text) return;
+        dirty = true;
+        emit(ev);
+      } else if (dirty) {
+        dirty = false;
+        emit(ev);
+      }
+    },
+    reset() {
+      if (!dirty) return;
+      dirty = false;
+      emit({ type: "reset" });
+    },
+  };
+}
+
 export function createLlmGateway(deps: GatewayDeps): ModelCallPort & { readonly budgetUnavailable: boolean } {
   const { platform } = deps;
   const { uow, clock, ids, log, config } = platform;
@@ -200,6 +238,7 @@ export function createLlmGateway(deps: GatewayDeps): ModelCallPort & { readonly 
     req: LlmRequest,
     hash: string,
     retryOf: string | null,
+    onStream?: (ev: LlmStreamEvent) => void,
   ): Promise<Attempt | { ok: false; call: ProviderCall | null; result: Extract<LlmResult, { ok: false }> }> {
     const model = findModel(profile.models, req.modelId);
     const inputEstimate = estimateTokens(req.system + "\n" + req.messages.map((m) => m.content).join("\n"));
@@ -234,7 +273,7 @@ export function createLlmGateway(deps: GatewayDeps): ModelCallPort & { readonly 
       }
       let r: LlmResult;
       try {
-        r = await adapter.invoke(req, { apiKey, credential, signal: run.signal, timeoutMs });
+        r = await adapter.invoke(req, { apiKey, credential, signal: run.signal, timeoutMs, ...(onStream ? { onStream } : {}) });
       } finally {
         limiter?.release();
       }
@@ -276,7 +315,7 @@ export function createLlmGateway(deps: GatewayDeps): ModelCallPort & { readonly 
       if (err instanceof NotImplementedError) {
         if (!budgetUnavailable) log.warn("budget module not implemented — LLM calls run WITHOUT provider_calls journaling / reservations");
         budgetUnavailable = true;
-        return attemptOnce(run, scope, profile, adapter, req, hash, retryOf);
+        return attemptOnce(run, scope, profile, adapter, req, hash, retryOf, onStream);
       }
       throw err;
     }
@@ -312,7 +351,7 @@ export function createLlmGateway(deps: GatewayDeps): ModelCallPort & { readonly 
       });
       if (!sent) throw new ModelCallError("internal", prepared.id, undefined, "호출 기록 상태가 바뀌어 발송하지 않았습니다.");
       try {
-        r = await adapter.invoke(req, { apiKey, credential, signal: run.signal, timeoutMs, idempotencyKey: sent.idempotencyKey });
+        r = await adapter.invoke(req, { apiKey, credential, signal: run.signal, timeoutMs, idempotencyKey: sent.idempotencyKey, ...(onStream ? { onStream } : {}) });
       } catch (err) {
         r = { ok: false, errorFamily: run.signal.aborted ? "timeout" : "internal", message: (err as Error).message, billed: "unknown" };
       }
@@ -392,6 +431,16 @@ export function createLlmGateway(deps: GatewayDeps): ModelCallPort & { readonly 
   }
 
   async function call<T>(input: ModelCallInput<T>): Promise<ModelCallOutput<T>> {
+    const live = liveStream(input.onStream);
+    try {
+      return await callInner(input, live);
+    } catch (err) {
+      live.reset(); // the call failed: nothing streamed so far is a result
+      throw err;
+    }
+  }
+
+  async function callInner<T>(input: ModelCallInput<T>, live: LiveStream): Promise<ModelCallOutput<T>> {
     const { run } = input;
     const scope: NovelScope = { novelId: run.novelId };
     const binding = await deps.getBinding(scope, run.role);
@@ -412,6 +461,7 @@ export function createLlmGateway(deps: GatewayDeps): ModelCallPort & { readonly 
     let lastCallId: string | null = null;
 
     for (;;) {
+      live.reset(); // a retry / repair attempt replaces whatever the previous attempt streamed
       const req: LlmRequest = {
         modelId: binding.modelId,
         system,
@@ -448,7 +498,7 @@ export function createLlmGateway(deps: GatewayDeps): ModelCallPort & { readonly 
       }
       if (!attempt) {
         try {
-          attempt = await attemptOnce(run, scope, profile, adapter, req, hash, lastCallId);
+          attempt = await attemptOnce(run, scope, profile, adapter, req, hash, lastCallId, live.sink);
         } catch (err) {
           if (err instanceof RunStop || err instanceof ModelCallError) throw err;
           throw new ModelCallError("internal", lastCallId, undefined, `LLM 호출 기록 중 오류: ${(err as Error).message}`);

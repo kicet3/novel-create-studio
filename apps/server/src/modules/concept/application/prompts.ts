@@ -9,7 +9,7 @@ import type { NextStep } from "../domain/next-question.js";
 import type { TurnMessage } from "../domain/turn.js";
 import type { LlmMessage } from "../../llm/index.js";
 
-export const TURN_TEMPLATE_ID = "concept_partner.concept_turn@0.1.0";
+export const TURN_TEMPLATE_ID = "concept_partner.concept_turn@0.1.1";
 export const IMPORT_TEMPLATE_ID = "concept_partner.import_concept@0.1.0";
 export const CHECK_TEMPLATE_ID = "continuity_editor.check_concept_brief@0.1.0";
 /** "다른 추천 받기" (concept_turn with input.titles=true) */
@@ -81,7 +81,7 @@ export function renderTurnPrompt(i: TurnPromptInput): { system: string; messages
     (i.brief.content.seed_notes ?? "(없음)").slice(0, 4000),
     "## S6 금지 목록·상한",
     s6 || "(없음)",
-    `reply_text는 ${i.maxReplyChars}자 이내. 출력은 ConceptTurnProposal JSON입니다.`,
+    `reply_text는 ${i.maxReplyChars}자 이내. 출력은 ConceptTurnProposal JSON이며, 사용자에게 실시간으로 보여 주므로 JSON의 첫 키를 반드시 reply_text로 쓰세요.`,
   ]
     .filter(Boolean)
     .join("\n\n");

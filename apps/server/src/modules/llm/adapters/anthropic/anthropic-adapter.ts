@@ -18,6 +18,7 @@ import { transformJSONSchema } from "@anthropic-ai/sdk/lib/transform-json-schema
 import type { LlmAdapter, LlmCapabilities, LlmEnvironmentCheck, LlmInvokeOptions, LlmRequest, LlmResult, LlmUsage } from "../../index.js";
 import { classifyHttpError } from "../../domain/errors.js";
 import { MODEL_LIMITS } from "../../domain/pricing.js";
+import { createStreamRelay } from "../shared/stream-relay.js";
 
 /** models that accept the server-side refusal fallback ("default" form) on the Claude API */
 const FALLBACK_MODELS = new Set(["claude-opus-5-5", "claude-sonnet-5-5", "claude-opus-5", "claude-fable-5-1"]);
@@ -244,6 +245,11 @@ export class AnthropicLlmAdapter implements LlmAdapter {
         signal: ac.signal,
         headers: opts.idempotencyKey ? { "x-ncs-idempotency-key": opts.idempotencyKey } : undefined,
       });
+      if (opts.onStream) {
+        // live display only: text deltas (JSON text for object outputs); the result below is still finalMessage()
+        const relay = createStreamRelay("text", opts.onStream);
+        stream.on("streamEvent", (ev) => relay.push(ev));
+      }
       const msg = await stream.finalMessage();
       const text = messageText(msg);
       const finishReason = mapStop(msg.stop_reason);

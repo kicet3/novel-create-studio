@@ -66,7 +66,25 @@ function useConceptMutation<A, R>(novelId: string, fn: (a: A) => Promise<R>) {
 const base = (novelId: string, sessionId: string) => `/novels/${novelId}/concept/sessions/${sessionId}`;
 
 export function usePostConceptMessage(novelId: string, sessionId: string) {
-  return useConceptMutation(novelId, (body: ConceptPostMessageRequest) => api.post(`${base(novelId, sessionId)}/messages`, body));
+  const qc = useQueryClient();
+  const invalidateNovel = useInvalidateNovel(novelId);
+  const sessionKey = [...queryKeys.novel(novelId).concept(), "session"];
+  return useMutation({
+    mutationFn: (body: ConceptPostMessageRequest) => api.post<{ taskId?: string | null }>(`${base(novelId, sessionId)}/messages`, body),
+    onSuccess: (out) => {
+      // open the live reply stream right away (the polled view would show the in-flight task a moment later)
+      const taskId = out && typeof out === "object" ? out.taskId : null;
+      if (taskId) {
+        qc.setQueryData<ConceptSessionViewDto | null>(sessionKey, (v) => (v && v.session.id === sessionId && !v.session.inFlightTaskId ? { ...v, session: { ...v.session, inFlightTaskId: taskId } } : v));
+      }
+    },
+    onSettled: () => void invalidateNovel(),
+  });
+}
+
+/** "답변 멈추기": cancels the in-flight turn (the typed draft stays) */
+export function useStopTurn(novelId: string, sessionId: string) {
+  return useConceptMutation(novelId, () => api.post(`${base(novelId, sessionId)}/stop-turn`, {}));
 }
 
 export function useEditBrief(novelId: string, sessionId: string) {

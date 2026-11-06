@@ -1,5 +1,5 @@
 // Drizzle mirror of the SQL migrations (columns only — constraints, FKs and indexes live in SQL).
-// Owning module: llm (design/08 §2.3).
+// Owning module: llm (design/08 §2.3; role_model_defaults: 0007_role_model_defaults.sql).
 import { bigint, boolean, integer, jsonb, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 import { ENUMS } from "@ncs/shared/enums";
 
@@ -73,3 +73,17 @@ export const providerCalls = pgTable(
 );
 export type ProviderCallsRow = typeof providerCalls.$inferSelect;
 export type ProviderCallsInsert = typeof providerCalls.$inferInsert;
+
+/** role_model_defaults (0007): install-level default provider + model per agent role for NEW novels */
+export const roleModelDefaults = pgTable(
+  "role_model_defaults",
+  {
+    agentRole: text("agent_role", { enum: ENUMS.agent_role }).notNull().primaryKey(),
+    provider: text("provider").notNull(),
+    modelId: text("model_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+);
+export type RoleModelDefaultsRow = typeof roleModelDefaults.$inferSelect;
+export type RoleModelDefaultsInsert = typeof roleModelDefaults.$inferInsert;

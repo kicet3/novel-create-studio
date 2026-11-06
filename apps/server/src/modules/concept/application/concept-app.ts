@@ -18,7 +18,7 @@ import {
 } from "../../../platform/index.js";
 import type { AuditService } from "../../audit/index.js";
 import type { ApprovalDecisionContext, HitlService } from "../../hitl/index.js";
-import type { LlmService, ModelCallPort } from "../../llm/index.js";
+import type { LlmService, LlmStreamEvent, ModelCallPort } from "../../llm/index.js";
 import type { InboundAction, InboundContext, InboundResult, MessagingService } from "../../messaging/index.js";
 import type { NovelService } from "../../novel/index.js";
 import { ModelCallError } from "../../llm/index.js";
@@ -54,6 +54,8 @@ import type { SlotDiff, StoredOption } from "../domain/slot-guard.js";
 import { assertSessionTransition, assertStageTransition } from "../domain/transitions.js";
 import { planFieldEdit, planImport, planTurn, resolveOption, type PlanTurnOutput, type TurnLimits, type TurnMessage } from "../domain/turn.js";
 import { CHECK_TEMPLATE_ID, IMPORT_TEMPLATE_ID, TITLES_TEMPLATE_ID, TURN_TEMPLATE_ID, renderCheckPrompt, renderImportPrompt, renderTitlesPrompt, renderTurnPrompt } from "./prompts.js";
+import { createFieldStreamer } from "../domain/partial-json.js";
+import { createTurnStreamHub } from "./turn-stream.js";
 
 export interface ConceptAppDeps {
   platform: Platform;
@@ -119,6 +121,8 @@ export function createConceptApp(deps: ConceptAppDeps) {
   const { platform, audit, novel, orchestration, messaging } = deps;
   const { uow, ids, clock, log } = platform;
   const ports: ConceptPorts = { hitl: deps.hitl, modelCalls: () => deps.llm.modelCalls, lists: DEFAULT_SAFETY_LISTS };
+  /** live replies of in-flight concept turns (SSE route; 설계 추가: 답변 스트리밍) */
+  const streams = createTurnStreamHub();
   const orchestrator = actors.system("orchestrator");
   const target = (id: string) => ({ type: "concept_session" as const, id });
   const briefTarget = (id: string) => ({ type: "concept_brief" as const, id });
@@ -352,7 +356,14 @@ export function createConceptApp(deps: ConceptAppDeps) {
     }
   }
 
-  async function callModel<T>(ctx: TaskContext<unknown>, purpose: string, prompt: { system: string; messages: { role: "user" | "assistant"; content: string }[] }, schemaName: string, schema: z.ZodType<T>) {
+  async function callModel<T>(
+    ctx: TaskContext<unknown>,
+    purpose: string,
+    prompt: { system: string; messages: { role: "user" | "assistant"; content: string }[] },
+    schemaName: string,
+    schema: z.ZodType<T>,
+    onStream?: (ev: LlmStreamEvent) => void,
+  ) {
     try {
       const port = ports.modelCalls();
       if (!port || typeof (port as Partial<ModelCallPort>).call !== "function") return null;
@@ -363,6 +374,7 @@ export function createConceptApp(deps: ConceptAppDeps) {
         messages: prompt.messages,
         output: { kind: "object", schemaName, schema },
         maxOutputTokens: DEFAULTS["llm.max_output_tokens.concept_partner"],
+        ...(onStream ? { onStream } : {}),
       });
       const parsed = schema.safeParse(out.value);
       return { value: parsed.success ? parsed.data : null, costMicros: out.costMicros };
@@ -488,11 +500,30 @@ export function createConceptApp(deps: ConceptAppDeps) {
   }
 
   // ── task handlers ──────────────────────────────────────────────────────
+  /**
+   * A turn / import run that ended WITHOUT its commit (stopped at a safe point, commit rolled back, retry): the model
+   * cost it already spent still counts against the session budget; when the task is over (cancelled / failed) the
+   * session is no longer in flight; the live reply ends (`done` null) or, while the task runs again later, is reset.
+   */
+  async function runUncommitted(tx: Tx, ctx: TaskContext<{ session_id: string }>, costMicros: number) {
+    const s = await repo.getSession(tx.db, ctx.scope, ctx.input.session_id, true);
+    if (!s) return;
+    const t = await orchestration.getTask(ctx.scope, ctx.task.id, tx).catch(() => null);
+    const over = !t || ["done", "failed", "cancelled"].includes(t.status);
+    const patch = {
+      ...(costMicros > 0 ? { spentMicros: s.spentMicros + costMicros } : {}),
+      ...(over && s.inFlightTaskId === ctx.task.id ? { inFlightTaskId: null } : {}),
+    };
+    if (Object.keys(patch).length) await repo.updateSession(tx.db, ctx.scope, s.id, patch);
+    tx.afterCommit(() => (over ? streams.done(s.id, ctx.task.id, null) : streams.abandon(s.id, ctx.task.id)));
+  }
+
   const turnHandler: TaskKindHandler<TurnInput, TurnProposal> = {
     kind: "concept_turn",
     role: "concept_partner",
     promptTemplateVersion: TURN_TEMPLATE_ID,
     inputSchema: z.object({ session_id: z.string(), resume: z.boolean().optional(), titles: z.boolean().optional() }),
+    onUncommitted: (tx, ctx, info) => runUncommitted(tx, ctx, info.proposal?.costMicros ?? 0),
     async execute(ctx) {
       if (ctx.input.titles) return executeTitles(ctx);
       const s = await mustSession(undefined, ctx.scope, ctx.input.session_id);
@@ -527,10 +558,23 @@ export function createConceptApp(deps: ConceptAppDeps) {
         ageCeiling: dry.brief.content.age_rating ?? "age_15",
         maxReplyChars: DEFAULTS["concept.reply_max_chars"],
       });
+      // live reply: the model writes ConceptTurnProposal JSON; only `reply_text` is shown while it streams
+      streams.begin(s.id, ctx.task.id);
+      const reply = createFieldStreamer("reply_text");
+      const onStream = (ev: LlmStreamEvent) => {
+        if (ev.type === "reset") {
+          reply.reset();
+          streams.reset(s.id, ctx.task.id);
+          return;
+        }
+        const add = reply.push(ev.text);
+        if (add) streams.delta(s.id, ctx.task.id, add);
+      };
       try {
-        const res = await callModel(ctx as TaskContext<unknown>, "concept_turn", prompt, "ConceptTurnProposal", conceptTurnProposalSchema);
+        const res = await callModel(ctx as TaskContext<unknown>, "concept_turn", prompt, "ConceptTurnProposal", conceptTurnProposalSchema, onStream);
         return { proposal: res?.value ?? null, costMicros: res?.costMicros ?? 0, observedMaxSeq };
       } catch (err) {
+        streams.reset(s.id, ctx.task.id);
         // X-8: last attempt → keep the session active and leave a retry notice (no blocking question)
         const retryable = err instanceof ModelCallError ? err.retryable : (err as { retryable?: boolean }).retryable !== false;
         if (!retryable || ctx.run.attempt >= ctx.task.maxAttempts) return { proposal: null, costMicros: 0, observedMaxSeq, failed: err instanceof Error ? err.message : String(err) };
@@ -544,11 +588,13 @@ export function createConceptApp(deps: ConceptAppDeps) {
       const clearInflight = s.inFlightTaskId === ctx.task.id ? { inFlightTaskId: null } : {};
       if (s.status !== "active") {
         await repo.updateSession(tx.db, scope, s.id, { ...clearInflight, spentMicros: s.spentMicros + p.costMicros });
+        tx.afterCommit(() => streams.done(s.id, ctx.task.id, null));
         return { kind: "done", outputRefs: [{ refType: "concept_session", refId: s.id }] };
       }
       if (p.failed) {
         await repo.updateSession(tx.db, scope, s.id, { ...clearInflight, spentMicros: s.spentMicros + p.costMicros });
         await notice(tx, scope, s, "응답을 만들지 못했습니다. [다시 시도]를 눌러 주세요.", [control("retry")]);
+        tx.afterCommit(() => streams.error(s.id, ctx.task.id, "응답을 만들지 못했습니다."));
         return { kind: "failed", reason: p.failed };
       }
       const b = parseWorkingBrief(s.workingBrief);
@@ -620,6 +666,7 @@ export function createConceptApp(deps: ConceptAppDeps) {
           tx.afterCommit(() => uow.run(async (tx2) => void (await enqueueTurn(tx2, scope, await mustSession(tx2, scope, s.id, true), newest.id, orchestrator))));
         } else await repo.updateSession(tx.db, scope, s.id, { inFlightTaskId: res.taskId });
       } else await deliver(tx, scope, s, msg);
+      tx.afterCommit(() => streams.done(s.id, ctx.task.id, msg.id));
       return { kind: "done", outputRefs: [{ refType: "concept_message", refId: msg.id }] };
     },
   };
@@ -656,6 +703,7 @@ export function createConceptApp(deps: ConceptAppDeps) {
     role: "concept_partner",
     promptTemplateVersion: IMPORT_TEMPLATE_ID,
     inputSchema: z.object({ session_id: z.string(), message_id: z.string() }),
+    onUncommitted: (tx, ctx, info) => runUncommitted(tx, ctx, info.proposal?.costMicros ?? 0),
     async execute(ctx) {
       const s = await mustSession(undefined, ctx.scope, ctx.input.session_id);
       const m = await repo.getMessage(uow.db, ctx.scope, ctx.input.message_id);
@@ -984,6 +1032,10 @@ export function createConceptApp(deps: ConceptAppDeps) {
       if (dup) return { message: dup, taskId: null };
     }
     if (TERMINAL.includes(s.status)) throw new InvalidStateError(s.status);
+    if (input.rejectWhileTurnInFlight && (await liveInFlightTask(tx, scope, s))) {
+      // web chat: one agent turn at a time (a second tab / double send must not race the running turn)
+      throw new ConflictError("concept_turn_in_flight", "컨셉 파트너가 답을 쓰는 중입니다. 답변이 끝난 뒤에 보내 주세요.", { inFlightTaskId: s.inFlightTaskId });
+    }
     if (s.status === "awaiting_approval") {
       await cancelPendingApproval(tx, scope, s, actor, "사용자가 대화를 이어 감");
       s = await transition(tx, scope, s, "active", "CS9", { pendingApprovalId: null }, actor);
@@ -1219,6 +1271,35 @@ export function createConceptApp(deps: ConceptAppDeps) {
       return changeStage(tx, scope, s, stage, actor);
     },
 
+    async inFlightTurnTaskId(scope, sessionId) {
+      return liveInFlightTask(undefined, scope, await mustSession(undefined, scope, sessionId));
+    },
+
+    stopTurn(scope, sessionId, actor) {
+      return uow.run(async (tx) => {
+        // lock order task → session, like the engine's commit (task fenced FOR UPDATE, then the handler locks the session)
+        const peek = await mustSession(tx, scope, sessionId);
+        if (!peek.inFlightTaskId) return peek;
+        let taskId = await liveInFlightTask(tx, scope, peek);
+        // running → cancel_requested; the engine drops the turn at its next safe point or at the commit (never both a
+        // stop notice and a reply); queued → cancelled now
+        if (taskId) {
+          try {
+            await orchestration.cancelTask(tx, scope, taskId, actor);
+          } catch (err) {
+            if (!(err instanceof ConflictError)) throw err;
+            taskId = null; // finished meanwhile (its commit won the race)
+          }
+        }
+        const s = await mustSession(tx, scope, sessionId, true);
+        if (s.inFlightTaskId !== peek.inFlightTaskId) return s; // a commit or a new turn changed it meanwhile
+        await repo.updateSession(tx.db, scope, s.id, { inFlightTaskId: null });
+        if (taskId) await notice(tx, scope, s, "답변을 멈췄습니다. 메시지를 보내면 앞의 메시지까지 함께 보고 다시 답합니다.");
+        tx.afterCommit(() => streams.done(s.id, taskId, null));
+        return mustSession(tx, scope, s.id);
+      });
+    },
+
     pauseSession(scope, sessionId, reason, actor) {
       return uow.run(async (tx) => {
         const s = await mustSession(tx, scope, sessionId, true);
@@ -1443,6 +1524,13 @@ export function createConceptApp(deps: ConceptAppDeps) {
     },
   };
 
+  /** the session's in-flight task id when that task is still queued/running (a stale id of a finished task → null) */
+  async function liveInFlightTask(tx: Tx | undefined, scope: NovelScope, s: ConceptSession): Promise<string | null> {
+    if (!s.inFlightTaskId) return null;
+    const t = await orchestration.getTask(scope, s.inFlightTaskId, tx).catch(() => null);
+    return t && !["done", "failed", "cancelled"].includes(t.status) ? t.id : null;
+  }
+
   class InvalidTransitionError2 extends ConflictError {
     constructor(status: string) {
       super("invalid_transition", `컨셉 세션을 '${labelKo("concept_session_status", status)}' 상태에서 이어 할 수 없습니다.`);
@@ -1507,6 +1595,7 @@ export function createConceptApp(deps: ConceptAppDeps) {
     service,
     ports,
     handlers: { turn: turnHandler, import: importHandler, check: checkHandler },
+    streams,
     onApprovalDecided,
     onInbound,
     templates: { TURN_TEMPLATE_ID, IMPORT_TEMPLATE_ID, TITLES_TEMPLATE_ID, CHECK_TEMPLATE_ID, COMMON_1 },

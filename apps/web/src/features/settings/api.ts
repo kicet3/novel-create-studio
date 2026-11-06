@@ -6,8 +6,15 @@ import {
   budgetOverviewSchema,
   budgetPolicyDtoSchema,
   healthCheckResultDtoSchema,
+  llmAvailableModelsSchema,
   llmProviderProfileDtoSchema,
   llmTestResponseSchema,
+  roleModelDefaultListSchema,
+  type AgentRole,
+  type LlmAddModelRequest,
+  type LlmCallProviderId,
+  type LlmEditModelRequest,
+  type UpdateRoleModelDefaultsRequest,
   providerOAuthSessionDtoSchema,
   providerStatusDtoSchema,
   type LlmProviderId,
@@ -105,6 +112,71 @@ export function useProviderProfiles() {
   return useQuery({
     queryKey: [...INSTALL, "provider-profiles"],
     queryFn: ({ signal }) => api.get("/llm/provider-profiles", { signal, schema: listOf(llmProviderProfileDtoSchema) }),
+  });
+}
+
+const PROFILES = [...INSTALL, "provider-profiles"] as const;
+const ROLE_DEFAULTS = [...INSTALL, "role-defaults"] as const;
+
+/** model-list edits (each answer is the NEW active profile version); refreshes profiles, defaults and every novel's bindings */
+function useProfileMutation<A>(fn: (a: A) => Promise<unknown>) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: PROFILES });
+      void qc.invalidateQueries({ queryKey: ROLE_DEFAULTS });
+      void qc.invalidateQueries({ queryKey: queryKeys.novels.all });
+    },
+  });
+}
+
+export function useAddProfileModel() {
+  return useProfileMutation((a: { profileId: string; model: LlmAddModelRequest }) =>
+    api.post(`/llm/provider-profiles/${a.profileId}/models`, a.model, { schema: llmProviderProfileDtoSchema }),
+  );
+}
+
+export function useEditProfileModel() {
+  return useProfileMutation((a: { profileId: string; modelId: string; patch: LlmEditModelRequest }) =>
+    api.patch(`/llm/provider-profiles/${a.profileId}/models/${encodeURIComponent(a.modelId)}`, a.patch, { schema: llmProviderProfileDtoSchema }),
+  );
+}
+
+export function useRemoveProfileModel() {
+  return useProfileMutation((a: { profileId: string; modelId: string }) =>
+    api.delete(`/llm/provider-profiles/${a.profileId}/models/${encodeURIComponent(a.modelId)}`, { schema: llmProviderProfileDtoSchema }),
+  );
+}
+
+export function useResetProfileModels() {
+  return useProfileMutation((profileId: string) => api.post(`/llm/provider-profiles/${profileId}/reset-models`, {}, { schema: llmProviderProfileDtoSchema }));
+}
+
+/** the provider's own model list (API key lanes) / fixed list (Claude 구독); fetched on demand */
+export function useAvailableModels() {
+  return useMutation({
+    mutationFn: (provider: LlmCallProviderId) => api.get(`/llm/providers/${provider}/available-models`, { schema: llmAvailableModelsSchema }),
+  });
+}
+
+export function useRoleDefaults() {
+  return useQuery({ queryKey: ROLE_DEFAULTS, queryFn: ({ signal }) => api.get("/llm/role-defaults", { signal, schema: roleModelDefaultListSchema }) });
+}
+
+export function useSetRoleDefaults() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: UpdateRoleModelDefaultsRequest) => api.put("/llm/role-defaults", body, { schema: roleModelDefaultListSchema }),
+    onSuccess: (d) => qc.setQueryData(ROLE_DEFAULTS, d),
+  });
+}
+
+export function useResetRoleDefaults() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (role?: AgentRole) => api.delete("/llm/role-defaults", { query: { role }, schema: roleModelDefaultListSchema }),
+    onSuccess: (d) => qc.setQueryData(ROLE_DEFAULTS, d),
   });
 }
 

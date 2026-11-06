@@ -22,6 +22,8 @@ export interface CliReply {
   error?: string;
   hang?: boolean;
   delayMs?: number;
+  /** stdout written in these pieces (a few ms apart) instead of `stdout` at once — e.g. stream-json lines split mid-line */
+  stdoutChunks?: string[];
 }
 
 export function scriptedSpawn(respond: (call: CliCall) => CliReply) {
@@ -56,6 +58,17 @@ export function scriptedSpawn(respond: (call: CliCall) => CliReply) {
           closed = true;
           running--;
           child.emit("error", Object.assign(new Error(r.error), { code: r.error }));
+          return;
+        }
+        if (r.stdoutChunks) {
+          void (async () => {
+            for (const c of r.stdoutChunks!) {
+              child.stdout.write(c);
+              await new Promise((ok) => setTimeout(ok, 2));
+            }
+            if (r.stderr) child.stderr.write(r.stderr);
+            close(r.code ?? 0);
+          })();
           return;
         }
         if (r.stdout) child.stdout.write(r.stdout);

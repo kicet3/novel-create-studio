@@ -51,6 +51,8 @@ export interface NovelCreatedContext {
   entryMode: ConceptEntryMode;
   /** pre-allocated `osv_` id: the ontology participant MUST insert schema version 1 with this id */
   schemaVersionId: string;
+  /** what each participant's `prepare` returned (read before the transaction), keyed by module */
+  prepared: Partial<Record<ModuleName, unknown>>;
   /** participants publish ids for later participants (lower `order` runs first) */
   outputs: {
     mainTimelineId?: string;
@@ -64,6 +66,11 @@ export interface NovelCreationParticipant {
   module: ModuleName;
   /** ontology 10, messaging 20, budget 30, llm 40, concept 50 */
   order: number;
+  /**
+   * optional read BEFORE the creation transaction (e.g. state that reads through uow.db, which would wait on the open
+   * transaction with one PGlite connection); the result is handed in as `ctx.prepared[module]`
+   */
+  prepare?(): Promise<unknown>;
   onNovelCreated(ctx: NovelCreatedContext): Promise<void>;
 }
 

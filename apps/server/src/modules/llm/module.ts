@@ -59,12 +59,15 @@ export function createLlmModule(deps: LlmModuleDeps): ServerModule<LlmService> {
       ...(deps.adapters ?? []),
     ],
     oauth: deps.oauth,
+    novelTitles: async () => (await deps.novel.listNovels({ includeArchived: true })).map((n) => ({ id: n.id, title: n.title })),
   });
   deps.novel.registerCreationParticipant({
     module: "llm",
     order: 40,
+    // connection state reads secrets through uow.db: before the creation transaction
+    prepare: () => service.roleDefaultConnections(),
     async onNovelCreated(ctx) {
-      await service.createDefaultBindings(ctx.tx, ctx.scope);
+      await service.createDefaultBindings(ctx.tx, ctx.scope, ctx.prepared.llm as ReadonlySet<string> | undefined);
     },
   });
   return {

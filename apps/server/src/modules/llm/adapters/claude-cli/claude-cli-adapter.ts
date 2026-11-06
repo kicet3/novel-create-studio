@@ -19,6 +19,7 @@ import { join } from "node:path";
 import type { LlmAdapter, LlmCapabilities, LlmCliStatus, LlmEnvironmentCheck, LlmInvokeOptions, LlmRequest, LlmResult, LlmUsage } from "../../index.js";
 import { MODEL_LIMITS } from "../../domain/pricing.js";
 import { buildOutputFormat, parseJsonText } from "../anthropic/anthropic-adapter.js";
+import { createStreamRelay } from "../shared/stream-relay.js";
 
 export const CLAUDE_CLI_PROVIDER = "claude_code";
 
@@ -57,13 +58,19 @@ export function renderTranscript(messages: LlmRequest["messages"]): string {
   return messages.map((m) => `<${m.role}>\n${m.content}\n</${m.role}>`).join("\n\n") + "\n\n위 대화의 마지막 user 메시지에 답하세요.";
 }
 
-export function cliArgs(req: LlmRequest): { args: string[]; strict: boolean } {
+/**
+ * `stream: true` (the caller wants live output): `--output-format stream-json --include-partial-messages --verbose`
+ * prints one JSON event per line (Anthropic stream events wrapped in `stream_event`) and ends with the same `result`
+ * object `--output-format json` prints, so the final mapping is identical.
+ */
+export function cliArgs(req: LlmRequest, opts: { stream?: boolean } = {}): { args: string[]; strict: boolean } {
   const out = req.output.kind === "object" ? buildOutputFormat(req.output.jsonSchema) : null;
   const system = req.system + (out && !out.strict ? out.instruction : "");
   const args = [
     "-p",
     "--output-format",
-    "json",
+    opts.stream ? "stream-json" : "json",
+    ...(opts.stream ? ["--include-partial-messages", "--verbose"] : []),
     "--model",
     req.modelId,
     "--system-prompt",
@@ -78,6 +85,27 @@ export function cliArgs(req: LlmRequest): { args: string[]; strict: boolean } {
   ];
   if (out?.strict) args.push("--json-schema", JSON.stringify(out.format.schema));
   return { args, strict: !!out?.strict };
+}
+
+function parseLine(line: string): { type?: unknown; event?: unknown; parent_tool_use_id?: unknown } | null {
+  try {
+    const v = JSON.parse(line) as unknown;
+    return v && typeof v === "object" ? (v as { type?: unknown }) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** stream-json stdout → the final `result` object (same shape as `--output-format json`); throws when there is none */
+export function resultOfStream(stdout: string): Record<string, unknown> {
+  const lines = stdout.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!.trim();
+    if (!line) continue;
+    const v = parseLine(line);
+    if (v?.type === "result") return v as Record<string, unknown>;
+  }
+  throw new SyntaxError("no result event in Claude Code stream-json output");
 }
 
 function mapUsage(u: Record<string, unknown> | undefined, costUsd: unknown): LlmUsage {
@@ -105,9 +133,10 @@ export class ClaudeCliLlmAdapter implements LlmAdapter {
     this.limits = { maxConcurrent: opts.maxConcurrent ?? 2, callTimeoutMs: opts.callTimeoutMs ?? 1_200_000 };
   }
 
-  private run(args: string[], input: string | null, signal: AbortSignal, timeoutMs: number): Promise<CliRun> {
+  private run(args: string[], input: string | null, signal: AbortSignal, timeoutMs: number, onLine?: (line: string) => void): Promise<CliRun> {
     return new Promise((resolve) => {
       let stdout = "";
+      let pending = "";
       let stderr = "";
       let aborted = false;
       let settled = false;
@@ -127,7 +156,20 @@ export class ClaudeCliLlmAdapter implements LlmAdapter {
         signal.removeEventListener("abort", onAbort);
         resolve({ code, stdout, stderr, aborted });
       };
-      child.stdout?.on("data", (d: Buffer) => (stdout += d.toString("utf8")));
+      // setEncoding: multi-byte UTF-8 (Korean) split across chunks is decoded correctly
+      child.stdout?.setEncoding?.("utf8");
+      child.stdout?.on("data", (d: Buffer | string) => {
+        const chunk = typeof d === "string" ? d : d.toString("utf8");
+        stdout += chunk;
+        if (!onLine) return;
+        pending += chunk;
+        let nl: number;
+        while ((nl = pending.indexOf("\n")) >= 0) {
+          const line = pending.slice(0, nl);
+          pending = pending.slice(nl + 1);
+          if (line.trim()) onLine(line);
+        }
+      });
       child.stderr?.on("data", (d: Buffer) => (stderr += d.toString("utf8")));
       child.on("error", (err) => {
         stderr += String((err as NodeJS.ErrnoException).code ?? err.message);
@@ -179,19 +221,30 @@ export class ClaudeCliLlmAdapter implements LlmAdapter {
   }
 
   async invoke(req: LlmRequest, opts: LlmInvokeOptions): Promise<LlmResult> {
-    const { args } = cliArgs(req);
-    const r = await this.run(args, renderTranscript(req.messages), opts.signal, opts.timeoutMs);
+    const stream = !!opts.onStream;
+    const { args, strict } = cliArgs(req, { stream });
+    const relay = stream ? createStreamRelay(strict ? "structured_output_tool" : "text", opts.onStream) : null;
+    const onLine = relay
+      ? (line: string) => {
+          const ev = parseLine(line);
+          if (ev?.type === "stream_event" && ev.parent_tool_use_id == null) relay.push(ev.event);
+        }
+      : undefined;
+    const r = await this.run(args, renderTranscript(req.messages), opts.signal, opts.timeoutMs, onLine);
     if (r.aborted) return { ok: false, errorFamily: "timeout", message: "Claude Code 응답 시간이 초과되었거나 호출이 중단되었습니다.", billed: "unknown" };
     if (r.code === -1) return { ok: false, errorFamily: "auth_failed", message: "Claude Code CLI(`claude`)를 찾을 수 없습니다.", billed: "no" };
     let o: Record<string, unknown>;
     try {
-      o = JSON.parse(r.stdout) as Record<string, unknown>;
+      o = stream ? resultOfStream(r.stdout) : (JSON.parse(r.stdout) as Record<string, unknown>);
     } catch {
-      const hint = /login|auth|credential/i.test(r.stderr + r.stdout) ? "auth_failed" : "provider_unavailable";
+      // stream mode: stdout's JSON lines carry the model's own text and the init event — classify by stderr and
+      // plain (non-JSON) output only, so "author" in a half-written reply never reads as a login problem
+      const diag = stream ? r.stdout.split("\n").filter((l) => l.trim() && !l.trimStart().startsWith("{")).join("\n") : r.stdout;
+      const hint = /\b(log ?in|logged|auth|authenticat\w*|credentials?|unauthori[sz]ed)\b/i.test(`${r.stderr}\n${diag}`) ? "auth_failed" : "provider_unavailable";
       return {
         ok: false,
         errorFamily: hint,
-        message: hint === "auth_failed" ? "Claude Code 로그인이 필요합니다. 터미널에서 `claude auth login`을 실행하세요." : `Claude Code 실행 실패 (exit ${r.code}): ${(r.stderr || r.stdout).slice(0, 300)}`,
+        message: hint === "auth_failed" ? "Claude Code 로그인이 필요합니다. 터미널에서 `claude auth login`을 실행하세요." : `Claude Code 실행 실패 (exit ${r.code}): ${(r.stderr || diag).slice(0, 300)}`,
         billed: "unknown",
       };
     }

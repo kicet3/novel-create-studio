@@ -55,17 +55,17 @@ src/
 | `/` | `/novels`로 이동 | — |
 | `/novels` | 작품 목록 + 새 작품 진입 | `features/novels/NovelsPage.tsx` |
 | `/onboarding` | 작품 생성·목표 설정 (`onboarding`) | `features/onboarding/OnboardingPage.tsx` |
-| `/settings` | 설치 설정 (`settings` 설치 부분) | `features/settings/InstallSettingsPage.tsx` |
+| `/settings` | 설치 설정 (`settings` 설치 부분): AI 계정 연결, 모델 관리(`sections/ModelCatalogCard.tsx`: 추가·편집·끄기·삭제·기본 목록·공급자 목록 불러오기), 새 작품 기본 모델(`sections/RoleDefaultsCard.tsx`), 단가 프로필 버전 기록 | `features/settings/InstallSettingsPage.tsx` |
 | `/dev/ui` | 컴포넌트 카탈로그(개발용 표본) | `features/ui-catalog/UiCatalogPage.tsx` |
 | `/novels/:novelId` | 작품 홈 (`home`) | `features/home/NovelHomePage.tsx` |
-| `/novels/:novelId/concept` | 컨셉 (11 §4.1 `concept`) | `features/concept/ConceptPage.tsx` |
+| `/novels/:novelId/concept` | 컨셉 (11 §4.1 `concept`). 머리의 **대화 모델**(`ConceptModelPicker.tsx`)은 컨셉 파트너 역할 지정을 바꿉니다(에이전트 답변 중 잠김) | `features/concept/ConceptPage.tsx` |
 | `/novels/:novelId/board` | 작업 보드 (`board`) | `features/board/BoardPage.tsx` |
 | `/novels/:novelId/inbox[/:questionId]` | 인박스 (`inbox`, 메신저 딥링크 05) | `features/inbox/InboxPage.tsx` |
 | `/novels/:novelId/manuscript`, `/novels/:novelId/episodes/:episodeNo` | 원고 (`manuscript`, 08 §9.4) | `features/manuscript/ManuscriptPage.tsx` |
 | `/novels/:novelId/ontology`, `/novels/:novelId/entities/:entityId` | 세계관 온톨로지 (`ontology`, 08 §9.5). `entities`는 `ontology`로 이동 | `features/ontology/OntologyPage.tsx` |
 | `/novels/:novelId/setups[/:setupNo]` | 떡밥 (`foreshadow`) | `features/setups/SetupsPage.tsx` |
 | `/novels/:novelId/audit` | 감사 타임라인 | `features/audit/AuditPage.tsx` |
-| `/novels/:novelId/settings` | 작품 설정 | `features/settings/NovelSettingsPage.tsx` |
+| `/novels/:novelId/settings` | 작품 설정 (역할별 모델: 연결된 공급자의 켜진 모델, `[모든 역할에 적용]`) | `features/settings/NovelSettingsPage.tsx` |
 
 사이드바 항목은 `components/layout/nav.ts`의 `NOVEL_NAV`가 정합니다(목업 SPEC 순서 + 컨셉). 미디어 스튜디오(v1)는 MVP-α 범위 밖이라 뺐습니다.
 

@@ -16,12 +16,15 @@ import { NotFoundError, type ApiRouters } from "../../../../platform/index.js";
 import { actorOf, created, scopeOf, valid, validate } from "../../../../http/kit.js";
 import type { ConceptService } from "../../index.js";
 import { parseWorkingBrief } from "../../domain/brief.js";
+import type { TurnStreamHub } from "../../application/turn-stream.js";
+import { mountTurnStreamRoute, type TurnStreamRouteOptions } from "./stream-route.js";
 
 const sessionParams = z.object({ sessionId: z.string().regex(/^cns_/) });
 const briefParams = z.object({ briefId: z.string().regex(/^cbf_/) });
 type P = { sessionId: string };
 
-export function mountConceptRoutes({ novel }: ApiRouters, svc: ConceptService): void {
+export function mountConceptRoutes({ novel }: ApiRouters, svc: ConceptService, streams?: TurnStreamHub, streamOpts?: TurnStreamRouteOptions): void {
+  if (streams) mountTurnStreamRoute(novel, svc, streams, streamOpts);
   novel.get("/concept/session", async (_req, res) => {
     res.json(await svc.getSessionView(scopeOf(res)));
   });
@@ -45,7 +48,7 @@ export function mountConceptRoutes({ novel }: ApiRouters, svc: ConceptService): 
     const out = await svc.postUserMessage(
       scope,
       params.sessionId,
-      { body: body.body, kind: body.kind, optionValue: body.optionValue, pickedIdx: body.pickedIdx, channelId: webChannelId },
+      { body: body.body, kind: body.kind, optionValue: body.optionValue, pickedIdx: body.pickedIdx, channelId: webChannelId, rejectWhileTurnInFlight: true },
       actorOf(res),
     );
     created(res, out);
@@ -58,6 +61,10 @@ export function mountConceptRoutes({ novel }: ApiRouters, svc: ConceptService): 
   novel.post("/concept/sessions/:sessionId/pause", validate({ params: sessionParams, body: conceptPauseRequestSchema }), async (_req, res) => {
     const { params } = valid<{ params: P }>(res);
     res.json(await svc.pauseSession(scopeOf(res), params.sessionId, "user", actorOf(res)));
+  });
+  novel.post("/concept/sessions/:sessionId/stop-turn", validate({ params: sessionParams }), async (_req, res) => {
+    const { params } = valid<{ params: P }>(res);
+    res.json(await svc.stopTurn(scopeOf(res), params.sessionId, actorOf(res)));
   });
   novel.post("/concept/sessions/:sessionId/resume", validate({ params: sessionParams }), async (_req, res) => {
     const { params } = valid<{ params: P }>(res);

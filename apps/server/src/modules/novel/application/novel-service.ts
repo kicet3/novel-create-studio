@@ -130,6 +130,8 @@ export function createNovelService({ platform, audit }: NovelServiceDeps): Novel
       const ownerUserId = ownerCache ?? (await service.ensureOwnerUser()).id;
       const ageRating = input.ageRating ?? "age_15";
       assertMvpAgeRating(ageRating);
+      const prepared: NovelCreatedContext["prepared"] = {};
+      for (const p of participants) if (p.prepare) prepared[p.module] = await p.prepare();
       return uow.run(async (tx) => {
         const scope = { novelId: ids.next("nov") };
         const schemaVersionId = ids.next("osv");
@@ -188,6 +190,7 @@ export function createNovelService({ platform, audit }: NovelServiceDeps): Novel
           ownerUserId,
           entryMode: input.entryMode ?? "conversation",
           schemaVersionId,
+          prepared,
           outputs: {},
         };
         for (const p of participants) await p.onNovelCreated(ctx);

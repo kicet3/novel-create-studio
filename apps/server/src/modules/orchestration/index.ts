@@ -113,6 +113,12 @@ export interface TaskKindHandler<I = unknown, P = unknown> {
   execute(ctx: TaskContext<I>): Promise<P>;
   /** deterministic writes in the engine's transaction; create follow-up tasks via orchestration.createTask(tx, …) */
   commit(tx: Tx, ctx: TaskContext<I>, proposal: P): Promise<CommitOutcome>;
+  /**
+   * optional: a run ended WITHOUT its commit (stopped at a safe point — cancel, pause, lease lost, budget, reassign —,
+   * the commit transaction rolled back, or execute threw). Runs in its own transaction after the run is finished (the
+   * task already shows its next status); `proposal` is set when execute returned. Best effort: errors are logged.
+   */
+  onUncommitted?(tx: Tx, ctx: TaskContext<I>, info: { outcome: "stopped" | "error"; reason: string; proposal: P | undefined }): Promise<void>;
 }
 
 export interface TaskKindRegistry {

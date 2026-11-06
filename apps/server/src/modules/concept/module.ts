@@ -82,7 +82,7 @@ export function createConceptModule(deps: ConceptModuleDeps): ServerModule<Conce
     name: "concept",
     implemented: true,
     service,
-    routes: (r) => mountConceptRoutes(r, service),
+    routes: (r) => mountConceptRoutes(r, service, app.streams),
     loops: [
       {
         name: "concept.idle_sweeper",

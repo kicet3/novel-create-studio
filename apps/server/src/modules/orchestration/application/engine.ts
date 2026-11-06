@@ -553,24 +553,38 @@ export function createOrchestrationEngine(deps: EngineDeps): OrchestrationEngine
         await finish({ kind: "error", error: new TaskFailure("internal", `invalid task input: ${(err as Error).message}`, false) });
         return;
       }
+      let proposal: unknown;
+      const uncommitted = async (outcome: "stopped" | "error", reason: string) => {
+        if (!handler.onUncommitted) return;
+        try {
+          await uow.run((tx) => handler.onUncommitted!(tx, ctx, { outcome, reason, proposal }));
+        } catch (err) {
+          log.warn({ err, taskId: task.id, kind: task.kind }, "onUncommitted hook failed");
+        }
+      };
       try {
-        const proposal = await handler.execute(ctx);
+        proposal = await handler.execute(ctx);
         await handle.checkpoint();
         await uow.run(async (tx) => {
           // fencing (04 §5.2): the lease must still be ours, otherwise roll back
           const fenced = await repo.getTask(tx.db, scope, task.id, true);
           if (!fenced || fenced.status !== "running" || fenced.leaseRunId !== run.id) throw new LeaseLost();
+          // a cancel that landed after the last checkpoint (task row locked here, cancelTask locks it too) still wins
+          if (inputOf(fenced).cancel_requested) throw new RunStop("cancelled_by_user");
           const outcome = await handler.commit(tx, { ...ctx, task: fenced }, proposal);
           await finishInTx(tx, scope, run.id, outcome, notes);
         });
       } catch (err) {
         if (err instanceof LeaseLost) {
           await finish({ kind: "stopped", stop: new RunStop("lease_lost") });
+          await uncommitted("stopped", "lease_lost");
         } else if (err instanceof RunStop) {
           await finish({ kind: "stopped", stop: err });
+          await uncommitted("stopped", err.reason);
         } else {
           if (!(err instanceof TaskFailure)) log.warn({ err, taskId: task.id, kind: task.kind }, "task run failed");
           await finish({ kind: "error", error: err });
+          await uncommitted("error", err instanceof Error ? err.message : String(err));
         }
       }
     } catch (err) {

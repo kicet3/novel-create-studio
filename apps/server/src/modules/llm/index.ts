@@ -93,12 +93,21 @@ export interface LlmCredential {
   refresh?(): Promise<LlmCredential | null>;
 }
 
+/**
+ * Live output of one call (optional streaming hook): `delta` = next raw output text chunk (for object outputs the
+ * JSON text as the model writes it), `reset` = everything streamed so far is void (a new output block / attempt
+ * starts). Display only — the validated final result is still the `LlmResult` / `ModelCallOutput`.
+ */
+export type LlmStreamEvent = { type: "delta"; text: string } | { type: "reset" };
+
 export interface LlmInvokeOptions {
   apiKey: string;
   credential?: LlmCredential;
   signal: AbortSignal;
   timeoutMs: number;
   idempotencyKey?: string;
+  /** optional streaming hook; adapters that cannot stream ignore it (never throws into the adapter) */
+  onStream?: (ev: LlmStreamEvent) => void;
 }
 
 export interface LlmUsage {
@@ -156,6 +165,11 @@ export interface ModelCallInput<T> {
   output: { kind: "text" } | { kind: "object"; schemaName: string; schema: z.ZodType<T> };
   maxOutputTokens?: number;
   temperature?: number;
+  /**
+   * optional live output (display only): raw output deltas of the current attempt; `reset` before a retry/repair
+   * attempt and when the call finally fails. The returned value is still the only validated result.
+   */
+  onStream?: (ev: LlmStreamEvent) => void;
 }
 
 export interface ModelCallOutput<T> {
@@ -205,6 +219,49 @@ export interface LlmConnectionTestResult {
   checkedAt: Date;
 }
 
+/** who uses a model (409 `model_in_use` details): bindings of every novel (incl. as fallback) + 새 작품 기본 모델 roles */
+export interface ModelUsage {
+  modelId: string;
+  bindings: Array<{ novelId: string; novelTitle: string | null; agentRole: AgentRole; asFallback: boolean }>;
+  defaults: AgentRole[];
+}
+
+/** model entry input (install settings → 모델); prices micro-USD per 1M tokens, null = unpriced */
+export interface ProfileModelInput {
+  id: string;
+  label?: string;
+  input_price_micros_per_mtok: number | null;
+  output_price_micros_per_mtok: number | null;
+  cached_input_price_micros_per_mtok?: number | null;
+  max_output_tokens?: number;
+  max_context_tokens?: number;
+}
+
+export interface ProfileModelPatch {
+  label?: string | null;
+  input_price_micros_per_mtok?: number | null;
+  output_price_micros_per_mtok?: number | null;
+  cached_input_price_micros_per_mtok?: number | null;
+  max_output_tokens?: number | null;
+  max_context_tokens?: number | null;
+  disabled?: boolean;
+}
+
+/** 새 작품 기본 모델 of one role ("builtin" = no row: the install default provider's built-in model) */
+export interface RoleModelDefault {
+  agentRole: AgentRole;
+  provider: string;
+  modelId: string;
+  source: "custom" | "builtin";
+  usable: boolean;
+}
+
+export interface AvailableModels {
+  provider: string;
+  source: "api" | "fixed";
+  items: Array<{ id: string; label: string | null; maxContextTokens: number | null; maxOutputTokens: number | null; inProfile: boolean }>;
+}
+
 export interface BindingPatch {
   providerProfileId?: string;
   modelId?: string;
@@ -228,8 +285,14 @@ export interface LlmService {
   ensureImageProviderProfile(provider: string, models: Array<{ id: string } & Record<string, unknown>>, priceSourceUrl: string): Promise<ProviderProfile>;
   registerAdapter(adapter: LlmAdapter): void;
   getAdapter(provider: string): LlmAdapter | undefined;
-  /** N1 participant body: one binding per agent role incl. concept_partner (INV-NOV-06) — already implemented */
-  createDefaultBindings(tx: Tx, scope: NovelScope): Promise<RoleModelBinding[]>;
+  /**
+   * N1 participant body: one binding per agent role incl. concept_partner (INV-NOV-06). A 새 작품 기본 모델 is used only
+   * when its provider is in `connected` (read before the transaction with `roleDefaultConnections`); omitted → every
+   * callable provider counts as connected.
+   */
+  createDefaultBindings(tx: Tx, scope: NovelScope, connected?: ReadonlySet<string>): Promise<RoleModelBinding[]>;
+  /** providers of the 새 작품 기본 모델 that have a usable connection now (outside any transaction) */
+  roleDefaultConnections(): Promise<ReadonlySet<string>>;
   getBinding(scope: NovelScope, role: AgentRole, tx?: Tx): Promise<RoleModelBinding>;
   listBindings(scope: NovelScope): Promise<RoleModelBinding[]>;
   updateBinding(scope: NovelScope, role: AgentRole, patch: BindingPatch, actor: ActorRef): Promise<RoleModelBinding>;
@@ -249,6 +312,24 @@ export interface LlmService {
   getProviderProfile(profileId: string): Promise<ProviderProfile>;
   /** edits the profile in place (prices, active flag); audit `provider_profile.changed` (install level) */
   updateProviderProfile(profileId: string, patch: ProviderProfilePatch, actor: ActorRef): Promise<ProviderProfile>;
+  /**
+   * Model-list edits of the ACTIVE llm profile `profileId` (install settings → 모델). Each creates a new profile version
+   * (bindings follow; past cost events keep their version). Stale id → 409 `profile_outdated`; removing / switching
+   * off a model in use → 409 `model_in_use` (details.usage: ModelUsage[]).
+   */
+  addProfileModel(profileId: string, input: ProfileModelInput, actor: ActorRef): Promise<ProviderProfile>;
+  editProfileModel(profileId: string, modelId: string, patch: ProfileModelPatch, actor: ActorRef): Promise<ProviderProfile>;
+  removeProfileModel(profileId: string, modelId: string, actor: ActorRef): Promise<ProviderProfile>;
+  /** back to the built-in model list of the provider (same in-use guard) */
+  resetProfileModels(profileId: string, actor: ActorRef): Promise<ProviderProfile>;
+  /** provider's own model list with the connected API key (422 `model_list_unavailable` otherwise); claude_code → fixed list, the CLI is never run */
+  listAvailableModels(provider: string, signal?: AbortSignal): Promise<AvailableModels>;
+  /** 새 작품 기본 모델 per role (install level; createDefaultBindings uses them) */
+  listRoleDefaults(): Promise<RoleModelDefault[]>;
+  /** validated like a binding (enabled model, active profile, connected provider); audit `settings.changed` */
+  setRoleDefaults(items: Array<{ agentRole: AgentRole; provider: string; modelId: string }>, actor: ActorRef): Promise<RoleModelDefault[]>;
+  /** back to built-in for `role` (all roles when omitted) */
+  resetRoleDefaults(role: AgentRole | undefined, actor: ActorRef): Promise<RoleModelDefault[]>;
   /** FR-SET-03 llm_key: provider reachability with the stored key (no secrets in the result) */
   testConnection(input?: { provider?: string; modelId?: string; signal?: AbortSignal }): Promise<LlmConnectionTestResult>;
   /** sum of usage/cost recorded for a run (orchestration copies it to runs.* — 04 §8.6) */

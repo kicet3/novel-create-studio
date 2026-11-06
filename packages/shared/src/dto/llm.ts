@@ -17,6 +17,8 @@ export const llmProviderModelSchema = z.object({
   max_output_tokens: z.number().int().positive().optional(),
   max_context_tokens: z.number().int().positive().optional(),
   model_version: z.string().optional(),
+  /** switched off by the user: listed but not offered for new bindings / defaults (a bound model cannot be disabled) */
+  disabled: z.boolean().optional(),
 });
 export type LlmProviderModel = z.infer<typeof llmProviderModelSchema>;
 
@@ -258,3 +260,95 @@ export const providerOAuthSessionDtoSchema = z.object({
   accountEmail: z.string().nullable(),
 });
 export type ProviderOAuthSessionDto = z.infer<typeof providerOAuthSessionDtoSchema>;
+
+// ── model management (install settings → 모델) ──────────────────────────
+/** model id as providers spell it (letters, digits, `.-_:/@[]`), e.g. `claude-sonnet-5-5`, `models/gemini-4-argon`, `opus` */
+export const llmModelIdSchema = z
+  .string()
+  .trim()
+  .min(1, "모델 ID를 입력하세요.")
+  .max(200)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]*$/, "모델 ID에는 영문·숫자·.-_:/@[] 만 쓸 수 있습니다.");
+
+const price = z.number().int().nonnegative().max(1_000_000_000).nullable();
+
+/** POST /api/llm/provider-profiles/:profileId/models — adds a model (new profile version). Prices: micro-USD per 1M tokens; null/omitted = unpriced. */
+export const llmAddModelRequestSchema = z.object({
+  id: llmModelIdSchema,
+  label: z.string().trim().min(1).max(120).optional(),
+  input_price_micros_per_mtok: price.default(null),
+  output_price_micros_per_mtok: price.default(null),
+  cached_input_price_micros_per_mtok: price.optional(),
+  max_output_tokens: z.number().int().positive().max(10_000_000).optional(),
+  max_context_tokens: z.number().int().positive().max(100_000_000).optional(),
+});
+export type LlmAddModelRequest = z.input<typeof llmAddModelRequestSchema>;
+
+/** PATCH /api/llm/provider-profiles/:profileId/models/:modelId — edits one model (new profile version); `label: null` clears it */
+export const llmEditModelRequestSchema = z
+  .object({
+    label: z.string().trim().min(1).max(120).nullable().optional(),
+    input_price_micros_per_mtok: price.optional(),
+    output_price_micros_per_mtok: price.optional(),
+    cached_input_price_micros_per_mtok: price.optional(),
+    max_output_tokens: z.number().int().positive().max(10_000_000).nullable().optional(),
+    max_context_tokens: z.number().int().positive().max(100_000_000).nullable().optional(),
+    disabled: z.boolean().optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: "변경할 항목이 없습니다." });
+export type LlmEditModelRequest = z.infer<typeof llmEditModelRequestSchema>;
+
+export const llmProfileModelParamsSchema = z.object({ profileId: z.string().regex(/^prv_/), modelId: z.string().min(1).max(200) });
+
+/** 409 `model_in_use` details: who still uses the model (remove / disable refused) */
+export const llmModelUsageSchema = z.object({
+  modelId: z.string(),
+  bindings: z.array(z.object({ novelId: z.string(), novelTitle: z.string().nullable(), agentRole: z.enum(ENUMS.agent_role), asFallback: z.boolean() })),
+  /** roles whose 새 작품 기본 모델 is this model */
+  defaults: z.array(z.enum(ENUMS.agent_role)),
+});
+export type LlmModelUsage = z.infer<typeof llmModelUsageSchema>;
+
+/** GET /api/llm/providers/:provider/available-models — the provider's own model list (API key lanes) or a fixed list (Claude subscription CLI) */
+export const llmAvailableModelsSchema = z.object({
+  provider: llmCallProviderIdSchema,
+  /** "api": listed by the provider API with the connected key; "fixed": known list (claude_code: what `claude --model` accepts) */
+  source: z.enum(["api", "fixed"]),
+  items: z.array(
+    z.object({
+      id: z.string(),
+      label: z.string().nullable(),
+      maxContextTokens: z.number().int().nullable(),
+      maxOutputTokens: z.number().int().nullable(),
+      /** already in the active profile */
+      inProfile: z.boolean(),
+    }),
+  ),
+});
+export type LlmAvailableModels = z.infer<typeof llmAvailableModelsSchema>;
+export const llmCallProviderParamsSchema = z.object({ provider: llmCallProviderIdSchema });
+
+// ── 새 작품 기본 모델 (install level, role_model_defaults) ─────────────────
+export const roleModelDefaultDtoSchema = z.object({
+  agentRole: z.enum(ENUMS.agent_role),
+  provider: llmCallProviderIdSchema,
+  modelId: z.string(),
+  /** "custom": set by the user; "builtin": the install default provider's built-in model (no row) */
+  source: z.enum(["custom", "builtin"]),
+  /** the default can be used now (active profile lists the model enabled, provider usable on this server) */
+  usable: z.boolean(),
+});
+export type RoleModelDefaultDto = z.infer<typeof roleModelDefaultDtoSchema>;
+export const roleModelDefaultListSchema = z.object({ items: z.array(roleModelDefaultDtoSchema) });
+
+/** PUT /api/llm/role-defaults — set the default of the listed roles (other roles unchanged) */
+export const updateRoleModelDefaultsRequestSchema = z.object({
+  items: z
+    .array(z.object({ agentRole: z.enum(ENUMS.agent_role), provider: llmCallProviderIdSchema, modelId: z.string().min(1).max(200) }))
+    .min(1)
+    .max(ENUMS.agent_role.length)
+    .refine((v) => new Set(v.map((x) => x.agentRole)).size === v.length, { message: "같은 역할을 두 번 지정할 수 없습니다." }),
+});
+export type UpdateRoleModelDefaultsRequest = z.infer<typeof updateRoleModelDefaultsRequestSchema>;
+/** DELETE /api/llm/role-defaults?role= — back to built-in (all roles when omitted) */
+export const resetRoleModelDefaultsQuerySchema = z.object({ role: z.enum(ENUMS.agent_role).optional() });

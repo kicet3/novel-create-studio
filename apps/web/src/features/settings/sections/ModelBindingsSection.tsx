@@ -1,23 +1,35 @@
 import { useState } from "react";
+import { useMutation } from "@tanstack/react-query";
 import { labelKo, type RoleModelBindingDto } from "@ncs/shared";
-import { errorMessage } from "../../../api/client.js";
+import { api, errorMessage } from "../../../api/client.js";
 import { Button, Callout, Card, Checkbox, Input, QueryView, Select, Table, TableWrap, Td, Th } from "../../../components/ui/index.js";
-import { callProviderConnected, useModelBindings, useProviderProfiles, useProviders, useUpdateModelBinding } from "../api.js";
-import { PROVIDER_LABEL } from "./InstallSections.js";
+import { useInvalidateNovel } from "../../novels/api.js";
+import { useModelBindings, useProviderProfiles, useProviders, useUpdateModelBinding } from "../api.js";
+import { providerOptions } from "./model-options.js";
+import { AllRolesRow } from "./RoleDefaultsCard.js";
 
 /** 역할별 모델 (FR-UI-09): provider + model, max_output_tokens(필수), fallback. Applies from the next run. */
 export function ModelBindingsSection({ novelId }: { novelId: string }) {
   const q = useModelBindings(novelId);
   const profiles = useProviderProfiles();
   const providers = useProviders();
-  const connected = callProviderConnected(providers.data?.items ?? []);
-  const active: ProfileOption[] = (profiles.data?.items ?? [])
-    .filter((p) => p.isActive && p.providerKind === "llm")
-    .map((p) => ({ id: p.id, provider: p.provider, label: PROVIDER_LABEL[p.provider] ?? p.provider, connected: connected.get(p.provider) ?? false, models: p.models.map((m) => ({ id: m.id, label: m.label ?? m.id, unpriced: m.input_price_micros_per_mtok === null })) }));
+  const options = providerOptions(profiles.data?.items ?? [], providers.data?.items ?? []);
+  const active: ProfileOption[] = options.map((o) => ({ id: o.profileId, provider: o.provider, label: o.label, connected: o.connected, models: o.models }));
+  const applyAll = useApplyAll(novelId);
   return (
     <Card title="역할별 모델" actions={<span className="text-xs text-muted">다음 실행부터 적용</span>}>
       <QueryView query={q} compact notReadyDescription="LLM 모듈이 준비되면 역할별 모델을 바꿀 수 있습니다.">
         {(d) => (
+          <div className="flex flex-col gap-2">
+          <AllRolesRow
+            options={options}
+            busy={applyAll.isPending}
+            onApply={(provider, modelId) => {
+              const target = options.find((o) => o.provider === provider);
+              if (target) applyAll.mutate({ roles: d.items.map((b) => b.agentRole), providerProfileId: target.profileId, modelId });
+            }}
+          />
+          {applyAll.error && <Callout tone="danger">{errorMessage(applyAll.error)}</Callout>}
           <TableWrap label="역할별 모델">
             {/* below 861px every role is a stacked card (provider, model, limit, fallback, save) instead of a wide row */}
             <Table className="max-[860px]:block">
@@ -40,13 +52,25 @@ export function ModelBindingsSection({ novelId }: { novelId: string }) {
               </tbody>
             </Table>
           </TableWrap>
+          </div>
         )}
       </QueryView>
       <p className="m-0 mt-2 text-xs text-faint">
-        연결되지 않은 공급자를 고르면 그 역할의 호출이 실패합니다. 설치 설정 → AI 계정 연결에서 먼저 연결하세요. 외부로 보내는 데이터: 원고 본문, 아웃라인, 집필에 필요한 캐논 사실만 공급자로 전송하며, 이미 보낸 데이터는 공급자 보존 정책을 따릅니다.
+        연결된 공급자의 켜진 모델만 고를 수 있습니다. 공급자 연결과 모델 목록·단가는 설치 설정 → AI 계정 연결 / 모델 관리에서 바꿉니다. 외부로 보내는 데이터: 원고 본문, 아웃라인, 집필에 필요한 캐논 사실만 공급자로 전송하며, 이미 보낸 데이터는 공급자 보존 정책을 따릅니다.
       </p>
     </Card>
   );
+}
+
+/** [모든 역할에 적용]: the same provider + model on every role (one PATCH per role, stops at the first refusal) */
+function useApplyAll(novelId: string) {
+  const invalidate = useInvalidateNovel(novelId);
+  return useMutation({
+    mutationFn: async (a: { roles: string[]; providerProfileId: string; modelId: string }) => {
+      for (const role of a.roles) await api.patch(`/novels/${novelId}/model-bindings/${role}`, { providerProfileId: a.providerProfileId, modelId: a.modelId });
+    },
+    onSettled: () => void invalidate(),
+  });
 }
 
 interface ProfileOption {
@@ -69,6 +93,7 @@ function BindingRow({ novelId, b, profiles }: { novelId: string; b: RoleModelBin
   const valid = Number.isInteger(n) && n > 0 && n <= 128_000;
   const profileOptions = current ? profiles : [{ id: b.providerProfileId, provider: "?", label: "이전 버전 프로필", connected: true, models: [{ id: b.modelId, label: b.modelId, unpriced: false }] }, ...profiles];
   const selected = profileOptions.find((p) => p.id === profileId);
+  // switched-off models are not offered; the bound one stays visible so the row still reads correctly
   const models = selected?.models ?? [];
   const modelValid = models.some((x) => x.id === modelId);
   const dirty = profileId !== b.providerProfileId || modelId !== b.modelId || n !== b.maxOutputTokens || fallback !== b.fallbackEnabled;
@@ -90,7 +115,7 @@ function BindingRow({ novelId, b, profiles }: { novelId: string; b: RoleModelBin
           }}
         >
           {profileOptions.map((p) => (
-            <option key={p.id} value={p.id}>
+            <option key={p.id} value={p.id} disabled={!p.connected && p.id !== b.providerProfileId}>
               {p.label}
               {p.connected ? "" : " (연결 안 됨)"}
             </option>
@@ -122,7 +147,7 @@ function BindingRow({ novelId, b, profiles }: { novelId: string; b: RoleModelBin
       <Td className={CELL}>
         <Button
           aria-label={`${role} 저장`}
-          disabled={!dirty || !valid || !modelValid}
+          disabled={!dirty || !valid || !(modelValid || (modelId === b.modelId && profileId === b.providerProfileId))}
           loading={m.isPending}
           onClick={() => {
             m.mutate({

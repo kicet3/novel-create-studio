@@ -97,7 +97,7 @@ export function SystemInfoCard() {
 export function LlmCard() {
   const profiles = useProviderProfiles();
   return (
-    <Card title="모델 단가 프로필">
+    <Card title="단가 프로필 버전 기록">
       <div className="flex flex-col gap-3">
         <QueryView query={profiles} compact>
           {(d) => (
@@ -119,7 +119,7 @@ export function LlmCard() {
                   ),
                 },
                 { key: "v", header: "버전", className: "whitespace-nowrap", cell: (p) => `v${p.versionNo}` },
-                { key: "m", header: "모델", className: "min-w-48", cell: (p) => p.models.map((m) => `${m.label ?? m.id}${m.input_price_micros_per_mtok === null ? " (단가 미등록)" : ""}`).join(", ") },
+                { key: "m", header: "모델", className: "min-w-48", cell: (p) => p.models.map((m) => `${m.label ?? m.id}${m.input_price_micros_per_mtok === null ? " (단가 미등록)" : ""}${m.disabled ? " (꺼짐)" : ""}`).join(", ") },
                 { key: "d", header: "단가 확인", className: "whitespace-nowrap tabular-nums", cell: (p) => formatDateTime(p.verifiedAt) },
                 {
                   key: "r",
@@ -139,7 +139,7 @@ export function LlmCard() {
           )}
         </QueryView>
         <p className="m-0 text-xs text-faint">
-          단가는 1M 토큰 기준이며 예산 예약·정산에 쓰입니다. 단가가 없는 모델은 호출 전에 예산 확인을 요청합니다. 외부 공급자로 원고 발췌·기획서·온톨로지 사실이 전송되며, 이미 보낸 데이터는 공급자의 보존 정책을 따릅니다.
+          모델 관리에서 바꿀 때마다 새 버전이 생기며, 지난 비용 기록은 그때 버전 단가를 그대로 씁니다. 단가는 1M 토큰 기준이며 예산 예약·정산에 쓰입니다. 단가가 없는 모델은 호출 전에 예산 확인을 요청합니다. 외부 공급자로 원고 발췌·기획서·온톨로지 사실이 전송되며, 이미 보낸 데이터는 공급자의 보존 정책을 따릅니다.
         </p>
       </div>
     </Card>

@@ -8,7 +8,9 @@ import { providerProfiles, roleModelBindings } from "@ncs/db/schema";
 import { AGENT_ROLE, DEFAULT_MODELS, DEFAULTS, type AgentRole } from "@ncs/shared";
 import type { Db, NovelScope, Platform, Tx } from "../../../../platform/index.js";
 import type { ProviderProfile, RoleModelBinding } from "../../index.js";
-import { PROVIDER_PRICE_SOURCE, PROVIDER_ROLE_DEFAULTS, defaultProfileModels, isPriced, parseProfileModels } from "../../domain/pricing.js";
+import { PROVIDER_PRICE_SOURCE, PROVIDER_ROLE_DEFAULTS, defaultProfileModels, findModel, isPriced, parseProfileModels } from "../../domain/pricing.js";
+import { isEnabled, modelsOf } from "../../domain/model-catalog.js";
+import { llmRepo } from "./repository.js";
 
 /** Every role defaults to Claude Opus 5.5; the user can switch a role to Sonnet/Haiku in 설정 → 역할별 모델. */
 export const DEFAULT_ROLE_MODELS: Record<AgentRole, string> = Object.fromEntries(AGENT_ROLE.map((r) => [r, DEFAULT_MODELS.opus])) as Record<AgentRole, string>;
@@ -39,7 +41,8 @@ export async function ensureProviderProfile(platform: Platform, provider: string
   if (existing) {
     const models = parseProfileModels(existing.models);
     const defaults = new Map(defaultProfileModels(provider).map((m) => [m.id, m]));
-    if (models.length && models.some((m) => !isPriced(m) && isPriced(defaults.get(m.id)))) {
+    // only the first (contracts-phase) version is filled in place; later versions are the user's edits
+    if (existing.versionNo === 1 && models.length && models.some((m) => !isPriced(m) && isPriced(defaults.get(m.id)))) {
       const filled = models.map((m) => (isPriced(m) ? m : { ...(defaults.get(m.id) ?? m), ...Object.fromEntries(Object.entries(m).filter(([, v]) => v !== null)) }));
       const [u] = await platform.uow.db
         .update(providerProfiles)
@@ -65,22 +68,50 @@ export async function ensureProviderProfile(platform: Platform, provider: string
   return p!;
 }
 
-export async function insertDefaultBindings(platform: Platform, tx: Tx, scope: NovelScope): Promise<RoleModelBinding[]> {
+/**
+ * N1: one binding per role. A role with a 새 작품 기본 모델 (role_model_defaults) gets that provider's active profile +
+ * model when `usable(provider)` and the profile lists the model switched on; otherwise the install default provider
+ * with that role's built-in model (or the profile's first enabled model when the user removed / switched it off).
+ */
+export async function insertDefaultBindings(platform: Platform, tx: Tx, scope: NovelScope, usable: (provider: string) => boolean = () => true): Promise<RoleModelBinding[]> {
   const profile = await findDefaultProfile(tx.db, platform.config.llm.provider);
   if (!profile) throw new Error("default provider profile missing (llm.ensureDefaultProviderProfile not run)");
-  return tx.db
-    .insert(roleModelBindings)
-    .values(
-      AGENT_ROLE.map((role) => ({
-        id: platform.ids.next("rmb"),
-        novelId: scope.novelId,
-        agentRole: role,
-        providerProfileId: profile.id,
-        modelId: defaultRoleModel(profile.provider, role),
-        maxOutputTokens: defaultMaxOutputTokens(role),
-      })),
-    )
-    .returning();
+  const custom = new Map((await llmRepo.listRoleDefaults(tx.db)).map((r) => [r.agentRole, r]));
+  const byProvider = new Map<string, ProviderProfile | null>([[profile.provider, profile]]);
+  const profileOf = async (provider: string) => {
+    if (!byProvider.has(provider)) byProvider.set(provider, await findDefaultProfile(tx.db, provider));
+    return byProvider.get(provider) ?? null;
+  };
+  const rows = [];
+  for (const role of AGENT_ROLE) {
+    let target = profile;
+    let modelId = resolveRoleModel(profile, role);
+    const c = custom.get(role);
+    if (c && usable(c.provider)) {
+      const p = await profileOf(c.provider);
+      if (p && isEnabled(findModel(p.models, c.modelId))) {
+        target = p;
+        modelId = c.modelId;
+      }
+    }
+    const cap = findModel(target.models, modelId)?.max_output_tokens;
+    rows.push({
+      id: platform.ids.next("rmb"),
+      novelId: scope.novelId,
+      agentRole: role,
+      providerProfileId: target.id,
+      modelId,
+      maxOutputTokens: Math.min(defaultMaxOutputTokens(role), cap ?? Number.MAX_SAFE_INTEGER),
+    });
+  }
+  return tx.db.insert(roleModelBindings).values(rows).returning();
+}
+
+/** built-in model of `role` on `profile`: the tier default when listed and switched on, else the first enabled model */
+export function resolveRoleModel(profile: Pick<ProviderProfile, "provider" | "models">, role: AgentRole): string {
+  const preferred = defaultRoleModel(profile.provider, role);
+  if (isEnabled(findModel(profile.models, preferred))) return preferred;
+  return modelsOf(profile.models).find(isEnabled)?.id ?? preferred;
 }
 
 /** default model of `role` on `provider` (premium tier for planning roles, standard for the rest) */
@@ -114,7 +145,7 @@ export async function rebindToConfiguredProvider(platform: Platform, usable: (pr
     for (const b of stale) {
       await tx.db
         .update(roleModelBindings)
-        .set({ providerProfileId: target.id, modelId: defaultRoleModel(provider, b.agentRole as AgentRole), fallbackModelId: null, fallbackEnabled: false, updatedAt: now })
+        .set({ providerProfileId: target.id, modelId: resolveRoleModel(target, b.agentRole as AgentRole), fallbackModelId: null, fallbackEnabled: false, updatedAt: now })
         .where(eq(roleModelBindings.id, b.id));
     }
     const active = foreign.filter((f) => f.isActive).map((f) => f.id);
@@ -179,7 +210,7 @@ export async function rebindUnconnectedTo(platform: Platform, provider: string, 
     for (const b of stale) {
       await tx.db
         .update(roleModelBindings)
-        .set({ providerProfileId: target.id, modelId: defaultRoleModel(provider, b.agentRole as AgentRole), fallbackModelId: null, fallbackEnabled: false, updatedAt: now })
+        .set({ providerProfileId: target.id, modelId: resolveRoleModel(target, b.agentRole as AgentRole), fallbackModelId: null, fallbackEnabled: false, updatedAt: now })
         .where(eq(roleModelBindings.id, b.id));
     }
     return stale.length;
