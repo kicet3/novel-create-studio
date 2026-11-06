@@ -1,3 +1,4 @@
+import { StateBadge } from "./status-badges.js";
 import { useState, type FormEvent } from "react";
 import { formatUsd, type LlmAvailableModels, type LlmCallProviderId, type LlmProviderModel, type LlmProviderProfileDto } from "@ncs/shared";
 import { errorMessage } from "../../../api/client.js";
@@ -137,7 +138,7 @@ function ProviderModels({ profile, canList }: { profile: LlmProviderProfileDto; 
                 </Td>
                 <Td className={CELL}>
                   <CellLabel>상태</CellLabel>
-                  {m.disabled ? <Badge tone="neutral">꺼짐</Badge> : <Badge tone="ok">사용</Badge>}
+                  {m.disabled ? <StateBadge state="off" /> : <Badge tone="ok">켜짐</Badge>}
                 </Td>
                 <Td className={`whitespace-nowrap ${CELL} max-[860px]:self-end`}>
                   <div className="flex gap-1">

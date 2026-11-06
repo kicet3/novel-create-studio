@@ -1,3 +1,4 @@
+import { StateBadge } from "./status-badges.js";
 import { useState } from "react";
 import { AGENT_ROLE, labelKo, type LlmCallProviderId, type RoleModelDefaultDto } from "@ncs/shared";
 import { errorMessage } from "../../../api/client.js";
@@ -129,7 +130,7 @@ function DefaultRow({ row, options, busy, onSave, onReset }: { row: RoleModelDef
       <Th scope="row" className="whitespace-nowrap bg-transparent max-[860px]:flex max-[860px]:items-center max-[860px]:gap-2 max-[860px]:border-0 max-[860px]:p-0">
         {role}
         <div className="mt-0.5 flex gap-1 max-[860px]:mt-0">
-          {row.source === "custom" ? <Badge tone="accent">지정</Badge> : <Badge tone="neutral">기본</Badge>}
+          {row.source === "custom" ? <Badge tone="info">직접 지정</Badge> : <StateBadge state="default" />}
           {!row.usable && <Badge tone="warn">쓸 수 없음</Badge>}
         </div>
       </Th>

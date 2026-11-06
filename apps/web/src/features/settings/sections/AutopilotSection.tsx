@@ -1,3 +1,4 @@
+import { StateBadge } from "./status-badges.js";
 import { useEffect, useState } from "react";
 import { parseAutopilotSettings, type AutopilotSettings, type NovelDto } from "@ncs/shared";
 import { errorMessage } from "../../../api/client.js";
@@ -42,7 +43,7 @@ export function AutopilotSection({ novel }: { novel: NovelDto }) {
   };
 
   return (
-    <Card title="완전 자율 설정" actions={editable ? <Badge tone="violet">완전 자율</Badge> : <Badge>완전 자율일 때 적용</Badge>}>
+    <Card title="완전 자율 설정" actions={editable ? <StateBadge state="active" /> : <StateBadge state="off">완전 자율일 때 적용</StateBadge>}>
       <fieldset disabled={!editable} className="m-0 flex flex-col gap-3 border-0 p-0">
         {!editable && <p className="m-0 text-[13px] text-muted">자율성 수준을 ‘완전 자율’로 바꾸면 아래 설정대로 진행합니다.</p>}
         <div className="flex flex-col gap-1.5">

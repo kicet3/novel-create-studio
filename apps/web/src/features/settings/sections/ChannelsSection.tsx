@@ -70,7 +70,7 @@ export function ChannelsSection({ novelId, timezone }: { novelId: string; timezo
       <div className="mt-3 border-t border-border pt-3">
         <h3 className="mb-2 text-[13px] font-bold">메신저 연결 (Telegram · Discord)</h3>
         {bots.isError && isUnavailable(bots.error) ? (
-          <NotReady compact title="봇 관리 준비 중" />
+          <NotReady compact title="봇 관리 (예정)" />
         ) : botList.length === 0 ? (
           <p className="m-0 text-[13px] text-muted">
             등록된 봇이 없습니다. 먼저 설치 설정에서 Telegram 또는 Discord 봇 토큰을 등록하세요.{" "}

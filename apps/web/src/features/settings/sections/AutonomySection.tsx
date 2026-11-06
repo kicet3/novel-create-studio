@@ -3,34 +3,75 @@ import { formatUsd, labelKo, parseAutopilotSettings, type AutonomyLevel, type No
 import { api, errorMessage } from "../../../api/client.js";
 import { Badge, Button, Callout, Card, Checkbox, ChoiceGroup, ConfirmDialog, Field, Select, type ChoiceOption } from "../../../components/ui/index.js";
 import { useChangeAutonomy } from "../../novels/api.js";
-import { ALWAYS_HUMAN, AUTO_ITEMS, AUTO_PUBLISH_ITEM, STRUCTURE_OPT_IN_LABEL } from "../../autopilot/labels.js";
+import { ALWAYS_HUMAN, AUTO_ITEMS, AUTO_PUBLISH_ITEM, bannerTitle, PHASE_LABEL, STRUCTURE_OPT_IN_LABEL } from "../../autopilot/labels.js";
+import { useAutopilot } from "../../autopilot/api.js";
+import { StateBadge, StateBadges } from "./status-badges.js";
 import { usePendingApprovals } from "../../inbox/api.js";
 
-const OPTIONS: ChoiceOption<AutonomyLevel>[] = [
-  {
-    value: "episode_approval",
-    label: "화별 승인",
-    adornment: <Badge tone="accent">기본값</Badge>,
-    description: "기획서·플롯 계획·매 화를 직접 확인하고 승인합니다. 신규 사실과 떡밥 회수는 화 승인 때 확정됩니다.",
-  },
-  {
-    value: "arc_approval",
-    label: "플롯별 승인",
-    description: "화는 플롯 단위로 묶어 승인합니다. 비축분이 차면 그때까지 쓴 화를 묶어 먼저 승인 요청하고, 그 전의 사실은 ‘미확정’으로 씁니다. 플롯 계획은 직접 승인합니다.",
-  },
-  {
-    value: "full_auto",
-    label: "완전 자율",
-    description: "켜면 아래 항목을 에이전트가 진행합니다. 사람 확인이 필요한 곳에서는 그 갈래만 멈추고 인박스·메신저로 알립니다. 정책·저작권 경고 확인이 필요합니다.",
-  },
-  { value: "co_writing", label: "공동 집필", adornment: <Badge>v1</Badge>, description: "v1에서 제공합니다.", disabled: true },
-];
+/** per level: what the agents do on their own vs. what waits for you (shown under each option) */
+export const LEVEL_SCOPE: Record<Exclude<AutonomyLevel, "co_writing">, { auto: string; human: string }> = {
+  episode_approval: { auto: "초안 작성·검토·수정", human: "기획서, 플롯 계획, 매 화 승인" },
+  arc_approval: { auto: "초안 작성·검토·수정, 플롯 안의 화들", human: "기획서, 플롯 계획, 플롯 단위 묶음 승인" },
+  full_auto: { auto: "화·플롯 계획·세계관·캐스트·기획서 승인, 선택형 질문 응답", human: "항상 사람 승인 항목만(아래)" },
+};
+
+function Scope({ level }: { level: keyof typeof LEVEL_SCOPE }) {
+  const sc = LEVEL_SCOPE[level];
+  return (
+    <span className="mt-1 grid grid-cols-[auto_1fr] gap-x-2 text-[12px]">
+      <span className="font-semibold text-ok">자동</span>
+      <span>{sc.auto}</span>
+      <span className="font-semibold text-accent">직접</span>
+      <span>{sc.human}</span>
+    </span>
+  );
+}
+
+const DESCRIPTIONS: Record<keyof typeof LEVEL_SCOPE, string> = {
+  episode_approval: "기획서·플롯 계획·매 화를 직접 확인하고 승인합니다. 신규 사실과 떡밥 회수는 화 승인 때 확정됩니다.",
+  arc_approval: "화는 플롯 단위로 묶어 승인합니다. 비축분이 차면 그때까지 쓴 화를 묶어 먼저 승인 요청하고, 그 전의 사실은 ‘미확정’으로 씁니다. 플롯 계획은 직접 승인합니다.",
+  full_auto: "사람 확인이 필요한 곳에서는 그 갈래만 멈추고 인박스·메신저로 알립니다. 켤 때 정책·저작권 경고 확인이 필요합니다.",
+};
+
+export function autonomyOptions(current: AutonomyLevel): ChoiceOption<AutonomyLevel>[] {
+  const levels = ["episode_approval", "arc_approval", "full_auto"] as const;
+  return [
+    ...levels.map((v) => ({
+      value: v,
+      label: labelKo("autonomy_level", v),
+      adornment: <StateBadges states={[current === v && "active", v === "episode_approval" && "default", v === "full_auto" && "caution"]} />,
+      description: (
+        <>
+          {DESCRIPTIONS[v]}
+          <Scope level={v} />
+        </>
+      ),
+    })),
+    { value: "co_writing", label: labelKo("autonomy_level", "co_writing"), adornment: <StateBadge state="planned" />, description: "작가와 에이전트가 한 화를 함께 쓰는 방식입니다. 다음 버전에서 제공합니다.", disabled: true },
+  ];
+}
 
 const PUBLISH_OPTIONS: Array<{ value: PublishPolicy; disabled?: boolean; suffix?: string }> = [
   { value: "manual" },
   { value: "scheduled" },
-  { value: "batch_question", disabled: true, suffix: " (준비 중)" },
+  { value: "batch_question", disabled: true, suffix: " (예정)" },
 ];
+
+/** header badge: the applied level, and for full_auto the live autopilot state */
+function LiveStatus({ novel }: { novel: NovelDto }) {
+  const q = useAutopilot(novel.id, { enabled: novel.autonomyLevel === "full_auto" });
+  const label = labelKo("autonomy_level", novel.autonomyLevel);
+  if (novel.autonomyLevel !== "full_auto") return <StateBadge state="active">사용 중 · {label}</StateBadge>;
+  const v = q.data;
+  if (!v) return <StateBadge state="active">사용 중 · {label}</StateBadge>;
+  const stopped = !!v.halted || v.phase === "paused" || v.phase === "throttled";
+  return (
+    <Badge tone={stopped ? "warn" : "violet"} glyph title={bannerTitle(v)}>
+      {label} · {PHASE_LABEL[v.phase] ?? v.phase}
+      {!stopped && v.waitingHuman.length > 0 ? ` · 확인 대기 ${v.waitingHuman.length}` : ""}
+    </Badge>
+  );
+}
 
 /**
  * 자율성 수준 (FR-UI-09, INV-NOV-02/04). Change is recorded as `novel.autonomy_changed` (+ `autopilot.enabled/disabled`).
@@ -89,12 +130,12 @@ export function AutonomySection({ novel }: { novel: NovelDto }) {
     );
 
   return (
-    <Card title="자율성 수준" actions={<Badge tone="accent">현재 {labelKo("autonomy_level", novel.autonomyLevel)}</Badge>}>
+    <Card title="자율성 수준" actions={<LiveStatus novel={novel} />}>
       <div className="flex flex-col gap-3">
         <p className="m-0 text-[13px] text-muted">
           사람 승인 게이트의 위치를 정합니다. 질문 민감도와는 별개이며, 변경 이력은 감사 로그에 남습니다.
         </p>
-        <ChoiceGroup legend="자율성 수준" legendHidden name={`autonomy-${novel.id}`} value={level} onChange={setLevel} options={OPTIONS} />
+        <ChoiceGroup legend="자율성 수준" legendHidden name={`autonomy-${novel.id}`} value={level} onChange={setLevel} options={autonomyOptions(novel.autonomyLevel)} />
         {level === "full_auto" && (
           <>
             <div className="rounded-[8px] border border-border p-3 text-[13px]">

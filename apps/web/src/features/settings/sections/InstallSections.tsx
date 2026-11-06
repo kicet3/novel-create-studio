@@ -1,3 +1,4 @@
+import { StateBadge } from "./status-badges.js";
 import { useState, type FormEvent } from "react";
 import { labelKo, type MessagingBotKind } from "@ncs/shared";
 import { errorMessage } from "../../../api/client.js";
@@ -81,7 +82,7 @@ export function SystemInfoCard() {
               {
                 key: "llm",
                 label: "LLM 공급자",
-                value: <Badge tone="accent">새 작품 기본: {PROVIDER_LABEL[i.llmProvider] ?? i.llmProvider}</Badge>,
+                value: <StateBadge state="default">새 작품 기본값: {PROVIDER_LABEL[i.llmProvider] ?? i.llmProvider}</StateBadge>,
               },
               { key: "srv", label: "서버", value: `${i.server.host}:${i.server.port}` },
               { key: "home", label: "설치 홈", value: <code className="font-mono text-xs">{i.home}</code> },
@@ -115,7 +116,7 @@ export function LlmCard() {
                   cell: (p) => (
                     <div className="flex flex-col items-start gap-0.5">
                       <span className="whitespace-nowrap">{PROVIDER_LABEL[p.provider] ?? p.provider}</span>
-                      {p.isActive ? <Badge tone="ok">사용 중</Badge> : null}
+                      {p.isActive ? <StateBadge state="active" /> : null}
                     </div>
                   ),
                 },

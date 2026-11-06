@@ -1,3 +1,4 @@
+import { StateBadge } from "./status-badges.js";
 import { useEffect, useState, type FormEvent } from "react";
 import { labelKo, type LlmProviderId, type ProviderMethodInfo, type ProviderOAuthSessionDto, type ProviderStatusDto } from "@ncs/shared";
 import { errorMessage } from "../../../api/client.js";
@@ -56,7 +57,7 @@ function ProviderRow({ p }: { p: ProviderStatusDto }) {
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="m-0 text-[13.5px] font-bold">{p.label}</h3>
         <Badge tone={h.tone}>{h.label}</Badge>
-        {p.isDefault && <Badge tone="accent">새 작품 기본</Badge>}
+        {p.isDefault && <StateBadge state="default">새 작품 기본값</StateBadge>}
         {p.imageGeneration ? <Badge tone="violet">이미지 생성 지원</Badge> : <Badge tone="neutral">텍스트 전용</Badge>}
         <span className="flex-1" />
         {p.connected && !claude && (
@@ -133,8 +134,8 @@ function MethodBlock({ p, m }: { p: ProviderStatusDto; m: ProviderMethodInfo }) 
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="text-[13px] font-semibold">{m.label}</span>
         {m.official ? <Badge tone="ok">공식 지원</Badge> : <Badge tone="warn">비공식</Badge>}
-        {m.experimental && <Badge tone="warn">실험적</Badge>}
-        {m.configured && <Badge tone={active ? "accent" : "neutral"}>{active ? "사용 중" : "등록됨"}</Badge>}
+        {m.experimental && <StateBadge state="caution">주의 · 실험적</StateBadge>}
+        {m.configured && (active ? <StateBadge state="active" /> : <Badge tone="neutral">등록됨</Badge>)}
         {m.source === "env" && <Badge tone="info">환경 변수</Badge>}
         <span className="flex-1" />
         {m.configured && !active && !claude && (
@@ -211,8 +212,8 @@ function ClaudeCliBlock({ p, m }: { p: ProviderStatusDto; m: ProviderMethodInfo 
           <>
             <Badge tone={cli.installed ? "ok" : "neutral"}>{cli.installed ? "Claude Code 설치됨" : "Claude Code 없음"}</Badge>
             {cli.installed && <Badge tone={subscription ? "ok" : cli.loggedIn ? "warn" : "neutral"}>{subscription ? "구독 로그인됨" : cli.loggedIn ? `구독 아님(${cli.authMethod ?? "알 수 없음"})` : "로그인 필요"}</Badge>}
-            {!cli.enabled && <Badge tone="neutral">앱에서 사용 중지</Badge>}
-            {cli.usable && <Badge tone="accent">사용 가능</Badge>}
+            {!cli.enabled && <StateBadge state="off">앱에서 꺼짐</StateBadge>}
+            {cli.usable && <Badge tone="ok">사용 가능</Badge>}
           </>
         )}
         <span className="flex-1" />
