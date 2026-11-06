@@ -12,11 +12,15 @@ import {
   updateLengthProfileRequestSchema,
   updateNotificationPolicyRequestSchema,
   updateNovelSettingsRequestSchema,
+  updateStructureEndingRequestSchema,
+  updateStoryPartRequestSchema,
+  storyPartParamsSchema,
 } from "@ncs/shared";
 import type { ApiRouters, UnitOfWork } from "../../../../platform/index.js";
 import { ConflictError, NotFoundError } from "../../../../platform/index.js";
 import { actorOf, created, scopeOf, valid, validate } from "../../../../http/kit.js";
 import type { NovelService } from "../../index.js";
+import { toStoryStructureDto } from "../../domain/structure.js";
 
 type Body<S extends z.ZodType> = { body: z.output<S> };
 const arcParams = z.object({ arcId: z.string().regex(/^arc_/) });
@@ -118,6 +122,24 @@ export function mountNovelRoutes({ api, novel }: ApiRouters, svc: NovelService, 
   novel.post("/arcs/:arcId/resume", validate({ params: arcParams }), async (_req, res) => {
     const { params } = valid<{ params: z.output<typeof arcParams> }>(res);
     res.json(await svc.setArcPaused(scopeOf(res), params.arcId, false, actorOf(res)));
+  });
+
+  novel.post("/arcs/:arcId/acknowledge-flags", validate({ params: arcParams }), async (_req, res) => {
+    const { params } = valid<{ params: z.output<typeof arcParams> }>(res);
+    const scope = scopeOf(res);
+    await svc.getArc(scope, params.arcId);
+    res.json(await uow.run((tx) => svc.setArcPlanFlags(tx, scope, params.arcId, [], actorOf(res))));
+  });
+
+  // 설계 추가: 전체 구성 편집 (생성·승인·조회는 manuscript: GET …/structure, POST …/structure/generate|decision)
+  novel.patch("/structure/ending", validate({ body: updateStructureEndingRequestSchema }), async (_req, res) => {
+    const { body } = valid<Body<typeof updateStructureEndingRequestSchema>>(res);
+    res.json(toStoryStructureDto(await svc.updateStructureEnding(scopeOf(res), body.ending, body.expectedRevision, actorOf(res))));
+  });
+  novel.patch("/structure/parts/:partId", validate({ params: storyPartParamsSchema, body: updateStoryPartRequestSchema }), async (_req, res) => {
+    const { params, body } = valid<{ params: z.output<typeof storyPartParamsSchema> } & Body<typeof updateStoryPartRequestSchema>>(res);
+    const { expectedRevision, ...patch } = body;
+    res.json(toStoryStructureDto(await svc.updateStoryPart(scopeOf(res), params.partId, patch, expectedRevision, actorOf(res))));
   });
 
   // length profile & notification policy

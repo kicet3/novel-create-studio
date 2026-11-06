@@ -12,6 +12,7 @@ import { LengthProfileSection } from "./sections/LengthProfileSection.js";
 import { ModelBindingsSection } from "./sections/ModelBindingsSection.js";
 import { NotificationSection } from "./sections/NotificationSection.js";
 import { NovelBasicsSection } from "./sections/NovelBasicsSection.js";
+import { WebSearchSection } from "./sections/WebSearchSection.js";
 
 /** `/novels/:novelId/settings` — 작품 단위 설정 (08 §9.8, FR-UI-09). 모든 변경은 감사 로그에 남습니다. */
 export function NovelSettingsPage() {
@@ -32,6 +33,7 @@ export function NovelSettingsPage() {
           <div className="grid grid-cols-1 gap-3 min-[861px]:grid-cols-2">
             <div className="flex min-w-0 flex-col gap-3">
               <NovelBasicsSection key={n.updatedAt} novel={n} />
+              <WebSearchSection key={`web-${n.updatedAt}`} novel={n} />
               <AutonomySection novel={n} />
               <BudgetSection novelId={novelId} />
               <LengthProfileSection novelId={novelId} />

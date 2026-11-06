@@ -40,6 +40,8 @@ export const ENUMS = {
     "agent_delegated",
     "template_default",
     "imported",
+    // 설계 추가: 자동 승인 모드에서 사용자가 위임해 파트너 추천안을 자동으로 받은 값
+    "agent_auto_accepted",
   ],
   concept_slot_state: ["empty", "proposed", "confirmed", "deferred"],
   concept_user_intent: ["delegate", "answer", "revise", "other"],
@@ -128,6 +130,10 @@ export const ENUMS = {
     // 설계 추가: 캐릭터 설정 단계(module cast)
     "draft_cast",
     "draft_design_sheet",
+    // 설계 추가: 전체 구성(1~4부 + 결말) 기획
+    "plan_structure",
+    // 설계 추가: 컨셉 승인 뒤 세계관 온톨로지 후보 생성(module world)
+    "build_world_ontology",
   ],
   target_type: ["novel", "goal", "arc", "episode", "scene", "shot", "setup", "entity", "question", "concept_session", "character"],
   task_status: ["pending", "ready", "running", "blocked", "done", "failed", "cancelled"],
@@ -268,6 +274,8 @@ export const ENUMS = {
     "media_quote",
     "safety_review",
     "draft_adoption",
+    // 설계 추가: 전체 구성 승인(사용자만)
+    "story_structure",
   ],
   approval_status: ["pending", "approved", "rejected", "cancelled", "superseded"],
   digest_kind: ["non_blocking_digest", "daily_summary", "publish_batch", "absence_summary" /* [v1] */],
@@ -376,6 +384,7 @@ export const ENUMS = {
     "safety_age_rating",
     "safety_minor_sexual",
     "safety_real_person",
+    "plan_deviation", // 설계 추가: 전체 구성·플롯·화 계획 이탈
   ],
   issue_severity: ["high", "medium", "low"],
   continuity_issue_status: ["open", "fixing", "resolved", "waived", "false_positive", "superseded"],
@@ -532,6 +541,14 @@ export const ENUMS = {
   character_status: ["draft", "confirmed"],
   character_sheet_view: ["front", "side", "back", "expressions"],
   character_field_origin: ["user", "agent"],
+  /** 설계 추가: 전체 구성(1~4부 + 결말) 상태 */
+  story_structure_status: ["draft", "awaiting_approval", "approved"],
+  /** 설계 추가: 구성 변경으로 플롯(arc)에 붙는 확인 표시 */
+  arc_plan_flag: ["ending_changed", "part_changed"],
+  /** 설계 추가: 세계관 온톨로지 후보(module world) — 분류, 검토 상태, 만든 쪽 */
+  world_item_kind: ["faction", "place", "system", "object", "history", "relation", "constraint"],
+  world_item_status: ["pending", "approved", "rejected", "superseded"],
+  world_item_origin: ["agent", "user"],
 } as const satisfies Record<string, readonly [string, ...string[]]>;
 
 export type EnumName = keyof typeof ENUMS;

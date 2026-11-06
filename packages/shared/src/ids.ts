@@ -73,6 +73,9 @@ export const ID_PREFIXES = {
   chr: "Character",
   cds: "CharacterDesignSheet",
   csi: "CharacterSheetImage",
+  sst: "StoryStructure",
+  spt: "StoryPart",
+  woi: "WorldOntologyItem",
 } as const;
 
 export type IdPrefix = keyof typeof ID_PREFIXES;

@@ -27,22 +27,44 @@ import {
   type WriterAnnotations,
 } from "../domain/schemas.js";
 import { synthOutline } from "../domain/synth.js";
-import { checkLength, factSignature, firstSentence, normalizeText, SCENE_SEPARATOR, separatorSceneStarts, signaturesEqual } from "../domain/text.js";
+import {
+  checkLength,
+  continuationNeeded,
+  countBasisLabel,
+  countChars,
+  factSignature,
+  firstSentence,
+  guardSceneLength,
+  normalizeText,
+  SCENE_SEPARATOR,
+  separatorSceneStarts,
+  signaturesEqual,
+  type LengthCheck,
+} from "../domain/text.js";
+import { EPISODE_HARD_MIN_CHARS, type CountBasis } from "@ncs/shared";
 import { REWORK_TARGET } from "../domain/transitions.js";
 import type { Episode, ManuscriptService, SceneDraft } from "../index.js";
 import { promptOf, type PipelineHandler, type PipelineLlm } from "./agent-task.js";
-import { lengthWarningText, type ManuscriptInternals } from "./manuscript-service.js";
+import { lengthWarningOf, type ManuscriptInternals } from "./manuscript-service.js";
 import { settings, soft } from "./support.js";
+import { structureGateRef } from "./structure.js";
 
 type In = EpisodeTaskInput;
-const WRITING_SECTIONS: ContextSectionKind[] = ["instruction", "constraints", "assigned_beats", "outline", "cast", "entity_cards", "pov_names", "knowledge", "canon_1hop", "glossary", "recent_text"];
+const WRITING_SECTIONS: ContextSectionKind[] = ["instruction", "constraints", "story_plan", "assigned_beats", "outline", "cast", "entity_cards", "pov_names", "knowledge", "canon_1hop", "glossary", "recent_text"];
 
 const OUTLINE_INSTRUCTION = `당신은 웹소설 기획자(planner)입니다. 이번 화 아웃라인을 JSON으로 씁니다.
 - scenes[]마다 key(s1, s2 …)·summary·pov_entity_id·location_entity_id·participant_entity_ids·setup_beat_ids를 채웁니다. 엔티티는 ID로만 참조합니다.
-- 배정된 떡밥 비트는 모두 한 씬 이상에 배정합니다. 새 인물은 new_entity_proposals에 이름만 제안합니다.`;
+- 배정된 떡밥 비트는 모두 한 씬 이상에 배정합니다. 새 인물은 new_entity_proposals에 이름만 제안합니다.
+- 씬 수는 [작품 구성]의 이번 화 계획 씬 수를 따르고, 계획한 플롯 사건과 현재 부 목표를 벗어나지 않습니다.
+- target_chars는 이번 화 목표 분량(최소 분량 이상)입니다. 아직 등장 전인 인물은 등장시키지 않습니다.`;
 const DRAFT_INSTRUCTION = `당신은 웹소설 작가(writer)입니다. 아웃라인의 씬을 순서대로 본문으로 씁니다.
 - 씬과 씬 사이에는 "${SCENE_SEPARATOR}" 한 줄만 둡니다. 다른 표기·주석은 넣지 않습니다.
-- 작품 연령 등급을 넘는 묘사를 쓰지 않습니다. 시점 인물이 모르는 이름은 쓰지 않습니다.`;
+- 작품 연령 등급을 넘는 묘사를 쓰지 않습니다. 시점 인물이 모르는 이름은 쓰지 않습니다.
+- 목표 분량 이상으로 씁니다. 최소 분량에 못 미친 채로 끝내지 않습니다.
+- [작품 구성]의 결말·현재 부 목표·플롯 핵심 사건·이번 화 계획을 벗어나지 않습니다.`;
+const CONTINUE_INSTRUCTION = `당신은 웹소설 작가(writer)입니다. 이 화의 초고가 최소 분량보다 짧습니다. 지금까지 쓴 본문 바로 뒤에 이어질 본문만 씁니다.
+- 앞 내용을 반복하거나 요약하지 않습니다. 아웃라인의 남은 씬을 이어서 쓰고, 씬이 바뀌면 "${SCENE_SEPARATOR}" 한 줄을 둡니다.
+- 제목·메모·설명 없이 이어지는 본문만 출력합니다.`;
 const REVISE_INSTRUCTION = `당신은 웹소설 작가(writer)입니다. 주어진 씬 하나만 다시 씁니다. 지적된 문제를 고치고 앞뒤 씬과 이어지게 씁니다. 씬 본문만 출력합니다.`;
 const POLISH_INSTRUCTION = `당신은 문장 교정자(line_editor)입니다. 주어진 씬의 문장만 다듬습니다. 사건·인물·숫자·고유명사는 바꾸지 않습니다. 다듬은 씬 본문만 출력합니다.`;
 const REWORK_INSTRUCTION = `당신은 쇼러너(showrunner)입니다. 사람이 반려한 사유를 읽고 다시 쓸 씬 번호와 작업 지시를 JSON으로 정합니다. 원고는 쓰지 않습니다.`;
@@ -99,6 +121,9 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
     if (!ep) return { ok: true as const };
     const bible = await novel.getApprovedBible(scope);
     if (!bible) return { ok: false as const, blockReason: "approval" as const };
+    // 설계 추가: an edited (unapproved) story structure stops new outlines / drafts until the author re-approves it
+    const st = await novel.getStructure(scope);
+    if (st && st.status !== "approved") return { ok: false as const, blockReason: "approval" as const, blockedRef: structureGateRef(scope) };
     const arc = await novel.getArc(scope, ep.arcId);
     const n = await novel.getNovel(scope);
     if (n.autonomyLevel !== "full_auto" && !["active", "awaiting_approval", "completed"].includes(arc.status)) {
@@ -138,12 +163,17 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       const arc = await novel.getArc(scope, ep.arcId);
       const profile = await m.lengthProfile(scope);
       const beatIds = (await Promise.all(ports.reg.beatSources.map((s) => soft(() => s(scope, ep.episodeNo), [])))).flat();
-      const target = Math.round((profile.minChars + profile.maxChars) / 2);
+      // 설계 추가 L5: the episode plan's target, never under the profile minimum
+      const target = Math.max(ep.targetChars ?? Math.round((profile.minChars + profile.maxChars) / 2), profile.minChars);
       const data = JSON.stringify({
         episode: { no: ep.episodeNo, title: ep.title, hookNote: ep.hookNote },
         arc: { title: arc.title, goal: arc.goalText, conflict: arc.conflictText, end: arc.endCondition, range: [arc.plannedEpisodeFrom, arc.plannedEpisodeTo] },
+        plot: { coreEvent: arc.coreEvent, changeText: arc.changeText, involvedCharacterIds: arc.involvedCharacterIds },
+        episodePlan: { summary: ep.planSummary, plannedSceneCount: ep.plannedSceneCount, targetChars: target },
         assignedSetupBeatIds: beatIds,
         targetChars: target,
+        minChars: profile.minChars,
+        countBasis: countBasisLabel(profile.countBasis),
         rework: input.rework_cause ? { cause: input.rework_cause, issues: input.issue_refs ?? [], instructions: input.instructions ?? null } : null,
       });
       const synth = synthOutline(ep, target, beatIds);
@@ -172,7 +202,7 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       const assigned = new Set(scenes.flatMap((s) => s.setup_beat_ids));
       const missing = beatIds.filter((b) => !assigned.has(b));
       if (missing.length) scenes[Math.floor(scenes.length / 2)]!.setup_beat_ids.push(...missing);
-      const outline: OutlineData = outlineDataSchema.parse({ ...v.outline, scenes, hook: v.outline.hook || synth.outline.hook, target_chars: v.outline.target_chars || target });
+      const outline: OutlineData = outlineDataSchema.parse({ ...v.outline, scenes, hook: v.outline.hook || synth.outline.hook, target_chars: Math.max(v.outline.target_chars || target, profile.minChars) });
       return { outline: { summary: v.summary || synth.summary, title: v.title ?? ep.title, outline }, modelId: out.modelId };
     },
     async commit(tx, run, input, p) {
@@ -195,7 +225,7 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
   };
 
   // ── P2 draft_episode ──
-  const draftEpisode: PipelineHandler<In, { content: string; annotations: WriterAnnotations; modelId: string }> = {
+  const draftEpisode: PipelineHandler<In, { content: string; annotations: WriterAnnotations; modelId: string; lengthCheck: LengthCheck; continueAttempts: number }> = {
     kind: "draft_episode",
     role: "writer",
     promptTemplateVersion: "writer.draft_episode@0.1.0",
@@ -210,19 +240,59 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       const outline = outlineDataSchema.parse(outlineV?.outlineData ?? {});
       const profile = await m.lengthProfile(scope);
       const n = await novel.getNovel(scope);
-      const target = outline.target_chars || Math.round((profile.minChars + profile.maxChars) / 2);
+      // 설계 추가 L6: never below the profile minimum (≥ 3,000-char floor)
+      const target = Math.max(outline.target_chars || Math.round((profile.minChars + profile.maxChars) / 2), profile.minChars);
+      const basis = countBasisLabel(profile.countBasis);
       const data = JSON.stringify({
         episode: { no: ep.episodeNo, title: ep.title },
         ageRating: n.ageRating,
         targetChars: target,
+        minChars: profile.minChars,
+        countBasis: basis,
         scenes: outline.scenes.map((s) => ({ key: s.key, summary: s.summary })),
         hook: outline.hook,
         rework: input.rework_cause ? { cause: input.rework_cause, issues: (input.issue_refs ?? []).map((i) => i.message), instructions: input.instructions ?? null } : null,
       });
-      const out = await llm.call({ run, purpose: "draft", ...promptOf(context, DRAFT_INSTRUCTION, `목표 분량: ${target}자\n${data}`), output: { kind: "text" }, maxOutputTokens: 16_000 });
-      const content = normalizeText(String(out.value)).trim();
+      const out = await llm.call({
+        run,
+        purpose: "draft",
+        ...promptOf(context, DRAFT_INSTRUCTION, `목표 분량: ${target}자 이상(${basis}), 최소 ${profile.minChars}자 미만으로 끝내지 않습니다.\n${data}`),
+        output: { kind: "text" },
+        maxOutputTokens: 16_000,
+      });
+      let content = normalizeText(String(out.value)).trim();
       if (!content) throw new ModelCallError("invalid_output", null, undefined, "모델이 빈 초고를 반환했습니다.");
-      return { content, annotations: annotate(content, outline), modelId: out.modelId };
+      // continuation while short (max attempts, stop when a continuation barely grows the text)
+      let attempt = 0;
+      let lastGrowth: number | null = null;
+      let modelId = out.modelId;
+      while (continuationNeeded(countChars(content, profile.countBasis), profile.minChars, attempt, cfg.draftContinueMaxAttempts, lastGrowth, cfg.draftContinueMinGrowth)) {
+        await run.checkpoint();
+        attempt++;
+        const before = countChars(content, profile.countBasis);
+        const payload = JSON.stringify({
+          episode: { no: ep.episodeNo, title: ep.title },
+          scenes: outline.scenes.map((s) => ({ key: s.key, summary: s.summary })),
+          hook: outline.hook,
+          writtenTail: content.slice(-1500),
+          writtenChars: before,
+          shortfall: profile.minChars - before,
+          attempt,
+        });
+        const more = await llm.call({
+          run,
+          purpose: "draft_continue",
+          ...promptOf(context, CONTINUE_INSTRUCTION, `부족한 분량: ${profile.minChars - before}자 이상(${basis})\n${payload}`),
+          output: { kind: "text" },
+          maxOutputTokens: 12_000,
+        });
+        modelId = more.modelId;
+        const extra = normalizeText(String(more.value)).trim();
+        if (extra) content = `${content}\n\n${extra}`;
+        lastGrowth = countChars(content, profile.countBasis) - before;
+      }
+      const lengthCheck = checkLength(content, profile);
+      return { content, annotations: annotate(content, outline), modelId, lengthCheck, continueAttempts: attempt };
     },
     commit: (tx, run, input, p) => commitBody(tx, run, input, p, "draft"),
   };
@@ -235,14 +305,29 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
     return { scene_breaks: breaks, entity_hints: [], new_entity_refs: [], answer_spans: [], setup_beat_spans: [] };
   };
 
-  const commitBody = async (tx: Tx, run: RunHandle, input: In, p: { content: string; annotations: WriterAnnotations; modelId: string; baseVersionId?: string | null }, kind: "draft" | "revision") => {
+  const commitBody = async (
+    tx: Tx,
+    run: RunHandle,
+    input: In,
+    p: { content: string; annotations: WriterAnnotations; modelId: string; baseVersionId?: string | null; lengthCheck?: LengthCheck; continueAttempts?: number; rejected?: "length_floor" | null; lengthKept?: string[] },
+    kind: "draft" | "revision",
+  ) => {
     const scope = scopeOf(run);
     const agent = actors.agent("writer", run.runId);
     const ep = await m.mustEpisode(tx, scope, input.episode_id, true);
     if (ep.status !== "drafting") return skip();
     if (p.baseVersionId !== undefined && p.baseVersionId !== ep.currentVersionId) return skip(); // superseded by a newer version
+    if (p.rejected === "length_floor" && ep.currentVersionId) {
+      // 설계 추가 L8: a revision that shrinks the episode under the floor is not saved — the base version goes back to checking
+      await m.transition(tx, scope, ep.id, "checking", agent, { ruleId: "E3", details: { versionId: ep.currentVersionId, lengthRejected: true } });
+      await followUp(tx, scope, ep, "split_scenes", { manuscript_version_id: ep.currentVersionId, cycle_key: `${ep.currentVersionId}:length_kept:${run.runId}` }, agent, 700);
+      return { kind: "done" as const, outputRefs: [{ refType: "manuscript_version" as const, refId: ep.currentVersionId }] };
+    }
     const version = await m.saveVersion(tx, scope, ep.id, { kind: ep.currentVersionId ? "revision" : kind, content: p.content, author: agent, modelId: p.modelId, writerAnnotations: p.annotations });
-    await m.transition(tx, scope, ep.id, "checking", agent, { ruleId: "E3", details: { versionId: version.id } });
+    const lengthDetails = p.lengthCheck
+      ? { lengthShortfall: Math.max(0, p.lengthCheck.minChars - p.lengthCheck.count), belowFloor: p.lengthCheck.belowFloor, continueAttempts: p.continueAttempts ?? 0 }
+      : {};
+    await m.transition(tx, scope, ep.id, "checking", agent, { ruleId: "E3", details: { versionId: version.id, ...lengthDetails, ...(p.lengthKept?.length ? { lengthKept: p.lengthKept } : {}) } });
     await followUp(tx, scope, ep, "split_scenes", { manuscript_version_id: version.id, cycle_key: version.id }, agent, 700);
     return { kind: "done" as const, outputRefs: [{ refType: "manuscript_version" as const, refId: version.id }] };
   };
@@ -258,12 +343,16 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
     instruction: string,
     payload: (s: { ord: number; summary: string; text: string }) => string,
     purpose: string,
+    floor?: { basis: CountBasis; min: number },
   ) => {
     const human = userRanges((base.attributionSpans as never) ?? []);
     let out = "";
     let pos = 0;
     const changed: string[] = [];
     const skipped: string[] = [];
+    const lengthKept: string[] = [];
+    const count = (t: string) => (floor ? countChars(t, floor.basis) : t.length);
+    let projected = floor ? count(base.content) : 0;
     for (const s of scenes) {
       const text = base.content.slice(s.start, s.end);
       out += base.content.slice(pos, s.start);
@@ -281,12 +370,22 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       const trail = /\s*$/.exec(text)![0];
       const r = await llm.call({ run, purpose, ...promptOf(context, instruction, payload({ ord: s.ord, summary: s.summary, text })), output: { kind: "text" } });
       const body = normalizeText(String(r.value)).trim();
-      out += body ? `${lead}${body}${trail}` : text;
-      if (body && body !== text.trim()) changed.push(s.id);
+      let next = body ? `${lead}${body}${trail}` : text;
+      if (floor && body) {
+        // 설계 추가 L7: a shorter scene that would take the episode under the floor keeps the original text
+        const delta = count(next) - count(text);
+        if (guardSceneLength({ originalSceneCount: count(text), newSceneCount: count(next), projectedTotal: projected + delta, floor: floor.min }) === "keep_original") {
+          next = text;
+          lengthKept.push(s.id);
+        } else projected += delta;
+      }
+      out += next;
+      if (next !== text && body !== text.trim()) changed.push(s.id);
       await run.checkpoint();
     }
     out += base.content.slice(pos);
-    return { content: out, changed, skipped };
+    const rejected = floor && count(out) < floor.min && count(out) < count(base.content) ? ("length_floor" as const) : null;
+    return { content: out, changed, skipped, lengthKept, rejected };
   };
 
   const activeRanges = async (scope: NovelScope, ep: Episode, versionId: string) => {
@@ -299,7 +398,10 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
   };
 
   // ── P6 revise_episode ──
-  const reviseEpisode: PipelineHandler<In, { content: string; annotations: WriterAnnotations; modelId: string; baseVersionId: string | null; changed: string[]; skipped: string[] }> = {
+  const reviseEpisode: PipelineHandler<
+    In,
+    { content: string; annotations: WriterAnnotations; modelId: string; baseVersionId: string | null; changed: string[]; skipped: string[]; rejected: "length_floor" | null; lengthKept: string[] }
+  > = {
     kind: "revise_episode",
     role: "writer",
     promptTemplateVersion: "writer.revise_episode@0.1.0",
@@ -312,7 +414,7 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       const outline = outlineDataSchema.parse((await loadVersion(scope, ep.outlineVersionId))?.outlineData ?? {});
       const base = await loadVersion(scope, ep.currentVersionId);
       const profile = await m.lengthProfile(scope);
-      const target = outline.target_chars || Math.round((profile.minChars + profile.maxChars) / 2);
+      const target = Math.max(outline.target_chars || Math.round((profile.minChars + profile.maxChars) / 2), profile.minChars);
       if (!base) throw new DomainValidationError("no_manuscript", "수정할 원고 버전이 없습니다.");
       const scenes = await activeRanges(scope, ep, base.id);
       const targets = new Set(input.target_scene_ids ?? []);
@@ -327,11 +429,13 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
         scenes,
         (s) => whole || targets.has(s.id),
         REVISE_INSTRUCTION,
-        (s) => `목표 분량: ${s.text.trim().length}자\n${JSON.stringify({ sceneOrd: s.ord, summary: s.summary, issues, instructions: input.instructions ?? null, text: s.text })}`,
+        (s) =>
+          `목표 분량: ${countChars(s.text.trim(), profile.countBasis)}자 이상 — 이 씬 분량을 줄이지 마세요(현재 ${countChars(s.text.trim(), profile.countBasis)}자, 화 전체 목표 ${target}자)\n${JSON.stringify({ sceneOrd: s.ord, summary: s.summary, issues, instructions: input.instructions ?? null, text: s.text })}`,
         "revise",
+        { basis: profile.countBasis, min: EPISODE_HARD_MIN_CHARS },
       );
       const content = normalizeText(r.content);
-      return { content, annotations: annotate(content, outline), modelId, baseVersionId: base.id, changed: r.changed, skipped: r.skipped };
+      return { content, annotations: annotate(content, outline), modelId, baseVersionId: base.id, changed: r.changed, skipped: r.skipped, rejected: r.rejected, lengthKept: r.lengthKept };
     },
     commit: (tx, run, input, p) => commitBody(tx, run, input, p, "revision"),
   };
@@ -472,7 +576,10 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
   });
 
   // ── P4 polish_episode ──
-  const polishEpisode: PipelineHandler<In, { content: string; modelId: string; baseVersionId: string; factDiff: boolean; changed: string[]; skipped: string[]; sceneDrafts: SceneDraft[] }> = {
+  const polishEpisode: PipelineHandler<
+    In,
+    { content: string; modelId: string; baseVersionId: string; factDiff: boolean; changed: string[]; skipped: string[]; sceneDrafts: SceneDraft[]; rejected: "length_floor" | null; lengthKept: string[] }
+  > = {
     kind: "polish_episode",
     role: "line_editor",
     promptTemplateVersion: "line_editor.polish_episode@0.1.0",
@@ -484,6 +591,7 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       const ep = await getService().getEpisode(scope, input.episode_id);
       const base = (await loadVersion(scope, ep.currentVersionId))!;
       const scenes = await activeRanges(scope, ep, base.id);
+      const profile = await m.lengthProfile(scope);
       let modelId = "none";
       const r = await rewriteScenes(
         run,
@@ -493,8 +601,11 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
         scenes,
         () => true,
         POLISH_INSTRUCTION,
-        (s) => `목표 분량: ${s.text.trim().length}자\n${JSON.stringify({ sceneOrd: s.ord, instructions: input.instructions ?? null, text: s.text })}`,
+        (s) =>
+          `목표 분량: ${countChars(s.text.trim(), profile.countBasis)}자 이상 — 이 씬 분량을 줄이지 마세요(현재 ${countChars(s.text.trim(), profile.countBasis)}자)\n${JSON.stringify({ sceneOrd: s.ord, instructions: input.instructions ?? null, text: s.text })}`,
         "polish",
+        // polishing never takes an episode under the profile minimum (it only edits sentences); revise keeps the 3,000 floor
+        { basis: profile.countBasis, min: Math.max(EPISODE_HARD_MIN_CHARS, profile.minChars) },
       );
       const content = normalizeText(r.content);
       const names = (await soft(() => ontology.listEntities(scope, { limit: 500 }), [])).map((e) => e.preferredName);
@@ -505,13 +616,20 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       const mapped = (current.length ? mapRanges(oldRanges, diffText(base.content, content), content.length) : null) ?? deterministicRanges(content, Math.max(1, current.length));
       const sceneDrafts: SceneDraft[] = mapped.map((rg, i) => ({ ord: i + 1, charStart: rg.start, charEnd: rg.end, summary: current[i]?.summary || firstSentence(content.slice(rg.start, rg.end)) }));
       if (sceneDrafts.length) sceneDrafts[sceneDrafts.length - 1]!.charEnd = content.length;
-      return { content, modelId, baseVersionId: base.id, factDiff, changed: r.changed, skipped: r.skipped, sceneDrafts };
+      return { content, modelId, baseVersionId: base.id, factDiff, changed: r.changed, skipped: r.skipped, sceneDrafts, rejected: r.rejected, lengthKept: r.lengthKept };
     },
     async commit(tx, run, input, p) {
       const scope = scopeOf(run);
       const agent = actors.agent("line_editor", run.runId);
       const ep = await m.mustEpisode(tx, scope, input.episode_id, true);
       if (ep.status !== "polishing" || ep.currentVersionId !== p.baseVersionId) return skip();
+      if (p.rejected === "length_floor") {
+        // 설계 추가 L9: the polished text would fall under the floor → keep the checked base version
+        const base = await getService().getVersion(scope, p.baseVersionId, tx);
+        const length = checkLength(base.content, await m.lengthProfile(scope, tx));
+        await m.enterAwaitingApproval(tx, scope, ep.id, agent, { lengthWarning: lengthWarningOf(length), length });
+        return { kind: "done", outputRefs: [{ refType: "manuscript_version", refId: base.id }] };
+      }
       const version = await m.saveVersion(tx, scope, ep.id, { kind: "revision", content: p.content, author: agent, modelId: p.modelId });
       if (p.factDiff && cfg.polishRecheckOnFactDiff) {
         // E7: the polished text changed fact-bearing tokens → full re-check (counts toward the auto-rewrite cap)
@@ -520,7 +638,7 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       } else {
         if (p.sceneDrafts.length) await getService().replaceScenes(tx, scope, version.id, p.sceneDrafts, agent);
         const length = checkLength(p.content, await m.lengthProfile(scope, tx));
-        await m.enterAwaitingApproval(tx, scope, ep.id, agent, { lengthWarning: length.deviation ? lengthWarningText(length.deviation) : null });
+        await m.enterAwaitingApproval(tx, scope, ep.id, agent, { lengthWarning: lengthWarningOf(length), length });
       }
       return { kind: "done", outputRefs: [{ refType: "manuscript_version", refId: version.id }] };
     },

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { briefValueText, editText, getBriefValue, isEmptyBriefValue, parseEditValue } from "./brief-fields.js";
+import { briefValueText, editText, getBriefValue, isEmptyBriefValue, parseEditValue, proposalDecisionNote, proposalOutcomeText, splitProposals } from "./brief-fields.js";
 
 const content = {
   logline: "회귀한 헌터가 붕괴를 막는다",
@@ -38,5 +38,27 @@ describe("brief field helpers", () => {
     expect(isEmptyBriefValue([])).toBe(true);
     expect(isEmptyBriefValue(" ")).toBe(true);
     expect(isEmptyBriefValue(0)).toBe(false);
+  });
+});
+
+describe("change proposal helpers", () => {
+  it("only pending proposals ask for an answer; settled ones are history, newest first", () => {
+    const all = [
+      { id: "a", status: "accepted" as const, resolution: "applied_in_chat" },
+      { id: "b", status: "pending" as const },
+      { id: "c", status: "superseded" as const, resolution: "replaced" },
+    ];
+    const { pending, settled } = splitProposals(all);
+    expect(pending.map((p) => p.id)).toEqual(["b"]);
+    expect(settled.map((p) => p.id)).toEqual(["c", "a"]);
+    expect(settled.map(proposalOutcomeText)).toEqual(["새 제안으로 대체", "대화에서 같은 값으로 정함"]);
+    expect(proposalOutcomeText({ status: "rejected", resolution: "decided_in_chat" })).toBe("대화에서 지금 값 유지");
+  });
+});
+
+describe("change proposal decision note", () => {
+  it("tells the user the decision goes to the partner, queued behind a reply in progress", () => {
+    expect(proposalDecisionNote(false)).toContain("컨셉 파트너가 이어서 답");
+    expect(proposalDecisionNote(true)).toContain("이 답 다음에");
   });
 });

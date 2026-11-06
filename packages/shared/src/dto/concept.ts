@@ -5,6 +5,7 @@
 import { z } from "zod";
 import { ENUMS } from "../enum-registry.js";
 import { isoDateTime, queryInt } from "./common.js";
+import { llmWebSourceSchema } from "./llm.js";
 
 // ── shared pieces ───────────────────────────────────────────────────────
 export const conceptOptionDtoSchema = z.object({
@@ -87,6 +88,10 @@ export const conceptMessageDtoSchema = z.object({
   slotUpdates: z.array(conceptSlotDiffDtoSchema),
   respondsToSeq: z.number().int().nullable(),
   isSuperseded: z.boolean(),
+  /** 설계 추가: 자동 승인 모드가 사용자 대신 고른 선택(author_kind=user, 위임) */
+  autoApproved: z.boolean().default(false),
+  /** 설계 추가 0011: 답변이 쓴 웹 검색 출처 (각주 "출처") */
+  sources: z.array(llmWebSourceSchema).nullable().default(null),
   createdAt: isoDateTime,
 });
 export type ConceptMessageDto = z.infer<typeof conceptMessageDtoSchema>;
@@ -111,20 +116,50 @@ export const conceptBriefDtoSchema = z.object({
 });
 export type ConceptBriefDto = z.infer<typeof conceptBriefDtoSchema>;
 
+/** 설계 추가: 자동 승인 모드 상태 (SessionView.autoApprove) */
+export const CONCEPT_AUTO_APPROVE_STATUS = ["off", "running", "waiting_user"] as const;
+export const CONCEPT_AUTO_APPROVE_STOP_REASONS = [
+  "completed",
+  "step_cap",
+  "turn_cap",
+  "budget",
+  "error",
+  "user_stopped",
+  "toggled_off",
+  "session_closed",
+  "messenger",
+] as const;
+export const CONCEPT_AUTO_APPROVE_WAIT_REASONS = ["open_question", "user_field_proposal", "conflict"] as const;
+export const conceptAutoApproveViewDtoSchema = z.object({
+  enabled: z.boolean(),
+  status: z.enum(CONCEPT_AUTO_APPROVE_STATUS),
+  /** auto picks in the current run */
+  steps: z.number().int(),
+  maxSteps: z.number().int(),
+  /** also auto-accept change proposals on fields the user wrote (default off) */
+  acceptUserFieldProposals: z.boolean(),
+  waitingReason: z.enum(CONCEPT_AUTO_APPROVE_WAIT_REASONS).nullable(),
+  stopReason: z.enum(CONCEPT_AUTO_APPROVE_STOP_REASONS).nullable(),
+  canEnable: z.boolean(),
+  updatedAt: isoDateTime.nullable(),
+});
+export type ConceptAutoApproveViewDto = z.infer<typeof conceptAutoApproveViewDtoSchema>;
+
 /** GET …/concept/session and GET …/concept/sessions/:sessionId */
 export const conceptSessionViewDtoSchema = z.object({
   session: conceptSessionDtoSchema,
   workingBrief: z.object({
     content: z.record(z.string(), z.unknown()),
     field_provenance: z.record(z.string(), conceptFieldProvenanceDtoSchema),
-    change_proposals: z.array(z.object({ id: z.string(), field_path: z.string(), new_value: z.unknown(), reason: z.string(), status: z.enum(["pending", "accepted", "rejected"]) }).loose()),
+    change_proposals: z.array(z.object({ id: z.string(), field_path: z.string(), new_value: z.unknown(), reason: z.string(), status: z.enum(["pending", "accepted", "rejected", "superseded"]), resolution: z.string().optional() }).loose()),
     checks: z.unknown(),
     meta: z.unknown(),
   }),
   progress: z.object({ requiredTotal: z.number().int(), requiredConfirmed: z.number().int(), missing: z.array(z.object({ path: z.string(), label: z.string() })) }),
   blockers: z.array(z.object({ code: z.string(), message: z.string(), fieldPaths: z.array(z.string()) })),
   canSubmit: z.boolean(),
-  turns: z.object({ used: z.number().int(), limit: z.number().int(), extensionsLeft: z.number().int(), softWarning: z.number().int() }),
+  /** `limit`은 숨은 안전 상한, `softWarning`은 경고를 띄울 사용 턴 수, `extension`은 [턴 상한 올리기] 1회에 늘어나는 턴 수 */
+  turns: z.object({ used: z.number().int(), limit: z.number().int(), extensionsLeft: z.number().int(), softWarning: z.number().int(), extension: z.number().int() }),
   budget: z.object({ spentMicros: z.number().int(), limitMicros: z.number().int(), checkReserveMicros: z.number().int() }),
   statusLabel: z.string(),
   stageLabel: z.string(),
@@ -142,6 +177,18 @@ export const conceptSessionViewDtoSchema = z.object({
       canRefresh: z.boolean(),
     })
     .default({ items: [], generatedAt: null, refreshing: false, error: null, canRefresh: false }),
+  /** 설계 추가: 자동 승인 모드 (세션 단위, 서버가 추천안을 골라 대화를 이어 감) */
+  autoApprove: conceptAutoApproveViewDtoSchema.default({
+    enabled: false,
+    status: "off",
+    steps: 0,
+    maxSteps: 20,
+    acceptUserFieldProposals: false,
+    waitingReason: null,
+    stopReason: null,
+    canEnable: false,
+    updatedAt: null,
+  }),
 });
 export type ConceptSessionViewDto = z.infer<typeof conceptSessionViewDtoSchema>;
 
@@ -182,7 +229,7 @@ export const conceptEditBriefRequestSchema = z.object({ path: z.string().min(1).
 export type ConceptEditBriefRequest = z.infer<typeof conceptEditBriefRequestSchema>;
 
 export const conceptPauseRequestSchema = z.object({ reason: z.literal("user").default("user") });
-/** POST …/extend — `turns: true` adds concept.turn_extension (20) once; `budgetMicros` is the new absolute limit */
+/** POST …/extend — `turns: true` raises the safety ceiling by concept.turn_extension (50) once (max concept.max_turn_extensions); `budgetMicros` is the new absolute limit */
 export const conceptExtendRequestSchema = z
   .object({ turns: z.boolean().optional(), budgetMicros: z.number().int().positive().optional() })
   .refine((v) => v.turns || v.budgetMicros !== undefined, { message: "turns 또는 budgetMicros가 필요합니다." });
@@ -201,3 +248,11 @@ export const conceptChooseTitleRequestSchema = z.object({ title: z.string().trim
 export type ConceptChooseTitleRequest = z.infer<typeof conceptChooseTitleRequestSchema>;
 /** POST …/change-proposals/:proposalId */
 export const conceptChangeProposalDecisionSchema = z.object({ decision: z.enum(["accepted", "rejected"]) });
+/** 설계 추가: POST …/concept/sessions/:sessionId/auto-approve → SessionView */
+export const conceptAutoApproveRequestSchema = z.object({
+  enabled: z.boolean(),
+  /** auto picks before the run stops by itself (default 20) */
+  maxSteps: z.number().int().min(1).max(60).optional(),
+  acceptUserFieldProposals: z.boolean().optional(),
+});
+export type ConceptAutoApproveRequest = z.infer<typeof conceptAutoApproveRequestSchema>;

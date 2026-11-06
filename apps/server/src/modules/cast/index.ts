@@ -15,7 +15,7 @@
  *
  * Provenance: every profile / sheet field has an origin (`user` | `agent`); the agent never overwrites a `user` field.
  */
-import type { CastDraftRequest, CharacterCreateRequest, CharacterPatchRequest, CharacterSheetView, DesignSheetImageRequest, DesignSheetPatchRequest, DesignSheetSpec } from "@ncs/shared";
+import type { CastCompleteness, CastDraftRequest, CharacterCreateRequest, CharacterPatchRequest, CharacterSheetView, DesignSheetImageRequest, DesignSheetPatchRequest, DesignSheetSpec } from "@ncs/shared";
 import type { CharacterDesignSheetsRow, CharactersRow, CharacterSheetImagesRow } from "@ncs/db/schema";
 import type { ActorRef, NovelScope, Tx } from "../../platform/index.js";
 import type { ImageGenerationWithAssets } from "../imaging/index.js";
@@ -39,6 +39,12 @@ export interface CastState {
   lastDraftError: string | null;
   /** characterId → design sheet state (thumbnail = primary front asset) */
   sheets: Map<string, { hasSheet: boolean; frontAssetId: string | null }>;
+  /** 설계 추가: initial-cast completeness before the story structure */
+  completeness: CastCompleteness;
+  /** characters introduced by plots that still need fields or an accepted proposal (they block their plot's approval) */
+  plotCompleteness: CastCompleteness;
+  /** arcId → title (characters introduced by a plot) */
+  arcTitles: Map<string, string>;
 }
 
 export interface DesignSheetState {
@@ -81,8 +87,12 @@ export interface CastService {
   selectPrimaryImage(scope: NovelScope, characterId: string, view: CharacterSheetView, assetId: string | null, actor: ActorRef): Promise<DesignSheetState>;
   /** reference text reused by image prompts of the character (empty sheet → profile basics only) */
   referenceText(scope: NovelScope, characterId: string): Promise<string>;
-  /** context section `cast` text (confirmed characters; an edited one with its last confirmed profile) */
-  renderCastContext(scope: NovelScope): Promise<{ text: string; entityIds: string[] }>;
+  /**
+   * context section `cast` text (confirmed characters; an edited one with its last confirmed profile). With
+   * `focusEntityIds` only those get the full profile (the rest one line); `episodeNo` marks characters before their
+   * first appearance ("아직 등장 전") and the first-appearance episode.
+   */
+  renderCastContext(scope: NovelScope, opts?: { focusEntityIds?: string[]; episodeNo?: number }): Promise<{ text: string; entityIds: string[] }>;
 }
 
 export type { CastModuleDeps } from "./module.js";

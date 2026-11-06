@@ -105,7 +105,8 @@ export const CHECK_INSTRUCTION = `당신은 웹소설의 연속성 편집자(con
 - 회상·꿈·다른 시간선 장면, 시체 언급, 회상 대사는 사망 인물 규칙 위반이 아닙니다.
 - violation이면 quote에 문제 문장을 원고에서 그대로 옮기고, proposed_fix와 fix_scope(span/scene/outline)를 적으세요.
 그 밖에 [FACTS]의 캐논과 모순되는 서술(외형·나이·관계·장소 이동·능력 규칙·인물 지식)을 찾으면 issues에 넣고,
-evidence에 근거 사실 핸들(F1, F2 …)을 1개 이상 적으세요. 근거 사실이 없는 의심은 넣지 마세요.`;
+evidence에 근거 사실 핸들(F1, F2 …)을 1개 이상 적으세요. 근거 사실이 없는 의심은 넣지 마세요.
+[작품 구성]의 결말·현재 부 목표·플롯 핵심 사건·이번 화 계획에서 벗어난 전개는 kind=plan_deviation, evidence ["PLAN"]으로 보고하세요(사실 핸들 불필요).`;
 
 export function checkContinuityHandler(deps: ContinuityPorts, svc: ContinuityInternals): AgentTaskHandler<CheckContinuityInput, CheckContinuityProposal> {
   const log = deps.platform.log;
@@ -305,7 +306,7 @@ export function checkContinuityHandler(deps: ContinuityPorts, svc: ContinuityInt
       return builder.build(run, {
         anchor: { storyPoint: ep.episodeNo * 1000, timelineId: ep.primaryTimelineId },
         seeds: { entityIds: [], setupIds: [], answerIds: [], mentionIds: [] },
-        sections: ["instruction", "constraints", "entity_cards", "knowledge", "canon_1hop"],
+        sections: ["instruction", "constraints", "story_plan", "entity_cards", "knowledge", "canon_1hop"],
         maxInputTokens: DEFAULTS["context.max_input_tokens.default"],
         hopPredicates: { hop2: [] },
         episodeId: ep.id,
@@ -359,6 +360,8 @@ export function checkContinuityHandler(deps: ContinuityPorts, svc: ContinuityInt
         const severity = adjustSeverity(m.kind, m.severity, m.evidenceCanon);
         // 06 §9: hash = rule + evidence FACT ids + (resolved) entity ids — mention ids change per version and stay out
         const ids = m.evidence.flatMap((e) => [e.factId ?? e.factVersionId, e.nameId, e.answerId].filter((x): x is string => !!x));
+        // plan deviation: one issue per plot + scene position (scene ids change per version, the model's wording per run)
+        if (m.kind === "plan_deviation") ids.push(`plan:${m.evidence[0]?.arcId ?? ""}:${ctx.scenes.find((x) => x.id === m.sceneId)?.ord ?? "ep"}`);
         return {
           kind: m.kind,
           severity,
@@ -405,6 +408,35 @@ export function checkContinuityHandler(deps: ContinuityPorts, svc: ContinuityInt
         );
       }
       for (const i of review.issues) {
+        if (i.kind === "plan_deviation") {
+          // 설계 추가: deviation from the story plan — the plot is the evidence; medium (gate not blocked), fixed in the outline
+          const loc = locate(ctx.version.content, ctx.scenes, i.quote, i.scene_ord);
+          counts.llmIssues++;
+          const d = toDraft(
+              {
+                id: "LLM:plan_deviation",
+                ruleId: "LLM:plan_deviation",
+                kind: "plan_deviation",
+                severity: "medium",
+                needsLlm: true,
+                message: i.message,
+                fixScope: "outline",
+                sceneId: loc.sceneId,
+                charStart: loc.charStart,
+                charEnd: loc.charEnd,
+                evidence: [{ arcId: ctx.ep.arcId, quote: i.quote ?? null }],
+                entityIds: [],
+                evidenceCanon: [],
+                prompt: "",
+              },
+              { suggestion: i.proposed_fix ?? null },
+            );
+          // several deviations reported for the same scene become one issue with every message
+          const same = drafts.find((x) => x.dedupeKey === d.dedupeKey);
+          if (same) same.message = `${same.message}\n${d.message}`.slice(0, 2000);
+          else drafts.push(d);
+          continue;
+        }
         const ev = i.evidence.map((h) => handles.get(h.trim())).filter((f): f is FactAtAnchor => !!f);
         if (!ev.length) continue; // INV-CI-01: no canon evidence → not an issue
         const loc = locate(ctx.version.content, ctx.scenes, i.quote, i.scene_ord);

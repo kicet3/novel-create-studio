@@ -2,7 +2,7 @@
  * Character counting (FR-MAN-02) — the single implementation used by manuscript and export (07 §3.8).
  * Counts Unicode code points of the NFC-normalized body. `without_spaces` drops every whitespace char.
  */
-import type { CountBasis } from "@ncs/shared";
+import { EPISODE_HARD_MIN_CHARS, type CountBasis } from "@ncs/shared";
 
 export function normalizeText(text: string): string {
   return text.normalize("NFC").replace(/\r\n?/g, "\n");
@@ -23,12 +23,43 @@ export interface LengthCheck {
   maxChars: number;
   /** null = within the profile; warning only (FR-MAN-02, never blocks) */
   deviation: "short" | "long" | null;
+  /** absolute floor of one episode (설계 추가 0008: 3,000자, same count basis) */
+  hardMinChars: number;
+  /** below the floor: no auto-approval / auto-publish, "분량 미달" notice */
+  belowFloor: boolean;
 }
 
 export function checkLength(text: string, profile: { minChars: number; maxChars: number; countBasis: CountBasis }): LengthCheck {
   const count = countChars(text, profile.countBasis);
   const deviation = count < profile.minChars ? "short" : count > profile.maxChars ? "long" : null;
-  return { basis: profile.countBasis, count, minChars: profile.minChars, maxChars: profile.maxChars, deviation };
+  return { basis: profile.countBasis, count, minChars: profile.minChars, maxChars: profile.maxChars, deviation, hardMinChars: EPISODE_HARD_MIN_CHARS, belowFloor: count < EPISODE_HARD_MIN_CHARS };
+}
+
+/** below the floor by a stored version's counts (no text needed) */
+export function belowFloorByCounts(v: { charCountWithSpaces: number; charCountWithoutSpaces: number }, basis: CountBasis): boolean {
+  return (basis === "without_spaces" ? v.charCountWithoutSpaces : v.charCountWithSpaces) < EPISODE_HARD_MIN_CHARS;
+}
+
+/**
+ * draft continuation (설계 추가): keep asking for more text while the draft is under the profile minimum, the attempt
+ * budget is left and the previous continuation actually grew the text (`lastGrowth` null = no attempt yet).
+ */
+export function continuationNeeded(count: number, minChars: number, attempt: number, maxAttempts: number, lastGrowth: number | null, minGrowth: number): boolean {
+  if (count >= minChars || attempt >= maxAttempts) return false;
+  return lastGrowth === null || lastGrowth >= minGrowth;
+}
+
+/**
+ * polish / revise floor guard per scene: a rewritten scene that is shorter than the original is rejected when the
+ * episode would end up under the floor with it (the original scene is kept).
+ */
+export function guardSceneLength(i: { originalSceneCount: number; newSceneCount: number; projectedTotal: number; floor: number }): "keep_new" | "keep_original" {
+  return i.projectedTotal < i.floor && i.newSceneCount < i.originalSceneCount ? "keep_original" : "keep_new";
+}
+
+/** Korean label of the count basis ("공백 포함" / "공백 제외") */
+export function countBasisLabel(basis: CountBasis): string {
+  return basis === "without_spaces" ? "공백 제외" : "공백 포함";
 }
 
 /** first sentence-ish summary of a passage (≤ max chars) for scene summaries when no outline text exists */

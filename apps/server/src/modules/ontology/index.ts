@@ -352,8 +352,17 @@ export interface OntologyService extends OntologyRepository {
     ctx?: { questionId?: string; answerId?: string },
   ): Promise<{ mention: Mention; filledFactIds: string[]; rejectedFactIds: string[] }>;
   setMentionQuestion(tx: Tx, scope: NovelScope, mentionIds: string[], questionId: string): Promise<void>;
-  /** EN3(b) equivalence check result (06 §3.1) */
-  setEquivalenceCheck(tx: Tx, scope: NovelScope, entityId: string, check: { status: "passed" | "failed" | "question"; duplicateOf?: string | null; questionId?: string | null; votes?: unknown }): Promise<void>;
+  /**
+   * EN3(b) equivalence check result (06 §3.1). 설계 추가(world): "review" = a world ontology candidate waiting for the
+   * author (only the world review or a bible approval that names it activates it), "rejected" = the author rejected it
+   * in the world review (no promotion path activates it).
+   */
+  setEquivalenceCheck(
+    tx: Tx,
+    scope: NovelScope,
+    entityId: string,
+    check: { status: "passed" | "failed" | "question" | "review" | "rejected"; duplicateOf?: string | null; questionId?: string | null; votes?: unknown; source?: string; taskId?: string; seriesBibleId?: string },
+  ): Promise<void>;
   getIdentityDecision(scope: NovelScope, decisionId: string, tx?: Tx): Promise<IdentityDecision>;
   listIdentityDecisions(scope: NovelScope, q?: { entityId?: string; statuses?: IdentityDecision["status"][] }, tx?: Tx): Promise<IdentityDecision[]>;
   /** ID3 */
@@ -368,6 +377,16 @@ export interface OntologyService extends OntologyRepository {
   ): Promise<{ proposalId: string; created: boolean }>;
   /** `ontology_integrity` health check body (INV-ONT-02/05/07/09) */
   checkIntegrity(scope: NovelScope): Promise<IntegrityProblem[]>;
+
+  // ── 설계 추가 (world: 세계관 온톨로지 후보 검토) ──
+  /** summary / disambiguator edit (audit entity.updated) */
+  updateEntity(tx: Tx, scope: NovelScope, entityId: string, patch: { summary?: string | null; disambiguator?: string | null }, actor: ActorRef): Promise<Entity>;
+  /** value edit of a candidate fact (new FactVersion, user_edit); 409 fact_not_candidate otherwise */
+  reviseCandidateFact(tx: Tx, scope: NovelScope, factId: string, patch: { value: unknown }, actor: ActorRef): Promise<Fact>;
+  /** F3 for the given candidate facts (06 §6.4 gate: active entities, schema, slots); unpromotable ones stay candidate in `held` */
+  approveCandidateFacts(tx: Tx, scope: NovelScope, factIds: string[], actor: ActorRef): Promise<{ promoted: number; held: string[]; heldReasons: Record<string, string> }>;
+  /** facts by id (any status) rendered like getCanonAt */
+  getFactsByIds(scope: NovelScope, factIds: string[], tx?: Tx): Promise<FactAtAnchor[]>;
 }
 
 export type { OntologyModuleDeps } from "./module.js";

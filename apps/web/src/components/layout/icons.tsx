@@ -5,7 +5,9 @@ export type NavIconName =
   | "home"
   | "concept"
   | "cast"
+  | "structure"
   | "board"
+  | "agents"
   | "inbox"
   | "manuscript"
   | "ontology"
@@ -36,11 +38,28 @@ const PATHS: Record<NavIconName, ReactNode> = {
       <path d="M15.5 5.2a3 3 0 0 1 0 5.6M17.5 14.3c2 .8 3.5 2.9 3.5 5.7" />
     </>
   ),
+  structure: (
+    <>
+      <rect x="9" y="3" width="6" height="4" rx="1" />
+      <rect x="3" y="17" width="6" height="4" rx="1" />
+      <rect x="15" y="17" width="6" height="4" rx="1" />
+      <path d="M12 7v5M6 17v-2.5c0-.8.7-1.5 1.5-1.5h9c.8 0 1.5.7 1.5 1.5V17M12 12v5" />
+    </>
+  ),
   board: (
     <>
       <rect x="3" y="4" width="5" height="16" rx="1.5" />
       <rect x="10" y="4" width="5" height="11" rx="1.5" />
       <rect x="17" y="4" width="4" height="7" rx="1.5" />
+    </>
+  ),
+  agents: (
+    <>
+      <circle cx="12" cy="5.5" r="2.5" />
+      <circle cx="5" cy="18" r="2.5" />
+      <circle cx="19" cy="18" r="2.5" />
+      <path d="M10.8 7.7 6.2 15.8M13.2 7.7l4.6 8.1M7.5 18h9" />
+      <path d="M12 11.5v2.5" />
     </>
   ),
   inbox: (

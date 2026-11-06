@@ -8,7 +8,7 @@
  * - "structured_output_tool": the output is the input JSON of the CLI's `StructuredOutput` tool (`--json-schema`);
  *   text blocks around it (preambles) are not output.
  * A second message (CLI turn after a tool result) or a second StructuredOutput block (the CLI re-asks after a schema
- * error) replaces what was streamed: `reset` first.
+ * error) replaces what was streamed: `reset` first. So does a server-side web search block inside one message.
  */
 import type { LlmStreamEvent } from "../../index.js";
 
@@ -59,6 +59,8 @@ export function createStreamRelay(source: StreamRelaySource, onStream: ((ev: Llm
           const idx = typeof e.index === "number" ? e.index : -1;
           const b = e.content_block;
           if (source === "text" && b?.type === "text") outputBlocks.add(idx);
+          // web search inside one message (server tools): text before a search is preamble — the answer follows it
+          if (source === "text" && (b?.type === "server_tool_use" || b?.type === "web_search_tool_result")) reset();
           if (source === "structured_output_tool" && b?.type === "tool_use" && b.name === STRUCTURED_OUTPUT_TOOL) {
             if (toolBlocksSeen++ > 0) reset();
             outputBlocks.add(idx);

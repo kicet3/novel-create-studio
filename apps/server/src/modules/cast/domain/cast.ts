@@ -4,8 +4,8 @@
  *  - field provenance: `user` fields are never overwritten by the agent (same rule as concept INV-CON-03)
  *  - brief → cast seeding (protagonist + main_characters of the approved ConceptBrief)
  */
-import type { CharacterFieldOrigin, CharacterRole } from "@ncs/shared";
-import { CHARACTER_PROFILE_FIELDS, type CharacterProfileField } from "@ncs/shared";
+import type { CastCompleteness, CastCompletenessItem, CharacterFieldOrigin, CharacterRequirementField, CharacterRole } from "@ncs/shared";
+import { CHARACTER_PROFILE_FIELDS, CHARACTER_REQUIRED_FIELDS_BY_ROLE, CHARACTER_REQUIREMENT_LABELS_KO, type CharacterProfileField } from "@ncs/shared";
 import type { CharacterRelationshipJson } from "@ncs/db/schema";
 
 export type FieldOrigins = Record<string, CharacterFieldOrigin>;
@@ -21,6 +21,14 @@ export interface CharacterProfile {
   weakness: string;
   relationships: CharacterRelationshipJson[];
   notes: string;
+  /** 0008 required profile fields (구성 전 필수 항목) */
+  appearance: string;
+  motivation: string;
+  speechSample: string;
+  arcStart: string;
+  arcEnd: string;
+  storyRole: string;
+  firstAppearanceEpisodeNo: number | null;
 }
 
 /** name of a brief protagonist without a name (the agent may fill it; confirm is refused until it changes) */
@@ -39,6 +47,13 @@ export const EMPTY_PROFILE: CharacterProfile = {
   weakness: "",
   relationships: [],
   notes: "",
+  appearance: "",
+  motivation: "",
+  speechSample: "",
+  arcStart: "",
+  arcEnd: "",
+  storyRole: "",
+  firstAppearanceEpisodeNo: null,
 };
 
 export function isEmptyValue(v: unknown): boolean {
@@ -145,6 +160,113 @@ export function isCastConfirmed(cast: readonly CastMember[]): boolean {
 /** display order: role group, then ord */
 export function sortCast<T extends { role: CharacterRole; ord: number; createdAt?: Date }>(cast: readonly T[]): T[] {
   return [...cast].sort((a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role) || a.ord - b.ord);
+}
+
+// ── completeness before the story structure (설계 추가 0008) ───────────────
+export const FIELD_LABEL_KO = CHARACTER_REQUIREMENT_LABELS_KO;
+
+export interface CompletenessMember {
+  id: string;
+  role: CharacterRole;
+  status: "draft" | "confirmed";
+  name: string;
+  proposed: boolean;
+  introducedArcId: string | null;
+  age: string;
+  appearance: string;
+  personality: string;
+  desire: string;
+  motivation: string;
+  weakness: string;
+  background: string;
+  speechSample: string;
+  arcStart: string;
+  arcEnd: string;
+  storyRole: string;
+  relationships: ReadonlyArray<{ targetCharacterId: string }>;
+}
+
+/** profile field a requirement is written in (fill_missing writes these) */
+export const REQUIREMENT_PROFILE_FIELD: Record<CharacterRequirementField, keyof CharacterProfile> = {
+  age: "age",
+  appearance: "appearance",
+  personality: "personality",
+  desire: "desire",
+  motivation: "motivation",
+  weakness: "weakness",
+  background: "background",
+  speechSample: "speechSample",
+  relationships: "relationships",
+  arcStart: "arcStart",
+  arcEnd: "arcEnd",
+  storyRole: "storyRole",
+  relationToProtagonist: "relationships",
+};
+
+/** missing required fields of one character (relations are checked in both directions) */
+export function missingRequirements(c: CompletenessMember, cast: readonly CompletenessMember[]): CharacterRequirementField[] {
+  const protagonist = cast.find((x) => x.role === "protagonist");
+  const linked = (a: CompletenessMember, b: CompletenessMember) =>
+    a.relationships.some((r) => r.targetCharacterId === b.id) || b.relationships.some((r) => r.targetCharacterId === a.id);
+  const out: CharacterRequirementField[] = [];
+  for (const f of CHARACTER_REQUIRED_FIELDS_BY_ROLE[c.role]) {
+    if (f === "relationToProtagonist") {
+      if (!protagonist || !linked(c, protagonist)) out.push(f);
+    } else if (f === "relationships") {
+      const others = cast.filter((x) => x.id !== c.id);
+      if (others.length && !others.some((o) => linked(c, o))) out.push(f);
+    } else if (isEmptyValue(c[f as keyof CompletenessMember])) out.push(f);
+  }
+  return out;
+}
+
+/**
+ * Cast completeness (pure). `initial` = characters not introduced by a plot (confirmed profiles count; an unconfirmed
+ * change makes the character incomplete); `arc` = the characters plan_arc proposed for that plot (an AI proposal must be
+ * accepted first — the arc_plan approval confirms them); `plots` = every plot-introduced character still proposed or
+ * missing fields (cast page checklist).
+ */
+export type CompletenessScope = { scope: "initial" } | { scope: "arc"; arcId: string } | { scope: "plots" };
+export function castCompleteness(cast: readonly CompletenessMember[], opts: CompletenessScope): CastCompleteness {
+  const inScope = cast.filter((c) => (opts.scope === "initial" ? c.introducedArcId === null : opts.scope === "plots" ? c.introducedArcId !== null : c.introducedArcId === opts.arcId));
+  const items: CastCompletenessItem[] = [];
+  for (const c of inScope) {
+    const missing = missingRequirements(c, cast);
+    const unconfirmed = opts.scope === "initial" ? c.status !== "confirmed" : c.proposed;
+    if (!missing.length && !unconfirmed) continue;
+    items.push({ characterId: c.id, name: c.name, role: c.role, missing: missing.map((field) => ({ field, label: FIELD_LABEL_KO[field] })), unconfirmed, introducedArcId: c.introducedArcId });
+  }
+  const noProtagonist = opts.scope === "initial" && !inScope.some((c) => c.role === "protagonist");
+  const complete = !items.length && !noProtagonist;
+  if (complete) return { complete, items, message: "" };
+  const parts = items.map((i) => {
+    const bits = [...i.missing.map((m) => m.label)];
+    if (i.unconfirmed) bits.push(opts.scope === "initial" ? "확정 전" : "AI 제안 수락 전");
+    return `${i.name}: ${bits.join(", ")}`;
+  });
+  if (noProtagonist) parts.unshift("주인공이 없습니다");
+  const anyMissing = items.some((i) => i.missing.length) || noProtagonist;
+  const head =
+    opts.scope === "initial"
+      ? anyMissing
+        ? "전체 구성을 만들기 전에 캐릭터 설정을 보완하세요."
+        : "전체 구성을 만들기 전에 캐릭터 화면에서 캐스트를 확정하세요."
+      : anyMissing
+        ? "플롯에 새로 등장하는 인물의 빈 항목을 채우고 캐릭터 화면에서 제안을 수락하세요."
+        : "플롯에 새로 등장하는 인물의 AI 제안을 캐릭터 화면에서 수락하세요.";
+  return { complete, items, message: `${head} ${parts.join(" · ")}`.slice(0, 2000) };
+}
+
+/**
+ * a relation written as a sentence ("스승. 회귀 전 서월을 벤 배신자…") → a short kind label + the full description
+ * (relationship.kind is a label of at most 40 chars)
+ */
+export function splitRelationText(text: string): { kind: string; description: string } {
+  const t = text.replace(/\s+/g, " ").trim();
+  if (!t) return { kind: "", description: "" };
+  const head = /^(.+?)(?:[.。!?,，;:：·—–(（]|\s-\s|이자\s|이며\s|이고\s|$)/u.exec(t)?.[1]?.trim() ?? t;
+  const kind = head.length <= 20 ? head : `${head.slice(0, 19)}…`;
+  return { kind, description: kind === t ? "" : t.slice(0, 500) };
 }
 
 // ── ontology mapping ─────────────────────────────────────────────────────

@@ -20,6 +20,22 @@ export class TelegramApiError extends Error {
   }
 }
 
+/** Error thrown by a DiscordTransport (REST status ≥ 400, network failure or timeout). */
+export class DiscordApiError extends Error {
+  constructor(
+    /** HTTP status; 0 = network failure before a response; -1 = timeout/abort after sending */
+    readonly status: number,
+    readonly description: string,
+    /** `retry_after` (seconds, may be fractional) on 429 */
+    readonly retryAfter?: number,
+    /** Discord JSON error code (e.g. 50007 cannot send messages to this user) */
+    readonly code?: number,
+  ) {
+    super(`discord ${status}: ${description}`);
+    this.name = "DiscordApiError";
+  }
+}
+
 export type ProviderErrorKind =
   | "rate_limited"
   | "unauthorized"
@@ -32,6 +48,7 @@ export type ProviderErrorKind =
   | "unknown_delivery";
 
 export function classifyTelegramError(err: unknown): { kind: ProviderErrorKind; retryAfterSec?: number; message: string } {
+  if (err instanceof DiscordApiError) return classifyDiscordError(err);
   if (err instanceof TelegramApiError) {
     const d = err.description ?? "";
     if (err.status === 429) return { kind: "rate_limited", retryAfterSec: err.retryAfter ?? 1, message: d };
@@ -46,6 +63,20 @@ export function classifyTelegramError(err: unknown): { kind: ProviderErrorKind; 
   }
   return { kind: "network", message: err instanceof Error ? err.message : String(err) };
 }
+
+function classifyDiscordError(err: DiscordApiError): { kind: ProviderErrorKind; retryAfterSec?: number; message: string } {
+  const d = err.description ?? "";
+  if (err.status === 429) return { kind: "rate_limited", retryAfterSec: Math.max(1, Math.ceil(err.retryAfter ?? 1)), message: d };
+  if (err.status === 401) return { kind: "unauthorized", message: d };
+  if (err.status === 403) return { kind: "forbidden", message: d };
+  if (err.status === 400 || err.status === 404) return { kind: "bad_request", message: d };
+  if (err.status >= 500) return { kind: "server", message: d };
+  if (err.status === -1) return { kind: "unknown_delivery", message: d };
+  return { kind: "network", message: d };
+}
+
+/** provider-neutral alias (Telegram + Discord errors) */
+export const classifyProviderError = classifyTelegramError;
 
 /** Provider-neutral inbound event (05 §6.1 I1/I5 input). */
 export interface NormalizedInbound {
@@ -78,8 +109,16 @@ export interface OutboxPayload {
   conceptSessionId?: string;
 }
 
+/** Outbound/health surface shared by every messenger client (Telegram, Discord). */
+export interface MessengerClient {
+  send(chatRef: string, msg: RenderedMessage): Promise<{ messageRef: string }>;
+  edit(chatRef: string, messageRef: string, msg: RenderedMessage): Promise<void>;
+  getMe(): Promise<{ id: string; username: string | null }>;
+  getChat(chatRef: string): Promise<{ id: string; type: string }>;
+}
+
 /** Bot-level Telegram client used by the application (wraps a TelegramTransport). */
-export interface TelegramClient {
+export interface TelegramClient extends MessengerClient {
   getUpdates(p: { offset: number | null; timeoutSec: number }, signal?: AbortSignal): Promise<unknown[]>;
   parseUpdate(raw: unknown): NormalizedInbound | null;
   updateId(raw: unknown): number | null;
@@ -93,3 +132,17 @@ export interface TelegramClient {
 }
 
 export type TelegramClientFactory = (token: string) => TelegramClient;
+
+/** Bot-level Discord REST client (wraps a DiscordTransport). */
+export interface DiscordClient extends MessengerClient {
+  /** application id (= OAuth2 client_id for the invite URL) */
+  getApplicationId(): Promise<string>;
+  /** acknowledge a component interaction within 3 s (type 6 DEFERRED_UPDATE_MESSAGE) */
+  ackInteraction(interactionId: string, interactionToken: string): Promise<void>;
+  /** DM history after `afterId` (catch-up after a fresh gateway session), oldest first */
+  messagesAfter(chatRef: string, afterId: string, limit: number): Promise<unknown[]>;
+  /** GET /gateway/bot: wss URL + session_start_limit (remaining identifies, reset_after ms) */
+  gatewayUrl(): Promise<{ url: string; remaining: number | null; resetAfterMs: number | null }>;
+}
+
+export type DiscordClientFactory = (token: string) => DiscordClient;

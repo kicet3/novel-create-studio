@@ -1,4 +1,4 @@
-import { DEFAULTS, type NovelStatus } from "@ncs/shared";
+import { DEFAULTS, EPISODE_HARD_MIN_CHARS, EPISODE_HARD_MIN_MESSAGE, type NovelStatus } from "@ncs/shared";
 import {
   ConflictError,
   DomainValidationError,
@@ -33,6 +33,7 @@ import {
   resolveAutonomy,
 } from "../domain/transitions.js";
 import { novelRepo as repo } from "../adapters/db/novel-repository.js";
+import { createStructureMethods } from "./structure-service.js";
 
 /** title of a novel created without one (title_source=provisional) */
 const PROVISIONAL_TITLE = "제목 미정";
@@ -98,7 +99,10 @@ export function createNovelService({ platform, audit }: NovelServiceDeps): Novel
     }
   };
 
+  const structure = createStructureMethods({ platform, audit, approvals: () => approvals });
+
   const service: NovelService = {
+    ...structure,
     // ── users ──
     async ensureOwnerUser(displayName = "작가") {
       const existing = await repo.firstOwner(uow.db);
@@ -432,6 +436,11 @@ export function createNovelService({ platform, audit }: NovelServiceDeps): Novel
           approvalId: approval.id,
           answerId,
         });
+        // 설계 추가: an approved / pending story structure must be re-approved against the new ending direction
+        const st = await repo.getStructure(tx.db, scope);
+        if (st && (st.status !== "draft" || st.approvedRevision)) {
+          await structure.reopenStructure(tx, scope, { goalEndingChanged: true }, actor, "연재 목표의 결말 방향 변경");
+        }
         const novel = await mustNovel(tx, scope);
         for (const h of goalHooks) await h({ tx, scope, goal, previous, novel, enteredPlanning: false, actor });
         tx.afterCommit(() => platform.workSignal.notify("wake", scope.novelId));
@@ -596,6 +605,7 @@ export function createNovelService({ platform, audit }: NovelServiceDeps): Novel
         const current = await repo.getLengthProfile(tx.db, novel.lengthProfileId);
         if (!current) throw new NotFoundError("분량 프로필", novel.lengthProfileId);
         const next = { minChars: patch.minChars ?? current.minChars, maxChars: patch.maxChars ?? current.maxChars, countBasis: patch.countBasis ?? current.countBasis };
+        if (next.minChars < EPISODE_HARD_MIN_CHARS) throw new DomainValidationError("length_min_too_low", EPISODE_HARD_MIN_MESSAGE); // 0008 floor
         if (next.maxChars < next.minChars) throw new DomainValidationError("length_range_invalid", "최대 글자 수는 최소 글자 수 이상이어야 합니다.");
         const diff = diffFields(current as unknown as Record<string, unknown>, next);
         if (!diff) return current;

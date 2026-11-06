@@ -7,6 +7,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { DEFAULTS, labelKo, type ChannelStatus, type OutboxKind } from "@ncs/shared";
 import {
   actors,
+  ConflictError,
   DomainValidationError,
   NotFoundError,
   type ActorRef,
@@ -28,6 +29,8 @@ import type {
   MessengerBot,
   OutboxItem,
   QuestionView,
+  DiscordSocketFactory,
+  DiscordTransportFactory,
   TelegramTransportFactory,
 } from "../index.js";
 import { insertWebChannel } from "../adapters/db/bootstrap.js";
@@ -51,7 +54,19 @@ import {
   renderQuestion,
   truncate,
 } from "../domain/render.js";
-import { classifyTelegramError, type NormalizedInbound, type OutboxPayload, type RenderedMessage, type TelegramClient, type TelegramClientFactory } from "./ports.js";
+import {
+  classifyTelegramError,
+  type DiscordClient,
+  type DiscordClientFactory,
+  type MessengerClient,
+  type NormalizedInbound,
+  type OutboxPayload,
+  type RenderedMessage,
+  type TelegramClient,
+  type TelegramClientFactory,
+} from "./ports.js";
+import { DISCORD_TOKEN_RE, DiscordPartialDeliveryError, discordIdFromToken, discordInviteUrl, parseDiscordEvent } from "../adapters/discord/client.js";
+import { createDiscordGateway, type DiscordGateway } from "../adapters/discord/gateway.js";
 
 export interface MessagingServiceDeps {
   platform: Platform;
@@ -62,6 +77,14 @@ export interface MessagingServiceDeps {
   clientFactory: () => TelegramClientFactory;
   parseUpdate: (raw: unknown) => NormalizedInbound | null;
   setTransportFactory: (f: TelegramTransportFactory) => void;
+  /** Discord REST client + Gateway socket (module.ts wires fetch + global WebSocket; tests swap both) */
+  discordClientFactory: () => DiscordClientFactory;
+  discordSocketFactory: () => DiscordSocketFactory;
+  setDiscordTransportFactory: (f: DiscordTransportFactory) => void;
+  /** Gateway intents (DIRECT_MESSAGES [+ MESSAGE_CONTENT]) */
+  discordIntents: number;
+  /** Gateway reconnect timings of the current transport factory (test seam) */
+  discordGatewayTiming: () => DiscordTransportFactory["gatewayTiming"];
 }
 
 interface BotState {
@@ -78,6 +101,14 @@ const SENDING_STALE_MS = 2 * 60_000;
 const PER_CHAT_INTERVAL_MS = 1000; // Telegram: ~1 msg/s per chat
 
 export const BOT_SECRET_PREFIX = "telegram.bot.";
+export const DISCORD_BOT_SECRET_PREFIX = "discord.bot.";
+/** a fatal Gateway close (e.g. 4014 disallowed intents) is retried after this pause */
+const GATEWAY_FATAL_RETRY_MS = 5 * 60_000;
+/** Discord unbound-DM notice: at most one per DM channel in this window */
+const UNBOUND_NOTICE_INTERVAL_MS = 10 * 60_000;
+const CATCH_UP_PAGE = 50;
+const CATCH_UP_MAX_PAGES = 10;
+const KIND_LABEL: Record<string, string> = { telegram: "Telegram", discord: "Discord" };
 
 export function hashBindingToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
@@ -93,6 +124,10 @@ export interface MessagingInternals {
   checkBotTokens(signal?: AbortSignal): Promise<{ status: "pass" | "warn" | "fail"; message: string; details: Record<string, unknown> }>;
   checkChannelReach(novelId: string): Promise<{ status: "pass" | "warn" | "fail"; message: string; details: Record<string, unknown> }>;
   recoverOnBoot(): Promise<void>;
+  /** close every Discord Gateway connection (module stop) */
+  stopGateways(): void;
+  /** wait until queued Discord Gateway work has finished (module stop, before the DB closes) */
+  drainGateways(): Promise<void>;
 }
 
 export function createMessagingService(deps: MessagingServiceDeps): MessagingInternals {
@@ -100,7 +135,22 @@ export function createMessagingService(deps: MessagingServiceDeps): MessagingInt
   const { uow, ids, clock, log } = platform;
   const handlers: InboundActionHandler[] = [];
   const deliveryHooks: Array<(r: DeliveryResult) => Promise<void>> = [];
-  const clients = new Map<string, { token: string; client: TelegramClient }>();
+  const clients = new Map<string, { token: string; client: MessengerClient }>();
+  const gateways = new Map<string, { token: string; gw: DiscordGateway; fatalAt: number | null }>();
+  const appIds = new Map<string, string>();
+  const discordQueues = new Map<string, Promise<void>>();
+  /** Discord: last "not connected" notice per DM (strangers spamming a public bot must not burn the rate limit) */
+  const unboundNoticeAt = new Map<string, number>();
+  const unboundNoticeAllowed = (bot: MessengerBot, chatRef: string): boolean => {
+    if (bot.kind !== "discord") return true; // Telegram behaviour unchanged
+    const key = `${bot.id}:${chatRef}`;
+    const t = clock.now();
+    const last = unboundNoticeAt.get(key);
+    if (last !== undefined && t - last < UNBOUND_NOTICE_INTERVAL_MS) return false;
+    if (unboundNoticeAt.size > 1000) unboundNoticeAt.clear();
+    unboundNoticeAt.set(key, t);
+    return true;
+  };
   const botStates = new Map<string, BotState>();
   const chatLastSent = new Map<string, number>();
   const channelFailures = new Map<string, number>();
@@ -113,15 +163,22 @@ export function createMessagingService(deps: MessagingServiceDeps): MessagingInt
     return s;
   };
 
-  async function clientFor(bot: MessengerBot): Promise<TelegramClient> {
+  async function tokenOf(bot: MessengerBot): Promise<string> {
     const token = await system.secrets.get(bot.tokenSecretId);
     if (!token) throw new DomainValidationError("bot_token_missing", "봇 토큰이 저장되어 있지 않습니다. 설정에서 다시 입력하세요.");
+    return token;
+  }
+
+  async function clientFor(bot: MessengerBot): Promise<MessengerClient> {
+    const token = await tokenOf(bot);
     const cached = clients.get(bot.id);
     if (cached && cached.token === token) return cached.client;
-    const client = deps.clientFactory()(token);
+    const client: MessengerClient = bot.kind === "discord" ? deps.discordClientFactory()(token) : deps.clientFactory()(token);
     clients.set(bot.id, { token, client });
     return client;
   }
+  const telegramClientFor = async (bot: MessengerBot) => (await clientFor(bot)) as TelegramClient;
+  const discordClientFor = async (bot: MessengerBot) => (await clientFor(bot)) as DiscordClient;
 
   async function mustChannel(db: Tx["db"], scope: NovelScope, channelId: string, forUpdate = false): Promise<Channel> {
     const c = await repo.getChannel(db, scope, channelId, forUpdate);
@@ -260,11 +317,12 @@ export function createMessagingService(deps: MessagingServiceDeps): MessagingInt
       channel = await repo.insertChannel(tx.db, {
         id: ids.next("chn"),
         novelId: t.novelId,
-        kind: "telegram",
+        kind: bot.kind,
         status: "active", // CH1+CH2: created on consumption (assumption: no pending_binding row before /start)
         botId: bot.id,
-        label: ev.senderLabel ?? "Telegram",
-        externalChatRef: { chatId: ev.chatRef },
+        label: ev.senderLabel ?? KIND_LABEL[bot.kind] ?? bot.kind,
+        // Discord: chatId = DM channel id, userId = the bound user (the DM channel is 1:1)
+        externalChatRef: bot.kind === "discord" ? { chatId: ev.chatRef, userId: ev.senderRef } : { chatId: ev.chatRef },
         allowedUserRefs: [ev.senderRef!],
         boundAt: at,
         createdAt: at,
@@ -277,14 +335,14 @@ export function createMessagingService(deps: MessagingServiceDeps): MessagingInt
       actor: actors.system("messenger"),
       action: "channel.bound",
       target: { type: "channel", id: channel.id },
-      after: { status: "active", kind: "telegram", botId: bot.id },
+      after: { status: "active", kind: bot.kind, botId: bot.id },
       details: { inboxId: row.id },
     });
     await enqueue(tx, scope, {
       channelId: channel.id,
       kind: "binding_confirmation",
       idempotencyKey: `binding_confirmation:${t.id}:${channel.id}:1`,
-      payload: { op: "send", message: renderNotice(`「${n.title}」와 연결됐습니다. 이제 이 대화로 질문과 알림을 받습니다.\n/help 로 사용법을 볼 수 있습니다.`) },
+      payload: { op: "send", message: renderNotice(`「${n.title}」와 연결됐습니다. 이제 이 대화로 질문과 알림을 받습니다.\n${bot.kind === "discord" ? "!help" : "/help"} 로 사용법을 볼 수 있습니다.`) },
     });
     await repo.updateInbox(tx.db, row.id, { novelId: t.novelId, channelId: channel.id });
     return { status: "processed" };
@@ -293,7 +351,7 @@ export function createMessagingService(deps: MessagingServiceDeps): MessagingInt
   async function handleInbound(tx: Tx, row: InboxRow, direct: DirectReply[], ownerId: string | null): Promise<InboxOutcome> {
     const bot = await repo.getBot(tx.db, row.botId);
     if (!bot) return { status: "ignored", reason: "unsupported" };
-    const ev = deps.parseUpdate(row.payload);
+    const ev = bot.kind === "discord" ? parseDiscordEvent(row.payload) : deps.parseUpdate(row.payload);
     if (!ev || ev.eventKind === "system" || !ev.chatRef) return { status: "ignored", reason: "unsupported" };
     if (ev.chatType !== "private") return { status: "ignored", reason: "unsupported" }; // FR-MSG-02: 1:1 only
     if (ev.edited) return { status: "ignored", reason: "unsupported" }; // 05 §6.4 edited_message
@@ -305,7 +363,8 @@ export function createMessagingService(deps: MessagingServiceDeps): MessagingInt
     // I3 binding
     const candidates = await repo.findChannelsForChat(tx.db, bot.id, ev.chatRef);
     if (!candidates.length) {
-      if (ev.eventKind !== "callback") direct.push({ bot, chatRef: ev.chatRef, text: "이 대화는 아직 작품과 연결되지 않았습니다. PC 웹 설정 › 채널에서 연결 링크를 발급해 시작하세요." });
+      if (ev.eventKind !== "callback" && unboundNoticeAllowed(bot, ev.chatRef))
+        direct.push({ bot, chatRef: ev.chatRef, text: "이 대화는 아직 작품과 연결되지 않았습니다. PC 웹 설정 › 채널에서 연결 링크를 발급해 시작하세요." });
       return { status: "ignored", reason: "unbound_chat" };
     }
     let channel = candidates[0]!;
@@ -479,7 +538,7 @@ export function createMessagingService(deps: MessagingServiceDeps): MessagingInt
     if (t0 < st.backoffUntil) return 0;
     let client: TelegramClient;
     try {
-      client = await clientFor(bot);
+      client = await telegramClientFor(bot);
     } catch (err) {
       log.warn({ botId: bot.id, err: (err as Error).message }, "telegram poller: no token");
       st.backoffUntil = t0 + 60_000;
@@ -624,7 +683,8 @@ export function createMessagingService(deps: MessagingServiceDeps): MessagingInt
     if (!bot || !chatRef || bot.status === "revoked" || bot.status === "disconnected") return finishOutbox(row, "cancelled", {}, "bot unavailable");
     const st = stateOf(bot.id);
     if (st.pausedUntil > t0) return finishOutbox(row, "retry", { nextAttemptAt: new Date(st.pausedUntil) });
-    const last = chatLastSent.get(chatRef) ?? 0;
+    const chatKey = `${bot.id}:${chatRef}`;
+    const last = chatLastSent.get(chatKey) ?? 0;
     if (t0 - last < PER_CHAT_INTERVAL_MS) return finishOutbox(row, "retry", { nextAttemptAt: new Date(last + PER_CHAT_INTERVAL_MS) });
 
     const payload = row.payload as OutboxPayload;
@@ -645,14 +705,14 @@ export function createMessagingService(deps: MessagingServiceDeps): MessagingInt
       else editRef = r.ref;
     }
 
-    let client: TelegramClient;
+    let client: MessengerClient;
     try {
       client = await clientFor(bot);
     } catch (err) {
       return finishOutbox(row, "failed", {}, (err as Error).message);
     }
     try {
-      chatLastSent.set(chatRef, t0);
+      chatLastSent.set(chatKey, t0);
       if (payload.op === "edit" && editRef) {
         await client.edit(chatRef, editRef, message);
         await finishOutbox(row, "sent", { providerMessageRef: editRef });
@@ -662,6 +722,17 @@ export function createMessagingService(deps: MessagingServiceDeps): MessagingInt
       }
       channelFailures.delete(channel.id);
     } catch (err) {
+      if (err instanceof DiscordPartialDeliveryError && err.undelivered && payload.op !== "edit") {
+        // Discord split message: the failed part was certainly not delivered (429 / never sent) → resume at that part
+        // later instead of losing the tail and its buttons; delivered parts are never resent (INV-OUT-01)
+        const attempt = row.attemptCount + (err.retryAfterSec !== null ? 0 : 1);
+        if (attempt < DEFAULTS["outbox.max_attempts"]) {
+          const waitMs = err.retryAfterSec !== null ? Math.ceil(err.retryAfterSec) * 1000 : backoffMs(attempt);
+          if (err.retryAfterSec !== null) st.pausedUntil = clock.now() + waitMs;
+          const resumed: OutboxPayload = { ...payload, message: { ...payload.message, resumeFromPart: err.sentParts } };
+          return finishOutbox(row, "retry", { attemptCount: attempt, payload: resumed, nextAttemptAt: new Date(clock.now() + waitMs) }, err.message);
+        }
+      }
       const e = classifyTelegramError(err);
       const sys = actors.system("messenger");
       switch (e.kind) {
@@ -705,14 +776,23 @@ export function createMessagingService(deps: MessagingServiceDeps): MessagingInt
 
   // ───────────────────────────── health checks (05 §9.6) ─────────────────────────────
   async function checkBotTokens() {
-    const bots = (await repo.listBots(uow.db)).filter((b) => b.kind === "telegram" && b.status !== "revoked");
+    const bots = (await repo.listBots(uow.db)).filter((b) => (b.kind === "telegram" || b.kind === "discord") && b.status !== "revoked");
     if (!bots.length) return { status: "pass" as const, message: "등록된 메신저 봇이 없습니다.", details: { bots: 0 } };
     const results: Record<string, string> = {};
     let worst: "pass" | "warn" | "fail" = "pass";
+    let intentProblem = false;
     for (const bot of bots) {
       try {
         const me = await (await clientFor(bot)).getMe();
         usernames.set(bot.id, me.username);
+        const fatal = bot.kind === "discord" ? gateways.get(bot.id)?.gw.fatal : null;
+        if (fatal && fatal.code !== 4004) {
+          // token is fine but the Gateway refuses the session (4014 = privileged intent not enabled in the portal)
+          results[bot.id] = "fail";
+          worst = "fail";
+          intentProblem = intentProblem || fatal.code === 4014;
+          continue;
+        }
         results[bot.id] = "pass";
         if (bot.status !== "active") await restoreBot(bot, false); // CH4 / CH6
       } catch (err) {
@@ -727,14 +807,21 @@ export function createMessagingService(deps: MessagingServiceDeps): MessagingInt
         }
       }
     }
+    const service = [...new Set(bots.map((b) => KIND_LABEL[b.kind] ?? b.kind))].join("/");
     const message =
-      worst === "pass" ? "봇 토큰이 정상입니다." : worst === "fail" ? "봇 토큰이 올바르지 않습니다. 토큰 재발급 후 다시 입력하세요." : "Telegram에 연결할 수 없습니다. 네트워크를 확인하세요.";
+      worst === "pass"
+        ? "봇 토큰이 정상입니다."
+        : worst === "fail"
+          ? intentProblem
+            ? "Discord가 Gateway 연결을 거부했습니다(허용되지 않은 intent). Developer Portal › Bot에서 MESSAGE CONTENT INTENT를 켜거나 설정에서 끄세요."
+            : "봇 토큰이 올바르지 않습니다. 토큰 재발급 후 다시 입력하세요."
+          : `${service}에 연결할 수 없습니다. 네트워크를 확인하세요.`;
     return { status: worst, message, details: { bots: results } };
   }
 
   async function checkChannelReach(novelId: string) {
     const scope = { novelId };
-    const chans = (await repo.listChannels(uow.db, scope)).filter((c) => c.kind === "telegram" && c.status !== "revoked");
+    const chans = (await repo.listChannels(uow.db, scope)).filter((c) => (c.kind === "telegram" || c.kind === "discord") && c.status !== "revoked");
     if (!chans.length) return { status: "pass" as const, message: "연결된 메신저 채널이 없습니다(웹 인박스만 사용).", details: { channels: 0 } };
     let worst: "pass" | "warn" | "fail" = "pass";
     const results: Record<string, string> = {};
@@ -746,11 +833,19 @@ export function createMessagingService(deps: MessagingServiceDeps): MessagingInt
         if (!bot) throw new Error("bot missing");
         const client = await clientFor(bot);
         await client.getChat(chatRefOf(c)!);
-        const url = await client.getWebhookUrl();
-        const conflictRecent = clock.now() - stateOf(bot.id).lastConflictAt < 10 * 60_000;
-        if (url || conflictRecent) {
-          status = "fail";
-          reason = "다른 곳에서 같은 봇을 수신 중이거나 webhook이 설정됨 — 다른 기기의 앱을 끄거나 봇 토큰을 새로 발급하세요.";
+        if (bot.kind === "discord") {
+          const fatal = gateways.get(bot.id)?.gw.fatal;
+          if (fatal) {
+            status = "fail";
+            reason = `Discord Gateway 연결이 거부됐습니다(close ${fatal.code}) — 설정 › 메신저 봇과 Developer Portal의 intent 설정을 확인하세요.`;
+          }
+        } else {
+          const url = await (client as TelegramClient).getWebhookUrl();
+          const conflictRecent = clock.now() - stateOf(bot.id).lastConflictAt < 10 * 60_000;
+          if (url || conflictRecent) {
+            status = "fail";
+            reason = "다른 곳에서 같은 봇을 수신 중이거나 webhook이 설정됨 — 다른 기기의 앱을 끄거나 봇 토큰을 새로 발급하세요.";
+          }
         }
       } catch (err) {
         const e = classifyTelegramError(err);
@@ -769,6 +864,219 @@ export function createMessagingService(deps: MessagingServiceDeps): MessagingInt
     }
     const message = worst === "pass" ? "메신저 채널에 정상적으로 닿습니다." : "일부 메신저 채널에 문제가 있습니다. 설정 › 채널에서 확인하세요.";
     return { status: worst, message, details: { channels: results } };
+  }
+
+  // ───────────────────────────── Discord (Gateway websocket, DM only) ─────────────────────────────
+  async function registerDiscordBot(input: { label: string; token: string }, actor: ActorRef): Promise<MessengerBot> {
+    const token = input.token.trim().replace(/^Bot\s+/i, "");
+    if (!DISCORD_TOKEN_RE.test(token)) throw new DomainValidationError("invalid_bot_token", "봇 토큰 형식이 올바르지 않습니다. Discord Developer Portal › Bot › Reset Token으로 받은 토큰을 그대로 붙여 넣으세요.");
+    const client = deps.discordClientFactory()(token);
+    let username: string | null = null;
+    let appId: string | null = null;
+    let status: "active" | "degraded" = "active";
+    try {
+      const me = await client.getMe(); // GET /users/@me validates the token
+      username = me.username;
+      appId = await client.getApplicationId().catch(() => me.id);
+    } catch (err) {
+      const e = classifyTelegramError(err);
+      if (e.kind === "unauthorized") throw new DomainValidationError("invalid_bot_token", "봇 토큰이 올바르지 않습니다. Discord Developer Portal에서 받은 토큰을 다시 확인하세요.");
+      status = "degraded"; // network: keep the bot, health check will restore it
+    }
+    // one row per Discord bot user: two rows would open two Gateway sessions and the unbound one would answer every
+    // DM with "not connected" (Discord allows concurrent sessions, so there is no 409 like Telegram's getUpdates)
+    const newBotUser = discordIdFromToken(token);
+    for (const other of await repo.listBots(uow.db)) {
+      if (other.kind !== "discord" || other.status === "revoked") continue;
+      const otherToken = await system.secrets.get(other.tokenSecretId).catch(() => null);
+      if (!otherToken) continue;
+      if (otherToken === token || (newBotUser !== null && discordIdFromToken(otherToken) === newBotUser))
+        throw new ConflictError("bot_already_registered", `이 Discord 봇은 이미 「${other.label}」(으)로 등록돼 있습니다. 같은 봇을 두 번 등록할 수 없습니다.`);
+    }
+    const botId = ids.next("bot");
+    const secretId = `${DISCORD_BOT_SECRET_PREFIX}${botId}`;
+    await system.secrets.set(secretId, token, `Discord 봇 토큰 (${input.label})`);
+    usernames.set(botId, username);
+    if (appId) appIds.set(botId, appId);
+    clients.set(botId, { token, client });
+    const bot = await uow.run(async (tx) => {
+      const at = now();
+      const row = await repo.insertBot(tx.db, {
+        id: botId,
+        kind: "discord",
+        label: input.label,
+        tokenSecretId: secretId,
+        receiveMode: null, // Gateway websocket (no polling / webhook)
+        status,
+        createdAt: at,
+        updatedAt: at,
+      });
+      await audit.record(tx, {
+        novelId: null,
+        actor,
+        action: "settings.changed",
+        target: { type: "settings", id: botId },
+        after: { messengerBot: { kind: row.kind, label: row.label, receiveMode: "gateway", username } },
+      });
+      return row;
+    });
+    void syncDiscordGateways().catch((err) => log.warn({ err: (err as Error).message }, "discord gateway sync failed"));
+    return bot;
+  }
+
+  /** strip the interaction token (a short-lived credential) before persisting */
+  function storablePayload(t: string, d: unknown): { t: string; d: unknown } {
+    if (t !== "INTERACTION_CREATE" || !d || typeof d !== "object") return { t, d };
+    const { token: _token, ...rest } = d as Record<string, unknown>;
+    return { t, d: rest };
+  }
+
+  /** I1 for Discord: record a Gateway dispatch in messenger_inbox (dedupe by event id); ACK button presses at once */
+  async function recordDiscordEvent(bot: MessengerBot, t: string, d: unknown): Promise<boolean> {
+    if (t !== "MESSAGE_CREATE" && t !== "INTERACTION_CREATE") return false;
+    const raw = d as { id?: string; token?: string; type?: number; author?: { bot?: boolean }; guild_id?: string };
+    if (!raw?.id) return false;
+    if (t === "MESSAGE_CREATE" && (raw.author?.bot || raw.guild_id)) return false; // own messages / guilds (DM only)
+    let ack: Promise<unknown> | null = null;
+    if (t === "INTERACTION_CREATE" && raw.type === 3 && raw.token) {
+      // must be answered within 3 s — start it before the DB insert (Discord never redelivers interactions)
+      ack = discordClientFor(bot)
+        .then((c) => c.ackInteraction(raw.id!, raw.token!))
+        .catch((err) => log.warn({ botId: bot.id, err: classifyTelegramError(err).message }, "discord interaction ack failed"));
+    }
+    const payload = storablePayload(t, d);
+    const ev = parseDiscordEvent(payload);
+    const at = now();
+    let inserted = false;
+    try {
+      inserted = !!(await uow.run((tx) =>
+        repo.insertInbox(tx.db, {
+          id: ids.next("inb"),
+          botId: bot.id,
+          eventKind: ev?.eventKind ?? "system",
+          providerEventId: raw.id!,
+          dedupeKey: `discord:${bot.id}:${t === "INTERACTION_CREATE" ? "int" : "msg"}:${raw.id}`,
+          status: "received",
+          senderExternalRef: ev?.senderRef ?? null,
+          payload: payload as object,
+          receivedAt: at,
+          createdAt: at,
+          updatedAt: at,
+        }),
+      ));
+    } finally {
+      await ack;
+    }
+    if (inserted) platform.workSignal.notify("inbox");
+    return inserted;
+  }
+
+  /** after a fresh session (not RESUMED): pull DMs sent while we were offline (Discord does not replay them) */
+  async function catchUpDiscord(bot: MessengerBot): Promise<number> {
+    let n = 0;
+    const client = await discordClientFor(bot);
+    const seen = new Set<string>(); // several novels may share one DM: fetch its history once
+    for (const c of await repo.listChannelsOfBot(uow.db, bot.id)) {
+      const chatRef = chatRefOf(c);
+      if (!chatRef || c.status === "revoked" || seen.has(chatRef)) continue;
+      seen.add(chatRef);
+      const lastId = await repo.lastDiscordMessageId(uow.db, bot.id, chatRef);
+      if (!lastId) continue;
+      // page forward (50 per request) so a long offline period is not truncated; bounded per channel
+      let after = lastId;
+      for (let page = 0; page < CATCH_UP_MAX_PAGES; page++) {
+        const missed = (await client.messagesAfter(chatRef, after, CATCH_UP_PAGE)) as Array<{ id?: string }>;
+        for (const m of missed) if (await recordDiscordEvent(bot, "MESSAGE_CREATE", m)) n++;
+        const newest = missed.at(-1)?.id;
+        if (missed.length < CATCH_UP_PAGE || !newest) break;
+        after = newest;
+      }
+    }
+    return n;
+  }
+
+  /** serialize Gateway events per bot (keeps DM order; the socket callback is synchronous) */
+  function enqueueDiscord(botId: string, job: () => Promise<unknown>): void {
+    const prev = discordQueues.get(botId) ?? Promise.resolve();
+    const next = prev.then(job).then(
+      () => undefined,
+      (err) => log.error({ botId, err: err instanceof Error ? err.message : String(err) }, "discord event handling failed"),
+    );
+    discordQueues.set(botId, next);
+  }
+
+  function startGateway(bot: MessengerBot, token: string): void {
+    const gw = createDiscordGateway({
+      token,
+      intents: deps.discordIntents,
+      socket: deps.discordSocketFactory(),
+      resolveUrl: async () => (await discordClientFor(bot)).gatewayUrl(),
+      timing: deps.discordGatewayTiming(),
+      log,
+      onDispatch: (t, d) => enqueueDiscord(bot.id, () => recordDiscordEvent(bot, t, d)),
+      onReady: (info) =>
+        enqueueDiscord(bot.id, async () => {
+          if (info.applicationId) appIds.set(bot.id, info.applicationId);
+          if (info.username) usernames.set(bot.id, info.username);
+          const entry = gateways.get(bot.id);
+          if (entry) entry.fatalAt = null;
+          const fresh = await repo.getBot(uow.db, bot.id);
+          if (fresh && fresh.status === "degraded") await restoreBot(fresh, true);
+          await uow.run((tx) => repo.updateBot(tx.db, bot.id, { lastConnectedAt: now(), updatedAt: now() }));
+          if (!info.resumed) await catchUpDiscord(bot);
+        }),
+      onFatal: (code) =>
+        enqueueDiscord(bot.id, async () => {
+          const entry = gateways.get(bot.id);
+          if (entry) entry.fatalAt = clock.now();
+          const fresh = (await repo.getBot(uow.db, bot.id)) ?? bot;
+          if (code === 4004) await degradeBot(fresh, "disconnected", "봇 토큰이 폐기됐거나 올바르지 않습니다. 토큰을 재발급해 다시 입력하세요.");
+          else if (code === 4014)
+            await degradeBot(fresh, "degraded", "Discord가 요청한 intent를 거부했습니다. Developer Portal › Bot에서 MESSAGE CONTENT INTENT를 켜거나 설정에서 끄세요.");
+          else await degradeBot(fresh, "degraded", `Discord Gateway 연결이 거부됐습니다(close ${code}).`);
+        }),
+    });
+    gateways.set(bot.id, { token, gw, fatalAt: null });
+    gw.start();
+  }
+
+  async function syncDiscordGateways(): Promise<number> {
+    const bots = (await repo.listBots(uow.db)).filter((b) => b.kind === "discord" && (b.status === "active" || b.status === "degraded"));
+    const want = new Set(bots.map((b) => b.id));
+    for (const [id, e] of [...gateways]) {
+      if (!want.has(id)) {
+        e.gw.stop();
+        gateways.delete(id);
+      }
+    }
+    for (const bot of bots) {
+      let token: string;
+      try {
+        token = await tokenOf(bot);
+      } catch {
+        continue;
+      }
+      const e = gateways.get(bot.id);
+      if (e && e.token === token && e.gw.state !== "fatal") continue;
+      if (e && e.token === token && e.gw.state === "fatal" && (e.fatalAt === null || clock.now() - e.fatalAt < GATEWAY_FATAL_RETRY_MS)) continue;
+      e?.gw.stop();
+      startGateway(bot, token);
+    }
+    return [...gateways.values()].filter((e) => e.gw.state !== "fatal" && e.gw.state !== "stopped").length;
+  }
+
+  function stopGateways(): void {
+    for (const e of gateways.values()) e.gw.stop();
+    gateways.clear();
+  }
+
+  /** wait for queued Gateway work (inbox inserts, catch-up, interaction ACKs) — call before closing the DB */
+  async function drainGateways(): Promise<void> {
+    for (let i = 0; i < 5 && discordQueues.size; i++) {
+      const pending = [...discordQueues.values()];
+      await Promise.allSettled(pending);
+      for (const [id, q] of [...discordQueues]) if (pending.includes(q)) discordQueues.delete(id);
+    }
   }
 
   // ───────────────────────────── service ─────────────────────────────
@@ -790,7 +1098,8 @@ export function createMessagingService(deps: MessagingServiceDeps): MessagingInt
     },
 
     async registerBot(input, actor) {
-      if (input.kind !== "telegram") throw new DomainValidationError("unsupported_channel_kind", "MVP-α는 Telegram 봇만 등록할 수 있습니다.");
+      if (input.kind === "discord") return registerDiscordBot(input, actor);
+      if (input.kind !== "telegram") throw new DomainValidationError("unsupported_channel_kind", "Telegram 또는 Discord 봇만 등록할 수 있습니다.");
       if (input.receiveMode === "webhook") throw new DomainValidationError("webhook_unsupported", "local_trusted 모드에서는 long polling만 쓸 수 있습니다.");
       const token = input.token.trim();
       if (!/^\d+:[A-Za-z0-9_-]{20,}$/.test(token)) throw new DomainValidationError("invalid_bot_token", "봇 토큰 형식이 올바르지 않습니다. BotFather에서 받은 토큰을 그대로 붙여 넣으세요.");
@@ -832,13 +1141,22 @@ export function createMessagingService(deps: MessagingServiceDeps): MessagingInt
       });
     },
     listBots: () => repo.listBots(uow.db),
+    async botLinks(bot) {
+      if (bot.kind !== "discord") return { username: usernames.get(bot.id) ?? null, inviteUrl: null };
+      let appId = appIds.get(bot.id) ?? null;
+      if (!appId) appId = discordIdFromToken((await system.secrets.get(bot.tokenSecretId)) ?? "");
+      return { username: usernames.get(bot.id) ?? null, inviteUrl: appId ? discordInviteUrl(appId) : null };
+    },
 
     async issueBindingToken(scope, input, actor) {
-      if (input.kind !== "telegram") throw new DomainValidationError("unsupported_channel_kind", "MVP-α는 Telegram 채널만 연결할 수 있습니다.");
+      if (input.kind !== "telegram" && input.kind !== "discord") throw new DomainValidationError("unsupported_channel_kind", "Telegram 또는 Discord 채널만 연결할 수 있습니다.");
       const bot = await repo.getBot(uow.db, input.botId);
-      if (!bot || bot.kind !== "telegram" || bot.status === "revoked") throw new NotFoundError("메신저 봇", input.botId);
+      if (!bot || bot.kind !== input.kind || bot.status === "revoked") throw new NotFoundError("메신저 봇", input.botId);
       let username = usernames.get(bot.id) ?? null;
-      if (!username) {
+      let discordUserId: string | null = null;
+      if (bot.kind === "discord") {
+        discordUserId = discordIdFromToken(await tokenOf(bot));
+      } else if (!username) {
         try {
           username = (await (await clientFor(bot)).getMe()).username;
           usernames.set(bot.id, username);
@@ -855,7 +1173,7 @@ export function createMessagingService(deps: MessagingServiceDeps): MessagingInt
         const row = await repo.insertToken(tx.db, {
           id: ids.next("bnd"),
           novelId: scope.novelId,
-          channelKind: "telegram",
+          channelKind: bot.kind,
           botId: bot.id,
           tokenHash: hashBindingToken(token),
           status: "issued", // BT1
@@ -870,6 +1188,8 @@ export function createMessagingService(deps: MessagingServiceDeps): MessagingInt
           target: { type: "novel", id: scope.novelId },
           details: { bindingTokenId: row.id, botId: bot.id, expiresAt: expiresAt.toISOString(), revokedTokenIds: revoked.map((r) => r.id) },
         });
+        // Discord has no deep-link start parameter: link to the bot profile, the user sends `/start <token>` as a DM
+        if (bot.kind === "discord") return { token, expiresAt, deepLink: discordUserId ? `https://discord.com/users/${discordUserId}` : null };
         return { token, expiresAt, deepLink: username ? `https://t.me/${username}?start=${token}` : null };
       });
     },
@@ -1036,6 +1356,13 @@ export function createMessagingService(deps: MessagingServiceDeps): MessagingInt
       botStates.clear();
       chatLastSent.clear();
     },
+    syncDiscordGateways,
+    setDiscordTransportFactory(factory) {
+      stopGateways();
+      deps.setDiscordTransportFactory(factory);
+      for (const [id, c] of [...clients]) if (!(c.client as Partial<TelegramClient>).getUpdates) clients.delete(id);
+      chatLastSent.clear();
+    },
   };
 
   return {
@@ -1046,5 +1373,7 @@ export function createMessagingService(deps: MessagingServiceDeps): MessagingInt
       const at = now();
       await uow.run((tx) => repo.recoverStaleInbox(tx.db, at, at)); // IN7 on restart
     },
+    stopGateways,
+    drainGateways,
   };
 }

@@ -22,3 +22,12 @@ describe("audit diff display (review3 visual #9)", () => {
     expect(shortId("일반 텍스트")).toBe("일반 텍스트");
   });
 });
+
+describe("target-aware value labels", () => {
+  it("status uses the target's enum first; money fields are formatted", () => {
+    const issue = displayChanges(summarizeChange(null, { status: "open" }), "continuity_issue");
+    expect(issue[0]!.to).not.toBe("답변 대기");
+    expect(issue[0]!.to).not.toBe("open");
+    expect(displayChanges(summarizeChange({ amountMicros: 1_500_000 }, { amountMicros: 4_200_000 }))[0]).toMatchObject({ label: "금액", from: "$1.50", to: "$4.20" });
+  });
+});

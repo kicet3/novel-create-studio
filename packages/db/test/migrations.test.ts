@@ -74,7 +74,7 @@ describe("schema (0001_init)", () => {
       "activity_log", "export_jobs", "app_migrations", "secrets", "backup_records", "health_check_results",
       "entities", "entity_names", "mentions", "narrative_frames", "facts", "fact_versions", "timelines",
       "ontology_schema_versions", "schema_change_proposals", "glossary_terms", "identity_decisions",
-      "identity_decision_moves", "entity_distinct_pairs", "fact_cardinality_slots",
+      "identity_decision_moves", "entity_distinct_pairs", "fact_cardinality_slots", "story_structures", "story_parts",
     ]) {
       expect(names, required).toContain(required);
     }
@@ -138,5 +138,27 @@ describe("schema (0001_init)", () => {
       expect(ex).toEqual([]);
     }
     await t.close();
+  });
+});
+
+describe("0008_story_structure", () => {
+  it("enforces the 3000-char episode floor on length_profiles and clamps older rows", async () => {
+    const pg = await PGlite.create();
+    const target = pgliteTarget(pg);
+    const all = loadMigrations();
+    await runMigrations(target, { appVersion: "t", migrations: all.filter((m) => m.id < "0008") });
+    await pg.query("INSERT INTO length_profiles (id, name, min_chars, max_chars) VALUES ('lpf_01ARZ3NDEKTSV4RRFFQ69G5FAV', 'old', 2000, 2500)");
+    await runMigrations(target, { appVersion: "t", migrations: all });
+    const row = (await pg.query<{ min_chars: number; max_chars: number }>("SELECT min_chars, max_chars FROM length_profiles")).rows[0]!;
+    expect(row).toEqual({ min_chars: 3000, max_chars: 3000 });
+    await expect(
+      pg.query("INSERT INTO length_profiles (id, name, min_chars, max_chars) VALUES ('lpf_01ARZ3NDEKTSV4RRFFQ69G5FAW', 'low', 2999, 5000)"),
+    ).rejects.toThrow(/length_profiles_ck_min_floor/);
+    await pg.query("INSERT INTO length_profiles (id, name, min_chars, max_chars) VALUES ('lpf_01ARZ3NDEKTSV4RRFFQ69G5FAX', 'ok', 3000, 5000)");
+    const defaults = (await pg.query<{ min_chars: number; max_chars: number }>(
+      "INSERT INTO length_profiles (id, name) VALUES ('lpf_01ARZ3NDEKTSV4RRFFQ69G5FAY', 'd') RETURNING min_chars, max_chars",
+    )).rows[0]!;
+    expect(defaults).toEqual({ min_chars: 5000, max_chars: 5500 });
+    await pg.close();
   });
 });

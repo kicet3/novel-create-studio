@@ -11,8 +11,11 @@
  * JSON: `text.format = json_schema` (strict when representable); a 400 on the format retries once with
  * `json_object` + the schema described in the prompt. The gateway's zod validation + repair retries stay.
  * A 401 on an OAuth credential refreshes once (single-flight in the credential store) and replays.
+ * Web search (설계 추가 0011): API-key lane only — Responses `tools: [{type:"web_search"}]` + `max_tool_calls`;
+ * sources = `url_citation` annotations, searches = `web_search_call` items. The ChatGPT (Codex backend) lane is not
+ * verified to accept hosted tools → reported unsupported and the call runs without search.
  */
-import type { LlmAdapter, LlmCapabilities, LlmCredential, LlmEnvironmentCheck, LlmInvokeOptions, LlmRequest, LlmResult, LlmUsage } from "../../index.js";
+import type { LlmAdapter, LlmCapabilities, LlmCitation, LlmCredential, LlmEnvironmentCheck, LlmInvokeOptions, LlmRequest, LlmResult, LlmUsage } from "../../index.js";
 import {
   StreamError,
   credentialOf,
@@ -24,6 +27,7 @@ import {
   readSse,
   sanitize,
   thrownFailure,
+  tapProgress,
   trimSlash,
   type FailureCopy,
 } from "../shared/http.js";
@@ -71,7 +75,8 @@ export function buildResponsesBody(req: LlmRequest, lane: "api" | "chatgpt", for
       ? { format: format === "json_object" ? { type: "json_object" } : jsonSchemaFormat(req.output.schemaName, req.output.jsonSchema) }
       : undefined;
   if (lane === "api") {
-    return { model: req.modelId, instructions, input, max_output_tokens: req.maxOutputTokens, store: false, stream: true, ...(text ? { text } : {}) };
+    const search = req.webSearch ? { tools: [{ type: "web_search" }], max_tool_calls: req.webSearch.maxUses } : {};
+    return { model: req.modelId, instructions, input, max_output_tokens: req.maxOutputTokens, store: false, stream: true, ...(text ? { text } : {}), ...search };
   }
   const body: Body = { model: req.modelId, input, store: false, stream: true, ...(text ? { text } : {}) };
   if (!isLiteModel(req.modelId)) return { ...body, instructions };
@@ -94,6 +99,10 @@ interface Collected {
   incompleteReason: string | null;
   model?: string;
   id?: string;
+  /** web search: url_citation annotations + web_search_call items */
+  citations: Array<{ url: string; title: string | null }>;
+  searches: number;
+  queries: string[];
 }
 
 function mapUsage(u: unknown): LlmUsage {
@@ -121,10 +130,14 @@ function failureFamily(code: string | undefined, message: string) {
 }
 
 export async function collectResponsesStream(body: ReadableStream<Uint8Array> | null): Promise<Collected> {
-  const c: Collected = { text: "", doneText: "", messageText: "", refusal: "", usage: { inputTokens: 0, outputTokens: 0 }, status: "completed", incompleteReason: null };
+  const c: Collected = { text: "", doneText: "", messageText: "", refusal: "", usage: { inputTokens: 0, outputTokens: 0 }, status: "completed", incompleteReason: null, citations: [], searches: 0, queries: [] };
+  const cite = (a: unknown) => {
+    const x = a as { type?: string; url?: unknown; title?: unknown } | null;
+    if (x?.type === "url_citation" && typeof x.url === "string" && !c.citations.some((y) => y.url === x.url)) c.citations.push({ url: x.url, title: typeof x.title === "string" ? x.title : null });
+  };
   let terminal = false;
   await readSse(body, (d) => {
-    const ev = d as { type?: string; delta?: unknown; text?: unknown; item?: { type?: string; content?: unknown[] }; response?: Body; error?: { code?: string; message?: string } };
+    const ev = d as { type?: string; delta?: unknown; text?: unknown; annotation?: unknown; item?: { type?: string; content?: unknown[]; action?: { type?: string; query?: unknown } }; response?: Body; error?: { code?: string; message?: string } };
     switch (ev.type) {
       case "response.created":
       case "response.in_progress":
@@ -142,9 +155,17 @@ export async function collectResponsesStream(body: ReadableStream<Uint8Array> | 
       case "response.refusal.delta":
         if (typeof ev.delta === "string") c.refusal += ev.delta;
         break;
+      case "response.output_text.annotation.added":
+        cite(ev.annotation);
+        break;
       case "response.output_item.done":
+        if (ev.item?.type === "web_search_call") {
+          c.searches++;
+          if (typeof ev.item.action?.query === "string") c.queries.push(ev.item.action.query.slice(0, 200));
+        }
         if (ev.item?.type === "message" && Array.isArray(ev.item.content)) {
-          for (const part of ev.item.content as Array<{ type?: string; text?: unknown; refusal?: unknown }>) {
+          for (const part of ev.item.content as Array<{ type?: string; text?: unknown; refusal?: unknown; annotations?: unknown[] }>) {
+            for (const a of part.annotations ?? []) cite(a);
             if (part.type === "refusal" && typeof part.refusal === "string") c.refusal ||= part.refusal;
             else if (typeof part.text === "string") c.messageText += part.text;
             else if (part.text && typeof part.text === "object" && typeof (part.text as { value?: unknown }).value === "string") c.messageText += (part.text as { value: string }).value;
@@ -205,6 +226,10 @@ export class OpenAiLlmAdapter implements LlmAdapter {
     };
   }
 
+  webSearchSupport(_modelId: string, method?: LlmCredential["method"]): true | string {
+    return method === "chatgpt_oauth" ? "ChatGPT 로그인 연결은 인터넷 검색을 아직 지원하지 않아 검색 없이 진행합니다. 검색이 필요하면 OpenAI API 키로 연결하세요." : true;
+  }
+
   private lane(c: LlmCredential): "api" | "chatgpt" {
     return c.method === "chatgpt_oauth" ? "chatgpt" : "api";
   }
@@ -258,7 +283,7 @@ export class OpenAiLlmAdapter implements LlmAdapter {
           }
           return await httpFailure(res, copy);
         }
-        const c = await collectResponsesStream(res.body);
+        const c = await collectResponsesStream(tapProgress(res.body, opts.onProgress)); // idle-timeout liveness (gateway)
         const text = c.text || c.doneText || c.messageText;
         const finishReason = c.status === "incomplete" ? (c.incompleteReason === "content_filter" ? "content_filter" : "length") : "stop";
         if (c.refusal && !text) {
@@ -267,7 +292,18 @@ export class OpenAiLlmAdapter implements LlmAdapter {
         if (finishReason === "content_filter") {
           return { ok: false, errorFamily: "content_filtered", message: "GPT가 안전 정책으로 응답을 중단했습니다.", billed: "yes", usage: c.usage, providerRequestId: c.id };
         }
-        const common = { finishReason, usage: c.usage, modelVersion: c.model, providerRequestId: c.id, raw: { lane, status: c.status, incomplete: c.incompleteReason, format } } as const;
+        const now = new Date().toISOString();
+        const webSearch = req.webSearch
+          ? {
+              status: c.searches > 0 ? ("used" as const) : ("not_used" as const),
+              citationsKind: "cited" as const,
+              requests: c.searches,
+              citations: c.citations.slice(0, 12).map((x): LlmCitation => ({ ...x, retrievedAt: now })),
+              ...(c.queries.length ? { queries: c.queries } : {}),
+            }
+          : undefined;
+        const usage = webSearch ? { ...c.usage, webSearchRequests: webSearch.requests } : c.usage;
+        const common = { finishReason, usage, modelVersion: c.model, providerRequestId: c.id, ...(webSearch ? { webSearch } : {}), raw: { lane, status: c.status, incomplete: c.incompleteReason, format } } as const;
         if (req.output.kind === "object") {
           const object = parseJsonText(text);
           return { ok: true, object, text: object === undefined ? text : undefined, ...common };

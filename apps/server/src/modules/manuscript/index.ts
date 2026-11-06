@@ -13,7 +13,7 @@
  * (`registerCheckGateContributor`) so neither needs to import the other. Episode transitions invoke
  * `onEpisodeTransition` hooks in the same transaction (E9/E13/E14 fact & beat promotion, etc.).
  */
-import type { CountBasis, EpisodeBlockReason, EpisodeStatus, IssueFixScope, ManuscriptVersionKind, ReworkFrom } from "@ncs/shared";
+import type { CastCompleteness, CharacterRole, CountBasis, EpisodeBlockReason, EpisodeStatus, IssueFixScope, ManuscriptVersionKind, ReworkFrom, StructureView } from "@ncs/shared";
 import type { EpisodesRow, EpisodeRejectionsRow, ManuscriptVersionsRow, ScenesRow } from "@ncs/db/schema";
 import type { ActorRef, NovelScope, Tx } from "../../platform/index.js";
 
@@ -138,9 +138,59 @@ export interface ScheduleResult {
   notes: string[];
 }
 
+// ── 설계 추가: 전체 구성 → 플롯 → 화 (cast reads through this port; cast is built after manuscript) ──
+export interface PlanningRosterEntry {
+  id: string;
+  name: string;
+  role: CharacterRole;
+  entityId: string | null;
+  status: string;
+  proposed: boolean;
+  firstAppearanceEpisodeNo: number | null;
+  introducedArcId: string | null;
+}
+
+/** a character a plot introduces (plan_arc new_characters) — profile fields of the cast */
+export interface PlotCharacterDraft {
+  name: string;
+  role: "sub_protagonist" | "antagonist" | "supporting";
+  age: string;
+  appearance: string;
+  personality: string;
+  desire: string;
+  motivation: string;
+  weakness: string;
+  background: string;
+  speechSample: string;
+  arcStart: string;
+  arcEnd: string;
+  storyRole: string;
+  relationToProtagonist: string;
+  firstAppearanceEpisodeNo: number | null;
+}
+
+export interface PlanningCastPort {
+  /** initial cast (introducedArcId null) or the characters a plot introduced */
+  completeness(scope: NovelScope, opts: { scope: "initial" } | { scope: "arc"; arcId: string } | { scope: "plots" }, tx?: Tx): Promise<CastCompleteness>;
+  roster(scope: NovelScope, tx?: Tx): Promise<PlanningRosterEntry[]>;
+  /** agent write: only characters whose first appearance is still empty (a user value is never overwritten) */
+  applyFirstAppearances(tx: Tx, scope: NovelScope, items: Array<{ characterId: string; episodeNo: number }>, actor: ActorRef): Promise<void>;
+  proposePlotCharacters(tx: Tx, scope: NovelScope, arcId: string, drafts: PlotCharacterDraft[], actor: ActorRef): Promise<{ characterIds: string[] }>;
+  /** arc_plan approved / AR4: confirm the plot's characters (ontology sync of those only) */
+  confirmPlotCharacters(tx: Tx, scope: NovelScope, arcId: string, actor: ActorRef): Promise<void>;
+  /** `draft_cast` fill_missing for these characters (coalesced); null when nothing to fill */
+  requestFill(tx: Tx, scope: NovelScope, characterIds: string[], actor: ActorRef): Promise<string | null>;
+}
+
 export interface ManuscriptService {
   // episodes
-  createPlannedEpisodes(tx: Tx, scope: NovelScope, arcId: string, episodes: Array<{ episodeNo: number; title?: string | null; hookNote?: string | null }>, actor: ActorRef): Promise<Episode[]>;
+  createPlannedEpisodes(
+    tx: Tx,
+    scope: NovelScope,
+    arcId: string,
+    episodes: Array<{ episodeNo: number; title?: string | null; hookNote?: string | null; planSummary?: string; plannedSceneCount?: number | null; targetChars?: number | null }>,
+    actor: ActorRef,
+  ): Promise<Episode[]>;
   getEpisode(scope: NovelScope, episodeId: string, tx?: Tx): Promise<Episode>;
   getEpisodeByNo(scope: NovelScope, episodeNo: number, tx?: Tx): Promise<Episode>;
   listEpisodes(scope: NovelScope, filter?: EpisodeFilter): Promise<Episode[]>;
@@ -198,6 +248,18 @@ export interface ManuscriptService {
   registerPlannedBeatSource(source: (scope: NovelScope, episodeNo: number) => Promise<string[]>): void;
   registerVersionAnnotator(kind: "issues" | "beats", annotator: VersionAnnotator): void;
   getVersionDetail(scope: NovelScope, versionId: string, include: Array<"spans" | "scenes" | "issues" | "beats" | "lines">): Promise<Record<string, unknown>>;
+
+  // ── 설계 추가: 전체 구성(1~4부 + 결말) → 플롯 → 화 ──
+  registerPlanningCastPort(port: PlanningCastPort): void;
+  getStructureView(scope: NovelScope): Promise<StructureView>;
+  /** 202: plan_structure (the running one when it exists); 422 goal_required / bible_not_approved / cast_incomplete / structure_too_short */
+  requestStructure(scope: NovelScope, input: { scope: "all" | "ending" | "parts"; instructions?: string }, actor: ActorRef): Promise<{ taskId: string }>;
+  /** user decision on the story_structure approval (draft → ST1 first); goes through hitl.acceptAnswer */
+  decideStructure(scope: NovelScope, input: { decision: "approved" | "rejected"; note?: string; expectedRevision: number }, actor: ActorRef): Promise<StructureView>;
+  /** plan_arc again for a plot (flags cleared); 409 arc_not_replannable, 422 structure_not_approved */
+  replanArc(scope: NovelScope, arcId: string, note: string | undefined, actor: ActorRef): Promise<{ taskId: string }>;
+  /** episode rows with `lengthBelowFloor` (current version under the 3,000-char floor) */
+  withLengthFlags<E extends Episode>(scope: NovelScope, episodes: E[]): Promise<Array<E & { lengthBelowFloor: boolean }>>;
 }
 
 export type { ManuscriptModuleDeps } from "./module.js";

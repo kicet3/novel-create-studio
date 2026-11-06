@@ -60,8 +60,8 @@ const CHECK_TARGET: Record<string, string> = {
   "llm.openai": "GPT",
   "llm.xai": "Grok",
   "llm.google": "Gemini",
-  "messaging.bot_token": "Telegram 봇",
-  "messaging.channel_reach": "Telegram 채널",
+  "messaging.bot_token": "메신저 봇",
+  "messaging.channel_reach": "메신저 채널",
   "system.backups": "백업",
   ontology_integrity: "온톨로지",
 };

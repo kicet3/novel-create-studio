@@ -36,6 +36,9 @@ type Pending =
   | { kind: "approve"; note: string }
   | { kind: "reject"; note: string; reworkFrom: ReworkFrom | null };
 
+/** approvals reviewed on the 구성 screen */
+const STRUCTURE_APPROVALS = new Set(["story_structure", "arc_plan"]);
+
 export const QuestionDetail = forwardRef<QuestionDetailHandle, { novelId: string; view: HitlQuestionView; timezone?: string }>(function QuestionDetail(
   { novelId, view, timezone },
   ref,
@@ -55,6 +58,8 @@ export const QuestionDetail = forwardRef<QuestionDetailHandle, { novelId: string
 
   const approval = approvalOf(view);
   const isApproval = view.questionType === "approve_reject";
+  // arc_plan requested while the plot's new characters were not accepted yet: no "추천안: 승인", point to the cast screen
+  const castIncomplete = !!approval && approval.status === "pending" && (approval.payload as { castIncomplete?: boolean } | null)?.castIncomplete === true;
   const isMulti = view.questionType === "multi_choice";
   const answerable = (view.status === "open" || view.status === "pending") && view.grade !== "informational";
   const allowText = view.allowFreeText || view.questionType === "free_text";
@@ -161,6 +166,23 @@ export const QuestionDetail = forwardRef<QuestionDetailHandle, { novelId: string
           </p>
         )}
         {view.targetLabel && <p className="m-0 mt-1 text-xs text-faint">대상: {view.targetLabel}</p>}
+        {approval && STRUCTURE_APPROVALS.has(approval.approvalType) && (
+          <p className="m-0 mt-1 text-xs">
+            <Link to={novelPath(novelId, "structure")}>구성 화면에서 보기</Link>
+            {approval.approvalType === "story_structure" && <span className="text-muted"> — 결말과 1~4부를 펼쳐 보고 고친 뒤 승인할 수 있습니다.</span>}
+            {approval.approvalType === "arc_plan" && (
+              <>
+                {" · "}
+                <Link to={novelPath(novelId, "cast")}>캐릭터 화면에서 보기</Link>
+              </>
+            )}
+          </p>
+        )}
+        {castIncomplete && (
+          <Callout tone="warn" title="새 인물을 먼저 확인하세요" className="mt-2">
+            이 플롯에 새로 등장하는 인물의 빈 항목을 채우고 캐릭터 화면에서 AI 제안을 수락해야 승인할 수 있습니다. 이미 수락했다면 승인해도 됩니다.
+          </Callout>
+        )}
         <div className="mt-3 whitespace-pre-wrap text-[13.5px] leading-relaxed">{view.body}</div>
         {view.preview.length > 0 && (
           <div className="mt-3 flex flex-col gap-2">
@@ -174,9 +196,9 @@ export const QuestionDetail = forwardRef<QuestionDetailHandle, { novelId: string
         )}
       </Card>
 
-      {(view.recommendation || view.gradeReason || view.blockingBasisLabel) && (
+      {((view.recommendation && !castIncomplete) || view.gradeReason || view.blockingBasisLabel) && (
         <Card title="추천안·근거" headingLevel={3}>
-          {view.recommendation && (
+          {view.recommendation && !castIncomplete && (
             <div className="text-[13px]">
               <b>추천안: {view.recommendation.label}</b>
               {view.recommendation.rationale && <p className="m-0 mt-1 text-muted">{view.recommendation.rationale}</p>}

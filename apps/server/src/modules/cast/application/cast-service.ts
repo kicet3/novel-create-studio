@@ -30,9 +30,15 @@ import type { NovelService, NovelStatusChangedContext } from "../../novel/index.
 import type { CandidateFactDraft, OntologyService } from "../../ontology/index.js";
 import type { OrchestrationService, TaskKindHandler } from "../../orchestration/index.js";
 import type { CastService, CastState, Character, DesignSheetState } from "../index.js";
+import type { ManuscriptService, PlanningCastPort, PlotCharacterDraft } from "../../manuscript/index.js";
+import type { WorldService } from "../../world/index.js";
 import { castRepo as repo } from "../adapters/db/repository.js";
 import {
   agentWritable,
+  castCompleteness,
+  splitRelationText,
+  missingRequirements,
+  REQUIREMENT_PROFILE_FIELD,
   castBlockers,
   castCounts,
   cleanAliases,
@@ -46,6 +52,8 @@ import {
   ROLE_ORDER,
   seedFromBrief,
   sortCast,
+  EMPTY_PROFILE,
+  FIELD_LABEL_KO,
   type CharacterProfile,
   type FieldOrigins,
 } from "../domain/cast.js";
@@ -70,17 +78,27 @@ export interface CastServiceDeps {
   llm: LlmService;
   concept: ConceptService;
   imaging: ImagingService;
+  /** 설계 추가: planning port registration + episode numbers for the cast context (optional for unit wiring) */
+  manuscript?: ManuscriptService;
+  /** 설계 추가(world): approved world ontology + flagged candidates for the cast draft prompt */
+  world?: Pick<WorldService, "renderWorldContext">;
 }
 
 const ACTIVE_TASK = ["pending", "ready", "running", "blocked"] as const;
 const MAX_DRAFT_CHARACTERS = 16;
-const PROFILE_TEXT_LIMIT: Record<string, number> = { name: 80, age: 40, gender: 40, personality: 2000, background: 4000, desire: 2000, weakness: 2000, notes: 4000 };
+const PROFILE_TEXT_LIMIT: Record<string, number> = {
+  name: 80, age: 40, gender: 40, personality: 2000, background: 4000, desire: 2000, weakness: 2000, notes: 4000,
+  appearance: 1000, motivation: 2000, speechSample: 500, arcStart: 1000, arcEnd: 1000, storyRole: 200,
+};
 
 const draftInputSchema = z.object({
   requested_by_user_id: z.string(),
   sub_protagonist_count: z.number().int().min(0).max(10).nullable(),
   include_antagonist: z.boolean(),
   instructions: z.string(),
+  /** 설계 추가: fill only the empty required fields of these characters (no new characters) */
+  fill_missing: z.boolean().default(false),
+  character_ids: z.array(z.string()).default([]),
 });
 type DraftInput = z.infer<typeof draftInputSchema>;
 const sheetInputSchema = z.object({ character_id: z.string(), requested_by_user_id: z.string() });
@@ -102,6 +120,13 @@ function profileOf(c: Character): CharacterProfile {
     weakness: c.weakness,
     relationships: c.relationships ?? [],
     notes: c.notes,
+    appearance: c.appearance,
+    motivation: c.motivation,
+    speechSample: c.speechSample,
+    arcStart: c.arcStart,
+    arcEnd: c.arcEnd,
+    storyRole: c.storyRole,
+    firstAppearanceEpisodeNo: c.firstAppearanceEpisodeNo,
   };
 }
 
@@ -162,6 +187,7 @@ export function createCastService(deps: CastServiceDeps) {
       if (v === undefined) continue;
       if (k === "aliases") continue;
       if (k === "relationships") out.relationships = sanitizeRelationships(v as CharacterRelationshipJson[], selfId, cast);
+      else if (k === "firstAppearanceEpisodeNo") out.firstAppearanceEpisodeNo = v === null ? null : Math.max(1, Math.floor(Number(v)) || 1);
       else (out as Record<string, string>)[k] = clip(String(v), PROFILE_TEXT_LIMIT[k] ?? 2000);
     }
     if (patch.aliases !== undefined) out.aliases = cleanAliases(out.name ?? cast.find((c) => c.id === selfId)?.name ?? "", patch.aliases);
@@ -287,9 +313,11 @@ export function createCastService(deps: CastServiceDeps) {
     }
   };
 
-  const syncOntology = async (tx: Tx, scope: NovelScope, cast: Character[], actor: ActorRef) => {
+  const syncOntology = async (tx: Tx, scope: NovelScope, cast: Character[], actor: ActorRef, others: Character[] = []) => {
     const tl = await ontology.getDefaultTimeline(scope, tx);
     const entityOf = new Map<string, string>();
+    // relationships of a partial sync (plot characters) may point at already-synced characters
+    for (const o of others) if (o.entityId && !cast.some((c) => c.id === o.id)) entityOf.set(o.id, o.entityId);
     let factCount = 0;
     const entityIds: string[] = [];
     // 1) entities (create or add new names)
@@ -440,7 +468,12 @@ export function createCastService(deps: CastServiceDeps) {
       sheets.set(s.characterId, { hasSheet: !specIsEmpty(spec) || live.length > 0, frontAssetId: front });
     }
     const goalSet = n.status !== "concept" && n.status !== "onboarding" ? true : !!(await novel.getGoal(scope));
+    const arcTitles = new Map<string, string>();
+    if (items.some((c) => c.introducedArcId)) for (const a of await novel.listArcs(scope)) arcTitles.set(a.id, a.title);
     return {
+      completeness: castCompleteness(items, { scope: "initial" }),
+      plotCompleteness: castCompleteness(items, { scope: "plots" }),
+      arcTitles,
       items,
       confirmed,
       blockers,
@@ -490,6 +523,96 @@ export function createCastService(deps: CastServiceDeps) {
     };
   };
 
+  // ── fill_missing (설계 추가 0008) ──────────────────────────────────────────
+  /** characters with empty required fields (optionally only `ids`), any scope */
+  const fillTargets = (cast: Character[], ids: readonly string[]) =>
+    cast
+      .filter((c) => !ids.length || ids.includes(c.id))
+      .map((c) => ({ c, missing: missingRequirements(c, cast) }))
+      .filter((t) => t.missing.length);
+
+  const proposalProfile = (pc: CastDraftProposal["characters"][number]): Partial<CharacterProfile> => ({
+    age: clip(pc.age, 40),
+    gender: clip(pc.gender, 40),
+    personality: clip(pc.personality, 2000),
+    background: clip(pc.background, 4000),
+    desire: clip(pc.desire, 2000),
+    weakness: clip(pc.weakness, 2000),
+    notes: clip(pc.notes, 4000),
+    appearance: clip(pc.appearance ?? "", 1000),
+    motivation: clip(pc.motivation ?? "", 2000),
+    speechSample: clip(pc.speech_sample ?? "", 500),
+    arcStart: clip(pc.arc_start ?? "", 1000),
+    arcEnd: clip(pc.arc_end ?? "", 1000),
+    storyRole: clip(pc.story_role ?? "", 200),
+  });
+
+  /**
+   * fill_missing commit: only fields that are EMPTY now are written (a user value — or any value — is never replaced);
+   * a confirmed character that gets a value goes back to draft + proposed (the user accepts / confirms it again).
+   */
+  const commitFill = async (tx: Tx, scope: NovelScope, agent: ActorRef, castIn: Character[], proposal: CastDraftProposal, ids: readonly string[]) => {
+    let cast = castIn;
+    const targets = fillTargets(cast, ids);
+    const updatedIds: string[] = [];
+    for (const t of targets) {
+      const pc = proposal.characters.find((x) => x.existing_id === t.c.id) ?? proposal.characters.find((x) => normalizeName(x.name) === normalizeName(t.c.name));
+      if (!pc) continue;
+      const cur = profileOf(t.c) as unknown as Record<string, unknown>;
+      const wanted = new Set(t.missing.map((f) => REQUIREMENT_PROFILE_FIELD[f]));
+      const prop = proposalProfile(pc) as Record<string, unknown>;
+      const accepted: Record<string, unknown> = {};
+      for (const k of wanted) {
+        if (k === "relationships") continue;
+        if (isEmptyValue(cur[k]) && !isEmptyValue(prop[k])) accepted[k] = prop[k];
+      }
+      if (wanted.has("relationships")) {
+        const resolved: CharacterRelationshipJson[] = [...(t.c.relationships ?? [])];
+        for (const r of pc.relationships) {
+          const target = cast.find((x) => normalizeName(x.name) === normalizeName(r.target_name));
+          if (target && target.id !== t.c.id && r.kind.trim()) resolved.push({ targetCharacterId: target.id, kind: clip(r.kind, 40), description: clip(r.description, 500) });
+        }
+        const rel = sanitizeRelationships(resolved, t.c.id, cast);
+        if (rel.length > (t.c.relationships ?? []).length) accepted.relationships = rel;
+      }
+      if (!Object.keys(accepted).length) continue;
+      const row = await repo.update(tx.db, scope, t.c.id, {
+        ...(accepted as Partial<CharactersInsert>),
+        fieldOrigins: mergeOrigins(t.c.fieldOrigins as FieldOrigins, accepted, "agent"),
+        status: "draft",
+        // a character the author made stays theirs (no "AI가 제안한 캐릭터" / [빼기]); the filled fields keep origin
+        // "agent" until accepted. A plot-introduced character still needs its proposal accepted.
+        proposed: t.c.proposed || t.c.introducedArcId !== null,
+        confirmedAt: null,
+        updatedAt: clock.date(),
+      });
+      cast = cast.map((c) => (c.id === row.id ? row : c));
+      updatedIds.push(row.id);
+    }
+    await audit.record(tx, {
+      novelId: scope.novelId,
+      actor: agent,
+      action: "cast.draft_applied",
+      target: { type: "novel", id: scope.novelId },
+      after: { created: 0, updated: updatedIds.length },
+      details: { mode: "fill_missing", updatedIds, targetIds: targets.map((t) => t.c.id) },
+    });
+    return { kind: "done" as const, outputRefs: updatedIds.map((id) => ({ refType: "character" as const, refId: id })) };
+  };
+
+  const createFillTask = async (tx: Tx, scope: NovelScope, characterIds: string[], actor: ActorRef, instructions?: string) => {
+    const { taskId } = await orchestration.createTask(tx, scope, {
+      kind: "draft_cast",
+      targetType: "novel",
+      targetId: scope.novelId,
+      input: { requested_by_user_id: actor.id, sub_protagonist_count: null, include_antagonist: true, instructions: instructions?.trim() ?? "", fill_missing: true, character_ids: characterIds },
+      createdBy: actor,
+      cycleKey: `cast-fill:${scope.novelId}`,
+      priority: 300,
+    });
+    return taskId;
+  };
+
   // ── task handlers ─────────────────────────────────────────────────────────
   const draftCastHandler: TaskKindHandler<DraftInput, { proposal: CastDraftProposal | null }> = {
     kind: "draft_cast",
@@ -500,14 +623,18 @@ export function createCastService(deps: CastServiceDeps) {
       const n = await novel.getNovel(ctx.scope);
       const brief = await approvedBriefContent(ctx.scope);
       const cast = sortCast(await repo.list(uow.db, ctx.scope));
+      const fill = ctx.input.fill_missing ? fillTargets(cast, ctx.input.character_ids) : undefined;
+      const world = deps.world ? (await deps.world.renderWorldContext(ctx.scope)).text : "";
       const prompt = renderCastDraftPrompt({
         novel: { title: n.title, genre: n.genre, ageRating: n.ageRating },
         brief,
+        world,
         cast,
         request: {
           subProtagonistCount: ctx.input.sub_protagonist_count ?? undefined,
           includeAntagonist: ctx.input.include_antagonist,
           instructions: ctx.input.instructions || undefined,
+          fillMissing: fill?.map((t) => ({ id: t.c.id, name: t.c.name, fields: t.missing.map((f) => FIELD_LABEL_KO[f]) })),
         },
       });
       const out = await llm.modelCalls.call({
@@ -533,6 +660,7 @@ export function createCastService(deps: CastServiceDeps) {
       let newSubsAllowed = subLimit === null ? Infinity : Math.max(0, subLimit - cast.filter((c) => c.role === "sub_protagonist").length);
       let ord = nextOrd(cast);
       const pendingRels: Array<{ characterId: string; rels: CastDraftProposal["characters"][number]["relationships"] }> = [];
+      if (ctx.input.fill_missing) return commitFill(tx, scope, agent, cast, p.proposal, ctx.input.character_ids);
       for (const pc of p.proposal.characters.slice(0, MAX_DRAFT_CHARACTERS)) {
         const name = clip(pc.name, 80);
         const byId = pc.existing_id ? cast.find((c) => c.id === pc.existing_id) : undefined;
@@ -540,16 +668,7 @@ export function createCastService(deps: CastServiceDeps) {
           byId ??
           (pc.role === "protagonist" ? cast.find((c) => c.role === "protagonist") : undefined) ??
           (name ? cast.find((c) => normalizeName(c.name) === normalizeName(name)) : undefined);
-        const profile: Partial<CharacterProfile> = {
-          name,
-          age: clip(pc.age, 40),
-          gender: clip(pc.gender, 40),
-          personality: clip(pc.personality, 2000),
-          background: clip(pc.background, 4000),
-          desire: clip(pc.desire, 2000),
-          weakness: clip(pc.weakness, 2000),
-          notes: clip(pc.notes, 4000),
-        };
+        const profile: Partial<CharacterProfile> = { name, ...proposalProfile(pc) };
         if (existing) {
           if (existing.status === "confirmed") continue; // the agent never edits a confirmed character
           if (name && cast.some((c) => c.id !== existing.id && normalizeName(c.name) === normalizeName(name))) delete profile.name;
@@ -578,7 +697,7 @@ export function createCastService(deps: CastServiceDeps) {
           if (newSubsAllowed <= 0) continue;
           newSubsAllowed--;
         }
-        const full: CharacterProfile = { ...(profile as CharacterProfile), name, aliases: cleanAliases(name, pc.aliases), relationships: [] };
+        const full: CharacterProfile = { ...EMPTY_PROFILE, ...(profile as CharacterProfile), name, aliases: cleanAliases(name, pc.aliases), relationships: [] };
         const now = clock.date();
         const row = await repo.insert(tx.db, {
           id: ids.next("chr"),
@@ -702,7 +821,7 @@ export function createCastService(deps: CastServiceDeps) {
         assertUniqueName(cast, name, null);
         if (input.role === "protagonist") await demoteProtagonist(tx, scope, null, actor);
         const p = normalizeProfilePatch({ ...input, name } as Partial<CharacterProfile>, null, cast);
-        const profile: CharacterProfile = { name, aliases: cleanAliases(name, input.aliases ?? []), age: "", gender: "", personality: "", background: "", desire: "", weakness: "", relationships: [], notes: "", ...p };
+        const profile: CharacterProfile = { ...EMPTY_PROFILE, name, aliases: cleanAliases(name, input.aliases ?? []), ...p };
         const now = clock.date();
         const row = await repo.insert(tx.db, {
           id: ids.next("chr"),
@@ -827,6 +946,13 @@ export function createCastService(deps: CastServiceDeps) {
         await assertEditable(tx, scope);
         const n = await novel.getNovel(scope, tx);
         if (!n.approvedConceptBriefId) throw new DomainValidationError("concept_not_approved", "컨셉(스토리라인)을 승인한 뒤에 AI 초안을 받을 수 있습니다.");
+        if (input.fillMissing) {
+          const targets = fillTargets(await repo.list(tx.db, scope), input.characterIds ?? []);
+          if (!targets.length) throw new DomainValidationError("nothing_to_fill", "채울 빈 항목이 없습니다.");
+          const taskId = await createFillTask(tx, scope, targets.map((t) => t.c.id), actor, input.instructions);
+          await audit.record(tx, { novelId: scope.novelId, actor, action: "cast.draft_requested", target: { type: "novel", id: scope.novelId }, details: { taskId, mode: "fill_missing", characterIds: targets.map((t) => t.c.id) } });
+          return { taskId };
+        }
         const { taskId } = await orchestration.createTask(tx, scope, {
           kind: "draft_cast",
           targetType: "novel",
@@ -999,7 +1125,7 @@ export function createCastService(deps: CastServiceDeps) {
       return sheetReferenceText(c, normalizeSpec(s?.spec));
     },
 
-    async renderCastContext(scope) {
+    async renderCastContext(scope, opts = {}) {
       // confirmed characters as they are; a character edited after confirmation keeps its last confirmed profile
       // (ontologySync.confirmed) until the cast is confirmed again; never-confirmed characters are left out
       const rows = sortCast(await repo.list(uow.db, scope));
@@ -1009,38 +1135,165 @@ export function createCastService(deps: CastServiceDeps) {
           const snap = c.ontologySync?.confirmed;
           if (!snap) return null;
           const { role, ...profile } = snap;
-          return { c, profile: profile as CharacterProfile, role: role as CharacterRole, pending: true };
+          return { c, profile: { ...EMPTY_PROFILE, ...(profile as Partial<CharacterProfile>), firstAppearanceEpisodeNo: c.firstAppearanceEpisodeNo } as CharacterProfile, role: role as CharacterRole, pending: true };
         })
         .filter((x): x is NonNullable<typeof x> => !!x)
         .sort((a, b) => ROLE_ORDER_INDEX(a.role) - ROLE_ORDER_INDEX(b.role) || a.c.ord - b.c.ord);
       if (!cast.length) return { text: "", entityIds: [] };
       const sheets = new Map((await repo.listSheets(uow.db, scope)).map((s) => [s.characterId, normalizeSpec(s.spec)]));
       const nameOf = new Map(cast.map((x) => [x.c.id, x.profile.name]));
-      const blocks = cast.map(({ c, profile: p, role }) => {
-        const head = `### [${labelKo("character_role", role)}] ${p.name}${c.entityId ? ` ({{E:${c.entityId}}})` : ""}`;
+      const focus = new Set(opts.focusEntityIds ?? []);
+      const focused = (c: Character) => !focus.size || (!!c.entityId && focus.has(c.entityId));
+      const episodeNo = opts.episodeNo;
+      const appearance = (p: CharacterProfile) => {
+        if (!episodeNo || !p.firstAppearanceEpisodeNo) return "";
+        if (p.firstAppearanceEpisodeNo > episodeNo) return ` (아직 등장 전 — ${p.firstAppearanceEpisodeNo}화 첫 등장 예정, 이번 화에 등장시키지 마세요)`;
+        if (p.firstAppearanceEpisodeNo === episodeNo) return " (이번 화 첫 등장)";
+        return "";
+      };
+      const blocks: string[] = [];
+      const brief: string[] = [];
+      for (const { c, profile: p, role } of cast) {
+        if (!focused(c)) {
+          brief.push(`- [${labelKo("character_role", role)}] ${p.name}${c.entityId ? ` ({{E:${c.entityId}}})` : ""}${appearance(p)}${p.storyRole ? ` — ${p.storyRole}` : p.personality ? ` — ${clip(p.personality, 60)}` : ""}`);
+          continue;
+        }
+        const head = `### [${labelKo("character_role", role)}] ${p.name}${c.entityId ? ` ({{E:${c.entityId}}})` : ""}${appearance(p)}`;
         const rels = (p.relationships ?? []).filter((r) => nameOf.has(r.targetCharacterId));
         const fields = [
           c.conceptCharacterKey ? `character_key: ${c.conceptCharacterKey}` : `character_key: ${c.id}`,
           (p.aliases ?? []).length ? `별칭: ${p.aliases.join(", ")}` : "",
+          p.storyRole ? `이야기 속 역할: ${p.storyRole}` : "",
           p.age ? `나이: ${p.age}` : "",
           p.gender ? `성별: ${p.gender}` : "",
+          p.appearance ? `외형 요약: ${p.appearance}` : "",
           p.personality ? `성격: ${p.personality}` : "",
           p.background ? `배경: ${p.background}` : "",
           p.desire ? `욕망·목표: ${p.desire}` : "",
-          p.weakness ? `약점: ${p.weakness}` : "",
+          p.motivation ? `동기: ${p.motivation}` : "",
+          p.weakness ? `약점·두려움: ${p.weakness}` : "",
+          p.speechSample ? `말투 예시: ${p.speechSample}` : "",
+          p.arcStart || p.arcEnd ? `변화 아크: ${p.arcStart || "?"} → ${p.arcEnd || "?"}` : "",
           rels.length ? `관계: ${rels.map((r) => `${nameOf.get(r.targetCharacterId)}(${r.kind}${r.description ? ` — ${r.description}` : ""})`).join("; ")}` : "",
           p.notes ? `메모: ${p.notes}` : "",
         ];
         const spec = sheets.get(c.id);
         if (spec && !specIsEmpty(spec)) fields.push(`외형: ${sheetReferenceText({ ...c, ...p }, spec).split("\n").slice(1).join(" / ")}`);
-        return [head, ...fields.filter(Boolean).map((f) => `- ${f}`)].join("\n");
-      });
+        blocks.push([head, ...fields.filter(Boolean).map((f) => `- ${f}`)].join("\n"));
+      }
       const subs = cast.filter((x) => x.role === "sub_protagonist").length;
       const protagonists = cast.filter((x) => x.role === "protagonist").length;
+      const others = brief.length ? `\n\n그 밖의 인물(이번 화 비중 낮음):\n${brief.join("\n")}` : "";
       return {
-        text: `주인공 ${protagonists}명, 서브 주인공 ${subs}명을 포함한 확정 캐스트(${cast.length}명)입니다. 이름·역할·관계를 바꾸지 마세요.\n\n${blocks.join("\n\n")}`,
+        text: `주인공 ${protagonists}명, 서브 주인공 ${subs}명을 포함한 확정 캐스트(${cast.length}명)입니다. 이름·역할·관계를 바꾸지 마세요.\n\n${blocks.join("\n\n")}${others}`,
         entityIds: cast.map((x) => x.c.entityId).filter((x): x is string => !!x),
       };
+    },
+  };
+
+  // ── PlanningCastPort (manuscript reads through this; cast is built after manuscript) ──
+  const planningPort: PlanningCastPort = {
+    async completeness(scope, opts, tx) {
+      return castCompleteness(await repo.list(db(tx), scope), opts);
+    },
+    async roster(scope, tx) {
+      return sortCast(await repo.list(db(tx), scope)).map((c) => ({
+        id: c.id,
+        name: c.name,
+        role: c.role,
+        entityId: c.entityId,
+        status: c.status,
+        proposed: c.proposed,
+        firstAppearanceEpisodeNo: c.firstAppearanceEpisodeNo,
+        introducedArcId: c.introducedArcId,
+      }));
+    },
+    async applyFirstAppearances(tx, scope, items, actor) {
+      const cast = await repo.list(tx.db, scope);
+      const set: string[] = [];
+      for (const it of items) {
+        const c = cast.find((x) => x.id === it.characterId);
+        if (!c || c.firstAppearanceEpisodeNo !== null || !Number.isInteger(it.episodeNo) || it.episodeNo < 1) continue; // never overwrite (user or agent)
+        await repo.update(tx.db, scope, c.id, { firstAppearanceEpisodeNo: it.episodeNo, fieldOrigins: { ...c.fieldOrigins, firstAppearanceEpisodeNo: "agent" } });
+        set.push(c.id);
+      }
+      if (set.length) {
+        await audit.record(tx, { novelId: scope.novelId, actor, action: "cast.first_appearance_set", target: { type: "novel", id: scope.novelId }, details: { ids: set, count: set.length } });
+      }
+    },
+    async proposePlotCharacters(tx, scope, arcId, drafts: PlotCharacterDraft[], actor) {
+      let cast = await repo.list(tx.db, scope);
+      const protagonist = cast.find((c) => c.role === "protagonist");
+      const created: string[] = [];
+      let ord = nextOrd(cast);
+      for (const d of drafts) {
+        const name = clip(d.name, 80);
+        if (!name || cast.some((c) => normalizeName(c.name) === normalizeName(name))) continue;
+        const profile: CharacterProfile = {
+          ...EMPTY_PROFILE,
+          name,
+          age: clip(d.age, 40),
+          appearance: clip(d.appearance, 1000),
+          personality: clip(d.personality, 2000),
+          desire: clip(d.desire, 2000),
+          motivation: clip(d.motivation, 2000),
+          weakness: clip(d.weakness, 2000),
+          background: clip(d.background, 4000),
+          speechSample: clip(d.speechSample, 500),
+          arcStart: clip(d.arcStart, 1000),
+          arcEnd: clip(d.arcEnd, 1000),
+          storyRole: clip(d.storyRole, 200),
+          firstAppearanceEpisodeNo: d.firstAppearanceEpisodeNo,
+          relationships: protagonist && d.relationToProtagonist.trim() ? [{ targetCharacterId: protagonist.id, ...splitRelationText(d.relationToProtagonist) }] : [],
+        };
+        const now = clock.date();
+        const row = await repo.insert(tx.db, {
+          id: ids.next("chr"),
+          novelId: scope.novelId,
+          role: d.role,
+          ord: ord++,
+          status: "draft",
+          ...profile,
+          fieldOrigins: originsFor(profile, "agent"),
+          proposed: true,
+          introducedArcId: arcId,
+          createdAt: now,
+          updatedAt: now,
+        });
+        cast = [...cast, row];
+        created.push(row.id);
+      }
+      if (created.length) {
+        await audit.record(tx, {
+          novelId: scope.novelId,
+          actor,
+          action: "cast.plot_characters_proposed",
+          target: { type: "arc", id: arcId },
+          after: { count: created.length },
+          details: { ids: created, count: created.length },
+        });
+      }
+      return { characterIds: created };
+    },
+    async confirmPlotCharacters(tx, scope, arcId, actor) {
+      const all = await repo.list(tx.db, scope);
+      const chars = all.filter((c) => c.introducedArcId === arcId && (c.status !== "confirmed" || c.proposed));
+      if (!chars.length) return;
+      const sync = await syncOntology(tx, scope, chars, actor, all);
+      const now = clock.date();
+      for (const c of chars) await repo.update(tx.db, scope, c.id, { status: "confirmed", confirmedAt: now, proposed: false, updatedAt: now });
+      await audit.record(tx, {
+        novelId: scope.novelId,
+        actor,
+        action: "cast.plot_characters_confirmed",
+        target: { type: "arc", id: arcId },
+        details: { ids: chars.map((c) => c.id), count: chars.length, entityIds: sync.entityIds, factsWritten: sync.factCount },
+      });
+    },
+    async requestFill(tx, scope, characterIds, actor) {
+      const targets = fillTargets(await repo.list(tx.db, scope), characterIds);
+      if (!targets.length) return null;
+      return createFillTask(tx, scope, targets.map((t) => t.c.id), actor);
     },
   };
 
@@ -1062,7 +1315,7 @@ export function createCastService(deps: CastServiceDeps) {
     );
   };
 
-  return { service, handlers: { draftCast: draftCastHandler, draftSheet: draftSheetHandler }, onNovelStatusChanged, goalGuard, isEmptyValue };
+  return { service, port: planningPort, handlers: { draftCast: draftCastHandler, draftSheet: draftSheetHandler }, onNovelStatusChanged, goalGuard, isEmptyValue };
 }
 
 export type CastApp = ReturnType<typeof createCastService>;

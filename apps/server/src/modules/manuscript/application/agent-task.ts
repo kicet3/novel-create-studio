@@ -8,21 +8,21 @@ import type { AgentRole, TaskKind } from "@ncs/shared";
 import type { z } from "zod";
 import type { NovelScope, Tx } from "../../../platform/index.js";
 import type { AgentTaskHandler, ContextPack, ContextSectionKind, ContextSectionProvider, ContextSpec } from "../../agents/index.js";
-import type { LlmMessage, ModelCallInput, ModelCallPort } from "../../llm/index.js";
+import type { LlmMessage, ModelCallInput, ModelCallPort, ModelCallWebSearch } from "../../llm/index.js";
 import type { CommitOutcome, RunHandle, Task } from "../../orchestration/index.js";
 import type { Ports } from "./support.js";
 
 export type PipelineCall<T> = ModelCallInput<T>;
 
 export interface PipelineLlm {
-  call<T>(input: PipelineCall<T>): Promise<{ value: T | string; modelId: string; reused: boolean }>;
+  call<T>(input: PipelineCall<T>): Promise<{ value: T | string; modelId: string; reused: boolean; webSearch?: ModelCallWebSearch }>;
 }
 
 function adaptPort(port: ModelCallPort): PipelineLlm {
   return {
     async call(input) {
       const out = await port.call(input);
-      return { value: out.value, modelId: out.modelId, reused: out.reused };
+      return { value: out.value, modelId: out.modelId, reused: out.reused, ...(out.webSearch ? { webSearch: out.webSearch } : {}) };
     },
   };
 }

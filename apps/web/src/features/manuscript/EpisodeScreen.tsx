@@ -129,7 +129,7 @@ export function EpisodeScreen({ novelId, episodeNo }: { novelId: string; episode
             <Link to={`/novels/${novelId}/manuscript`} className="underline">
               원고
             </Link>
-            {arc && ` › 아크 ${arc.ord} · ${arc.title} (${arc.plannedEpisodeFrom}~${arc.plannedEpisodeTo}화)`}
+            {arc && ` › 플롯 ${arc.ord} · ${arc.title} (${arc.plannedEpisodeFrom}~${arc.plannedEpisodeTo}화)`}
           </span>
         }
         actions={
@@ -179,6 +179,12 @@ export function EpisodeScreen({ novelId, episodeNo }: { novelId: string; episode
       </div>
 
       <Stepper status={ep.status} />
+
+      {ep.length?.belowFloor && (
+        <Callout tone="danger" title="분량 미달" className="mt-3">
+          {ep.length.count.toLocaleString("ko-KR")}자 / 최소 {ep.length.hardMinChars.toLocaleString("ko-KR")}자({labelKo("count_basis", ep.length.basis)}). 자동 승인·공개되지 않습니다. 직접 늘리거나 수정 요청을 보내 주세요.
+        </Callout>
+      )}
 
       <div className="mt-3 grid grid-cols-1 gap-3 min-[1100px]:grid-cols-[minmax(0,1fr)_340px]">
         <div className="min-w-0">
@@ -331,7 +337,7 @@ function EditGate({ novelId, episode, detail, onSaved }: { novelId: string; epis
 
 function LengthCard({ detail }: { detail: NonNullable<ReturnType<typeof useEpisode>["data"]>["length"] }) {
   if (!detail) return null;
-  const tone = detail.deviation ? "warn" : "ok";
+  const tone = detail.belowFloor ? "danger" : detail.deviation ? "warn" : "ok";
   return (
     <Card title="분량">
       <div className="tabular text-[20px] font-bold">
@@ -341,9 +347,10 @@ function LengthCard({ detail }: { detail: NonNullable<ReturnType<typeof useEpiso
       <div className="mt-1 flex items-center gap-2 text-xs text-muted">
         기준 {detail.minChars.toLocaleString("ko-KR")}~{detail.maxChars.toLocaleString("ko-KR")}
         <Badge tone={tone} glyph>
-          {detail.deviation === "short" ? "부족" : detail.deviation === "long" ? "초과" : "충족"}
+          {detail.belowFloor ? "분량 미달" : detail.deviation === "short" ? "부족" : detail.deviation === "long" ? "초과" : "충족"}
         </Badge>
       </div>
+      <p className="m-0 mt-1 text-xs text-faint">고정 하한 {detail.hardMinChars.toLocaleString("ko-KR")}자 — 미만이면 자동 승인·공개하지 않습니다.</p>
     </Card>
   );
 }

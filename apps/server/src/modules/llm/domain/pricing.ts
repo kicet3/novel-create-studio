@@ -174,3 +174,31 @@ export function usageCostMicros(
     ((usage.inputTokens - cached) * m.input_price_micros_per_mtok + cached * cachedPrice + usage.outputTokens * m.output_price_micros_per_mtok) / 1_000_000,
   );
 }
+
+// ── web search (설계 추가 0011) ──
+/**
+ * Price of one server-side web search in micro-USD (search tool fee only; result tokens are billed as input tokens).
+ * Sources (checked 2026-11-06, unverified placeholders like the model prices above): Anthropic web search $10 / 1,000
+ * searches; OpenAI Responses `web_search` tool $10 / 1,000 calls; Gemini grounding with Google Search $14 / 1,000
+ * queries. The Claude subscription lane (claude_code) is plan-billed → 0. Providers without a lane that searches: absent.
+ */
+export const WEB_SEARCH_PRICE_MICROS: Readonly<Record<string, number>> = {
+  anthropic: 10_000,
+  claude_code: 0,
+  openai: 10_000,
+  google: 14_000,
+};
+
+/** reservation allowance: input tokens one search may add to the context (results) */
+export const WEB_SEARCH_INPUT_TOKENS_ALLOWANCE = 12_000;
+
+/** search fee of `requests` searches (0 when the provider has no price) */
+export function webSearchCostMicros(provider: string, requests: number | undefined): number {
+  return Math.max(0, requests ?? 0) * (WEB_SEARCH_PRICE_MICROS[provider] ?? 0);
+}
+
+/** reservation upper bound for `maxUses` searches: fee + result tokens at the input price; null when unpriced */
+export function webSearchReserveMicros(provider: string, m: ProfileModelEntry | undefined, maxUses: number): number | null {
+  if (!isPriced(m)) return null;
+  return maxUses * ((WEB_SEARCH_PRICE_MICROS[provider] ?? 0) + Math.ceil((WEB_SEARCH_INPUT_TOKENS_ALLOWANCE * m.input_price_micros_per_mtok) / 1_000_000));
+}

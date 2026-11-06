@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { labelKo } from "@ncs/shared";
+import { labelKo, type MessagingBotKind } from "@ncs/shared";
 import { errorMessage } from "../../../api/client.js";
 import {
   Badge,
@@ -16,6 +16,7 @@ import {
   List,
   ListItem,
   QueryView,
+  Select,
   StatusBadge,
 } from "../../../components/ui/index.js";
 import {
@@ -146,15 +147,21 @@ export function LlmCard() {
   );
 }
 
+const BOT_KIND_HINT: Record<MessagingBotKind, string> = {
+  telegram: "@BotFather에서 받은 토큰. 저장 후 다시 보여 주지 않습니다.",
+  discord: "Discord Developer Portal › Bot › Reset Token으로 받은 토큰. 저장 후 다시 보여 주지 않습니다.",
+};
+
 export function BotsCard() {
   const bots = useBots();
   const reg = useRegisterBot();
+  const [kind, setKind] = useState<MessagingBotKind>("telegram");
   const [label, setLabel] = useState("");
   const [token, setToken] = useState("");
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
     reg.mutate(
-      { kind: "telegram", label: label.trim(), token: token.trim() },
+      { kind, label: label.trim(), token: token.trim() },
       {
         onSuccess: () => {
           setLabel("");
@@ -164,7 +171,7 @@ export function BotsCard() {
     );
   };
   return (
-    <Card title="메신저 봇 (Telegram)">
+    <Card title="메신저 봇">
       <QueryView query={bots} compact notReadyDescription="메신저 모듈이 준비되면 봇을 등록할 수 있습니다.">
         {(d) => (
           <div className="flex flex-col gap-3">
@@ -175,23 +182,37 @@ export function BotsCard() {
                 {d.items.map((b) => (
                   <ListItem key={b.id}>
                     <span className="min-w-0 flex-1">
-                      <b>{b.label}</b>
+                      <b>{b.label}</b> <span className="text-muted">{labelKo("channel_kind", b.kind)}</span>
                       <div className="text-xs text-muted">
-                        {b.receiveMode ? labelKo("telegram_receive_mode", b.receiveMode) : "—"} · 마지막 연결 {formatDateTime(b.lastConnectedAt)}
+                        {b.kind === "discord" ? "Gateway 연결" : b.receiveMode ? labelKo("telegram_receive_mode", b.receiveMode) : "—"} · 마지막 연결 {formatDateTime(b.lastConnectedAt)}
                       </div>
+                      {b.kind === "discord" && b.inviteUrl && (
+                        <div className="text-xs">
+                          <a href={b.inviteUrl} target="_blank" rel="noreferrer">
+                            내 서버에 봇 초대하기
+                          </a>
+                          <span className="text-muted"> · 초대 후 봇 프로필에서 ‘메시지 보내기’로 DM을 엽니다.</span>
+                        </div>
+                      )}
                     </span>
                     <StatusBadge enum="channel_status" value={b.status} />
                   </ListItem>
                 ))}
               </List>
             )}
-            <form onSubmit={onSubmit} className="grid grid-cols-1 items-start gap-2 min-[521px]:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+            <form onSubmit={onSubmit} className="grid grid-cols-1 items-start gap-2 min-[521px]:grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,2fr)]">
+              <Field label="종류">
+                <Select value={kind} onChange={(e) => setKind(e.target.value as MessagingBotKind)}>
+                  <option value="telegram">Telegram</option>
+                  <option value="discord">Discord</option>
+                </Select>
+              </Field>
               <Field label="이름">
                 <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="예) 내 작업 봇" />
               </Field>
               <Field
                 label="봇 토큰"
-                hint="@BotFather에서 받은 토큰. 저장 후 다시 보여 주지 않습니다."
+                hint={BOT_KIND_HINT[kind]}
                 action={
                   <Button type="submit" variant="primary" disabled={!label.trim() || token.trim().length < 10} loading={reg.isPending}>
                     봇 등록
@@ -202,7 +223,22 @@ export function BotsCard() {
               </Field>
             </form>
             {reg.error && <Callout tone="danger">{errorMessage(reg.error)}</Callout>}
-            <p className="m-0 text-xs text-faint">봇을 등록한 뒤 작품 설정의 ‘채널 연결’에서 일회용 링크로 1:1 대화를 바인딩하세요.</p>
+            {kind === "discord" && (
+              <Callout tone="info" title="Discord 봇 준비 (Developer Portal)">
+                <ol className="m-0 pl-4 text-xs">
+                  <li>discord.com/developers/applications › New Application → 이름 입력.</li>
+                  <li>Bot 메뉴 › Reset Token으로 토큰을 복사해 위에 붙여 넣습니다.</li>
+                  <li>Privileged Gateway Intents는 켜지 않아도 됩니다(DM 본문은 기본으로 받습니다).</li>
+                  <li>
+                    다른 사람이 봇을 추가하지 못하게 Installation › Install Link를 None으로 바꾸고 User Install을 끈 뒤, Bot › Public Bot을
+                    끕니다(연결한 내 계정 외의 DM은 어차피 거부됩니다).
+                  </li>
+                  <li>등록 후 ‘내 서버에 봇 초대하기’로 내 서버에 추가하고, 봇에게 DM을 보낼 수 있게 둡니다.</li>
+                </ol>
+                <p className="m-0 mt-1 text-xs text-muted">앱이 Discord로 바깥 연결(websocket)만 열기 때문에 공개 주소나 포트 개방이 필요 없습니다.</p>
+              </Callout>
+            )}
+            <p className="m-0 text-xs text-faint">봇을 등록한 뒤 작품 설정의 ‘채널 연결’에서 일회용 코드로 1:1 대화(DM)를 바인딩하세요.</p>
           </div>
         )}
       </QueryView>

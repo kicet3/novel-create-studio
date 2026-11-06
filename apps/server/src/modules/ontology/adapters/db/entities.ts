@@ -190,6 +190,29 @@ export async function setEntityStatus(d: OntoDeps, tx: Tx, scope: NovelScope, en
   return row!;
 }
 
+/** 설계 추가(world): edit the description fields of an entity (summary / disambiguator); names go through the name APIs */
+export async function updateEntity(d: OntoDeps, tx: Tx, scope: NovelScope, entityId: string, patch: { summary?: string | null; disambiguator?: string | null }, actor: ActorRef): Promise<Entity> {
+  const e = await getEntityRow(tx.db, scope, entityId, true);
+  const set: Partial<Entity> = {};
+  if (patch.summary !== undefined && patch.summary !== e.summary) set.summary = patch.summary;
+  if (patch.disambiguator !== undefined && patch.disambiguator !== e.disambiguator) set.disambiguator = patch.disambiguator;
+  if (!Object.keys(set).length) return e;
+  const [row] = await tx.db
+    .update(entities)
+    .set({ ...set, updatedAt: d.platform.clock.date() })
+    .where(and(eq(entities.novelId, scope.novelId), eq(entities.id, entityId)))
+    .returning();
+  await d.audit.record(tx, {
+    novelId: scope.novelId,
+    actor,
+    action: "entity.updated",
+    target: { type: "entity", id: entityId },
+    before: Object.fromEntries(Object.keys(set).map((k) => [k, e[k as keyof Entity]])),
+    after: set,
+  });
+  return row!;
+}
+
 export async function setEquivalenceCheck(d: OntoDeps, tx: Tx, scope: NovelScope, entityId: string, check: unknown): Promise<void> {
   await tx.db
     .update(entities)

@@ -35,7 +35,11 @@ export const DEFAULT_DEFS = {
   "llm.max_output_tokens.writer": d(16000, "novel"),
   "llm.max_output_tokens.default": d(6000, "novel"),
   "llm.max_output_tokens.concept_partner": d(2500, "novel"),
-  "llm.call_timeout_seconds": d(180, "install"),
+  // hard cap of one provider call (API lanes; claude_code has its own below). Per-provider override:
+  // InstallConfig llm.provider_call_timeout_seconds.<provider>
+  "llm.call_timeout_seconds": d(600, "install"),
+  // streaming calls: abort when no bytes arrived for this long (armed at the first byte; 0 = off)
+  "llm.idle_timeout_seconds": d(300, "install"),
   "llm.claude_code.max_concurrent": d(2, "install"),
   "llm.claude_code.call_timeout_seconds": d(1200, "install"),
   "llm.max_retries_per_call": d(3, "system"),
@@ -45,6 +49,9 @@ export const DEFAULT_DEFS = {
   "run.max_concurrent_per_novel": d(2, "install"),
   "run.max_concurrent_global": d(4, "install"),
   "task.max_attempts": d(3, "system"),
+  // consecutive runs cut off by a server stop / crash / lease loss before the task fails (crash-loop guard);
+  // such interruptions never use task.max_attempts
+  "task.max_interruptions": d(10, "system"),
   "lease.ttl_seconds": d(300, "system"),
   "lease.renew_interval_seconds": d(30, "system"),
   "reclaim.scan_interval_seconds": d(60, "system"),
@@ -156,10 +163,13 @@ export const DEFAULT_DEFS = {
   "system.sleep_detect_gap_seconds": d(120, "system"),
 
   // 7.8 컨셉
-  "concept.max_turns": d(40, "novel"),
-  "concept.turn_soft_warning": d(30, "system"),
-  "concept.turn_extension": d(20, "system"),
-  "concept.max_turn_extensions": d(2, "system"),
+  // 설계 변경: 대화는 브리프 필수 항목이 모두 확정될 때까지 이어지고, 확정되면 파트너가 마무리 요약 후 질문을 멈춥니다.
+  // max_turns는 숨은 안전 상한(폭주 방지)일 뿐이며, 실제 비용 한도는 concept.session_budget_usd가 지킵니다.
+  "concept.max_turns": d(200, "novel"),
+  /** 안전 상한까지 남은 턴이 이 값 이하이고 필수 항목이 남았으면 경고 (턴 수 자체는 UI에 상시 노출하지 않음) */
+  "concept.turn_soft_warning_remaining": d(20, "system"),
+  "concept.turn_extension": d(50, "system"),
+  "concept.max_turn_extensions": d(4, "system"),
   "concept.check_reserve_usd": d(0.3, "novel"),
   "concept.slot_flip_limit": d(3, "system"),
   "concept.idle_reminder_hours": d(48, "novel"),

@@ -71,14 +71,87 @@ export const bibleProposalSchema = z.object({
 });
 export type BibleProposal = z.output<typeof bibleProposalSchema>;
 
-// ── B3 plan_arc proposal ──
+// ── 설계 추가: plan_structure proposal (전체 구성 1~4부 + 결말) ──
+export const structureProposalSchema = z.object({
+  ending: z
+    .object({
+      world_state: str(2000),
+      conflict_resolution: str(2000),
+      character_final_states: z.array(z.object({ character_id: z.string(), final_state: str(1000) })).default([]),
+      protagonist_change: z.object({ from: str(1000), to: str(1000) }).default({ from: "", to: "" }),
+      foreshadow_payoffs: z.array(z.object({ setup: str(500), payoff: str(1000) })).default([]),
+    })
+    .default({ world_state: "", conflict_resolution: "", character_final_states: [], protagonist_change: { from: "", to: "" }, foreshadow_payoffs: [] }),
+  parts: z
+    .array(
+      z.object({
+        ord: z.number().int(),
+        title: str(200),
+        goal: str(2000),
+        turning_points: z.array(z.string().max(500)).default([]),
+        episode_from: z.number().int().default(0),
+        episode_to: z.number().int().default(0),
+        character_states: z.array(z.object({ character_id: z.string(), state: str(1000) })).default([]),
+        plots: z.array(z.object({ title: str(200), core_event: str(1000), episode_count: z.number().int().default(1) })).default([]),
+      }),
+    )
+    .default([]),
+  first_appearances: z.array(z.object({ character_id: z.string(), episode_no: z.number().int() })).default([]),
+});
+export type StructureProposal = z.output<typeof structureProposalSchema>;
+
+export const planStructureInputSchema = z
+  .object({
+    scope: z.enum(["all", "ending", "parts"]).default("all"),
+    instructions: z.string().nullable().optional(),
+    rejection_note: z.string().nullable().optional(),
+    requested_by_user_id: z.string().optional(),
+  })
+  .passthrough();
+export type PlanStructureInput = z.output<typeof planStructureInputSchema>;
+
+/** a character the plot introduces (plan_arc) — the same required fields as the initial cast */
+export const plotCharacterProposalSchema = z.object({
+  name: z.string().max(80).default(""),
+  role: z.enum(["sub_protagonist", "antagonist", "supporting"]).default("supporting"),
+  age: str(40),
+  appearance: str(1000),
+  personality: str(2000),
+  desire: str(2000),
+  motivation: str(2000),
+  weakness: str(2000),
+  background: str(4000),
+  speech_sample: str(500),
+  arc_start: str(1000),
+  arc_end: str(1000),
+  story_role: str(200),
+  relation_to_protagonist: str(200),
+  first_appearance_episode_no: z.number().int().nullable().default(null),
+});
+export type PlotCharacterProposal = z.output<typeof plotCharacterProposalSchema>;
+
+// ── B3 plan_arc proposal (설계 추가: 플롯 세부 + 화 계획 + 신규 인물) ──
 export const arcPlanProposalSchema = z.object({
   title: str(200),
   goal_text: str(2000),
   conflict_text: str(2000),
   end_condition: str(2000),
+  core_event: str(2000),
+  involved_character_ids: z.array(z.string()).default([]),
+  change_text: str(2000),
+  setup_plan: z.object({ plant: z.array(z.string().max(500)).default([]), payoff: z.array(z.string().max(500)).default([]) }).default({ plant: [], payoff: [] }),
+  new_characters: z.array(plotCharacterProposalSchema).default([]),
   episodes: z
-    .array(z.object({ episode_no: z.number().int().min(1), title: z.string().max(200).nullable().default(null), hook_note: z.string().max(500).nullable().default(null), summary: str(1000) }))
+    .array(
+      z.object({
+        episode_no: z.number().int().min(1),
+        title: z.string().max(200).nullable().default(null),
+        hook_note: z.string().max(500).nullable().default(null),
+        summary: str(1000),
+        scene_count: z.number().int().nullable().default(null),
+        target_chars: z.number().int().nullable().default(null),
+      }),
+    )
     .default([]),
 });
 export type ArcPlanProposal = z.output<typeof arcPlanProposalSchema>;
@@ -154,7 +227,9 @@ export const planSeriesBibleInputSchema = z
   .passthrough();
 export type PlanSeriesBibleInput = z.output<typeof planSeriesBibleInputSchema>;
 
-export const planArcInputSchema = z.object({ arc_id: z.string(), rejection_note: z.string().nullable().optional(), answer_ids: z.array(z.string()).optional() }).passthrough();
+export const planArcInputSchema = z
+  .object({ arc_id: z.string(), rejection_note: z.string().nullable().optional(), answer_ids: z.array(z.string()).optional(), replan: z.boolean().optional() })
+  .passthrough();
 export type PlanArcInput = z.output<typeof planArcInputSchema>;
 
 export const scheduleEpisodesInputSchema = z.object({ goal_id: z.string(), reason: z.string().optional() }).passthrough();

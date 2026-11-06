@@ -186,6 +186,7 @@ export function basePriority(kind: TaskKind): number {
     case "polish_episode":
       return 500;
     case "plan_series_bible":
+    case "plan_structure":
     case "plan_arc":
     case "plan_setups":
     case "build_initial_ontology":

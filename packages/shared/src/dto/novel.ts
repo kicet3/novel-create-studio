@@ -3,6 +3,13 @@ import { z } from "zod";
 import { ENUMS } from "../enum-registry.js";
 import { isoDateTime } from "./common.js";
 
+/** 한 화의 절대 최소 분량(작품 count_basis 기준). 프로필 minChars는 이 값 이상이어야 합니다. */
+export const EPISODE_HARD_MIN_CHARS = 3000;
+/** 전체 구성의 부 수(1~4부) */
+export const STRUCTURE_PART_COUNT = 4;
+export const EPISODE_HARD_MIN_MESSAGE = "한 화 최소 분량은 3,000자 이상이어야 합니다.";
+export const EPISODE_HARD_MAX_MESSAGE = "한 화 최대 분량도 3,000자 이상이어야 합니다.";
+
 // ── responses ───────────────────────────────────────────────────────────
 export const userDtoSchema = z.object({ id: z.string(), displayName: z.string(), role: z.enum(ENUMS.user_role) });
 export type UserDto = z.infer<typeof userDtoSchema>;
@@ -38,6 +45,10 @@ export const novelDtoSchema = z.object({
   publishPolicy: z.enum(ENUMS.publish_policy),
   multiTimelineEnabled: z.boolean(),
   possessionModeEnabled: z.boolean(),
+  /** 설계 추가 0011: 인터넷 검색(컨셉 대화·기획서·전체 구성·세계관 생성의 사실·용어 확인) — 기본 켬 */
+  webSearchEnabled: z.boolean().default(true),
+  /** LLM 호출 1회당 검색 상한 (1~10, 기본 3) */
+  webSearchMaxUses: z.number().int().default(3),
   defaultNarrationMode: z.enum(ENUMS.narration_mode),
   timezone: z.string(),
   lengthProfileId: z.string(),
@@ -97,6 +108,17 @@ export const arcDtoSchema = z.object({
   planApprovalId: z.string().nullable(),
   arcApprovalId: z.string().nullable(),
   pausedAt: isoDateTime.nullable(),
+  /** 플롯이 속한 부(전체 구성). 구성 이전 작품의 아크는 null */
+  partId: z.string().nullable(),
+  /** 핵심 사건 */
+  coreEvent: z.string(),
+  involvedCharacterIds: z.array(z.string()),
+  /** 이 플롯이 만들어 내는 변화 */
+  changeText: z.string(),
+  /** 심을 떡밥·회수할 떡밥 */
+  setupPlan: z.object({ plant: z.array(z.string()).default([]), payoff: z.array(z.string()).default([]) }),
+  /** 구성 변경 확인 표시(비어 있지 않으면 새 아웃라인을 만들지 않음) */
+  planFlags: z.array(z.enum(ENUMS.arc_plan_flag)),
   createdAt: isoDateTime,
   updatedAt: isoDateTime,
 });
@@ -154,6 +176,10 @@ export const updateNovelSettingsRequestSchema = z
     defaultNarrationMode: z.enum(ENUMS.narration_mode),
     timezone: z.string().min(1),
     possessionModeEnabled: z.boolean(),
+    /** 설계 추가 0011: 인터넷 검색 켜기/끄기 */
+    webSearchEnabled: z.boolean(),
+    /** 호출 1회당 검색 상한 (1~10) */
+    webSearchMaxUses: z.number().int().min(1).max(10),
   })
   .partial()
   .refine((v) => Object.keys(v).length > 0, "변경할 항목이 없습니다.");
@@ -208,13 +234,19 @@ export const createArcRequestSchema = arcInputSchema.refine((a) => a.plannedEpis
   path: ["plannedEpisodeTo"],
 });
 export type CreateArcRequest = z.input<typeof createArcRequestSchema>;
-export const updateArcRequestSchema = arcInputSchema.partial().refine((v) => Object.keys(v).length > 0, "변경할 항목이 없습니다.");
+const arcPlotInput = {
+  coreEvent: z.string().trim().max(2000),
+  involvedCharacterIds: z.array(z.string().regex(/^chr_[0-9A-HJKMNP-TV-Z]{26}$/)).max(40),
+  changeText: z.string().trim().max(2000),
+  setupPlan: z.object({ plant: z.array(z.string().trim().min(1).max(500)).max(20).default([]), payoff: z.array(z.string().trim().min(1).max(500)).max(20).default([]) }),
+};
+export const updateArcRequestSchema = arcInputSchema.extend(arcPlotInput).partial().refine((v) => Object.keys(v).length > 0, "변경할 항목이 없습니다.");
 export type UpdateArcRequest = z.input<typeof updateArcRequestSchema>;
 
 export const updateLengthProfileRequestSchema = z
   .object({
-    minChars: z.number().int().min(1),
-    maxChars: z.number().int().min(1),
+    minChars: z.number().int().min(EPISODE_HARD_MIN_CHARS, EPISODE_HARD_MIN_MESSAGE),
+    maxChars: z.number().int().min(EPISODE_HARD_MIN_CHARS, EPISODE_HARD_MAX_MESSAGE),
     countBasis: z.enum(ENUMS.count_basis),
   })
   .partial()
@@ -242,3 +274,102 @@ export const updateNotificationPolicyRequestSchema = z
   .partial()
   .refine((v) => Object.keys(v).length > 0, "변경할 항목이 없습니다.");
 export type UpdateNotificationPolicyRequest = z.input<typeof updateNotificationPolicyRequestSchema>;
+
+// ── 전체 구성(1~4부 + 결말) ──────────────────────────────────────────────
+const chrId = z.string().regex(/^chr_[0-9A-HJKMNP-TV-Z]{26}$/);
+const t = (max: number) => z.string().trim().max(max);
+const fieldOrigins = z.record(z.string(), z.enum(ENUMS.character_field_origin));
+
+export const structureCharacterStateSchema = z.object({ characterId: chrId, state: t(1000) });
+export type StructureCharacterState = z.infer<typeof structureCharacterStateSchema>;
+/** 부 안의 플롯(큰 사건) 개요 — 구성 승인 때 arcs 행이 됩니다 */
+export const plotOutlineItemSchema = z.object({ title: t(200).min(1), coreEvent: t(1000), episodeCount: z.number().int().min(1).max(200) });
+export type PlotOutlineItem = z.infer<typeof plotOutlineItemSchema>;
+
+export const storyEndingSchema = z.object({
+  /** 세계·갈등의 최종 상태 */
+  worldState: t(2000).default(""),
+  /** 갈등이 어떻게 끝나는가 */
+  conflictResolution: t(2000).default(""),
+  characterFinalStates: z.array(z.object({ characterId: chrId, finalState: t(1000) })).max(40).default([]),
+  protagonistChange: z.object({ from: t(1000).default(""), to: t(1000).default("") }).default({ from: "", to: "" }),
+  foreshadowPayoffs: z.array(z.object({ setup: t(500).min(1), payoff: t(1000), setupId: z.string().nullable().default(null) })).max(40).default([]),
+});
+export type StoryEnding = z.output<typeof storyEndingSchema>;
+export const STORY_ENDING_FIELDS = ["worldState", "conflictResolution", "characterFinalStates", "protagonistChange", "foreshadowPayoffs"] as const;
+export type StoryEndingField = (typeof STORY_ENDING_FIELDS)[number];
+export const STORY_PART_FIELDS = ["title", "goalText", "turningPoints", "plannedEpisodeFrom", "plannedEpisodeTo", "characterStates", "plotOutline"] as const;
+export type StoryPartField = (typeof STORY_PART_FIELDS)[number];
+
+export const storyPartDtoSchema = z.object({
+  id: z.string(),
+  ord: z.number().int().min(1).max(STRUCTURE_PART_COUNT),
+  title: z.string(),
+  goalText: z.string(),
+  turningPoints: z.array(z.string()),
+  plannedEpisodeFrom: z.number().int(),
+  plannedEpisodeTo: z.number().int(),
+  /** 부 끝의 인물 상태 */
+  characterStates: z.array(structureCharacterStateSchema),
+  plotOutline: z.array(plotOutlineItemSchema),
+  fieldOrigins,
+  updatedAt: isoDateTime,
+});
+export type StoryPartDto = z.infer<typeof storyPartDtoSchema>;
+
+export const structurePendingChangesSchema = z.object({
+  ending: z.boolean().optional(),
+  partIds: z.array(z.string()).optional(),
+  goalEndingChanged: z.boolean().optional(),
+  regenerated: z.boolean().optional(),
+});
+export type StructurePendingChanges = z.infer<typeof structurePendingChangesSchema>;
+
+export const storyStructureDtoSchema = z.object({
+  id: z.string(),
+  novelId: z.string(),
+  status: z.enum(ENUMS.story_structure_status),
+  revision: z.number().int(),
+  /** 마지막으로 승인한 revision(한 번도 승인하지 않았으면 null) */
+  approvedRevision: z.number().int().nullable(),
+  ending: storyEndingSchema,
+  endingFieldOrigins: fieldOrigins,
+  firstAppearances: z.array(z.object({ characterId: chrId, episodeNo: z.number().int().min(1) })),
+  parts: z.array(storyPartDtoSchema),
+  /** 승인 이후 바뀐 내용(재승인 필요 사유) */
+  pendingChanges: structurePendingChangesSchema,
+  approvalId: z.string().nullable(),
+  approvedAt: isoDateTime.nullable(),
+  updatedAt: isoDateTime,
+});
+export type StoryStructureDto = z.infer<typeof storyStructureDtoSchema>;
+
+/** PATCH …/structure/ending — 사용자 편집(출처 user). 승인된 구성이면 다시 승인해야 합니다. */
+/** partial ending without defaults (a missing key is not changed) */
+export const storyEndingPatchSchema = z.object({
+  worldState: t(2000).optional(),
+  conflictResolution: t(2000).optional(),
+  characterFinalStates: z.array(z.object({ characterId: chrId, finalState: t(1000) })).max(40).optional(),
+  protagonistChange: z.object({ from: t(1000), to: t(1000) }).optional(),
+  foreshadowPayoffs: z.array(z.object({ setup: t(500).min(1), payoff: t(1000), setupId: z.string().nullable().default(null) })).max(40).optional(),
+});
+export const updateStructureEndingRequestSchema = z
+  .object({ expectedRevision: z.number().int().min(1), ending: storyEndingPatchSchema })
+  .refine((v) => Object.keys(v.ending).length > 0, "바꿀 항목이 없습니다.");
+export type UpdateStructureEndingRequest = z.input<typeof updateStructureEndingRequestSchema>;
+
+/** PATCH …/structure/parts/:partId */
+export const updateStoryPartRequestSchema = z
+  .object({
+    expectedRevision: z.number().int().min(1),
+    title: t(200).optional(),
+    goalText: t(2000).optional(),
+    turningPoints: z.array(t(500).min(1)).max(10).optional(),
+    plannedEpisodeFrom: z.number().int().min(1).optional(),
+    plannedEpisodeTo: z.number().int().min(1).optional(),
+    characterStates: z.array(structureCharacterStateSchema).max(40).optional(),
+    plotOutline: z.array(plotOutlineItemSchema).max(20).optional(),
+  })
+  .refine((v) => Object.keys(v).some((k) => k !== "expectedRevision"), "바꿀 항목이 없습니다.");
+export type UpdateStoryPartRequest = z.input<typeof updateStoryPartRequestSchema>;
+export const storyPartParamsSchema = z.object({ partId: z.string().regex(/^spt_[0-9A-HJKMNP-TV-Z]{26}$/) });

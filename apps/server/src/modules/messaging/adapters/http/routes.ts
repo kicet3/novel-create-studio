@@ -8,8 +8,19 @@ import type { Channel, MessagingService, MessengerBot } from "../../index.js";
 type Body<S extends z.ZodType> = { body: z.output<S> };
 
 /** never expose secret ids / chat refs / allowed user ids */
-export function botDto(b: MessengerBot) {
-  return { id: b.id, kind: b.kind, label: b.label, receiveMode: b.receiveMode, status: b.status, lastConnectedAt: b.lastConnectedAt, createdAt: b.createdAt, updatedAt: b.updatedAt };
+export function botDto(b: MessengerBot, links: { username: string | null; inviteUrl: string | null } = { username: null, inviteUrl: null }) {
+  return {
+    id: b.id,
+    kind: b.kind,
+    label: b.label,
+    receiveMode: b.receiveMode,
+    status: b.status,
+    lastConnectedAt: b.lastConnectedAt,
+    createdAt: b.createdAt,
+    updatedAt: b.updatedAt,
+    username: links.username,
+    inviteUrl: links.inviteUrl,
+  };
 }
 export function channelDto(c: Channel) {
   return {
@@ -30,11 +41,13 @@ export function channelDto(c: Channel) {
 
 export function mountMessagingRoutes({ api, novel }: ApiRouters, svc: MessagingService): void {
   api.get("/messaging/bots", async (_req, res) => {
-    res.json({ items: (await svc.listBots()).map(botDto) });
+    const bots = await svc.listBots();
+    res.json({ items: await Promise.all(bots.map(async (b) => botDto(b, await svc.botLinks(b)))) });
   });
   api.post("/messaging/bots", validate({ body: messagingRegisterBotRequestSchema }), async (_req, res) => {
     const { body } = valid<Body<typeof messagingRegisterBotRequestSchema>>(res);
-    created(res, botDto(await svc.registerBot(body, actorOf(res))));
+    const bot = await svc.registerBot(body, actorOf(res));
+    created(res, botDto(bot, await svc.botLinks(bot)));
   });
 
   novel.get("/channels", async (_req, res) => {

@@ -9,13 +9,13 @@ const OPTIONS: ChoiceOption<AutonomyLevel>[] = [
     value: "episode_approval",
     label: "화별 승인",
     adornment: <Badge tone="accent">기본값</Badge>,
-    description: "기획서·아크 계획·매 화를 직접 확인하고 승인합니다. 신규 사실과 떡밥 회수는 화 승인 때 확정됩니다.",
+    description: "기획서·플롯 계획·매 화를 직접 확인하고 승인합니다. 신규 사실과 떡밥 회수는 화 승인 때 확정됩니다.",
   },
   {
     value: "arc_approval",
-    label: "아크별 승인",
+    label: "플롯별 승인",
     adornment: <Badge>준비 중</Badge>,
-    description: "비축분이 쌓이면 아크 단위로 묶어 승인합니다. 그 전의 사실은 ‘미확정’으로 씁니다.",
+    description: "비축분이 쌓이면 플롯 단위로 묶어 승인합니다. 그 전의 사실은 ‘미확정’으로 씁니다.",
   },
   {
     value: "full_auto",

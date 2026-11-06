@@ -18,6 +18,8 @@ export const SECTION_RANK: Readonly<Record<ContextSectionKind, number>> = {
   unresolved_surfaces: 6,
   recent_text: 7,
   cast: 3,
+  story_plan: 2,
+  world: 3,
 };
 
 export const SECTION_TITLE: Readonly<Record<ContextSectionKind, string>> = {
@@ -35,6 +37,8 @@ export const SECTION_TITLE: Readonly<Record<ContextSectionKind, string>> = {
   unresolved_surfaces: "미해결 표기 (후보 카드)",
   recent_text: "직전 내용",
   cast: "캐릭터 설정 (확정)",
+  story_plan: "작품 구성 (결말·부·플롯·이번 화 계획)",
+  world: "세계관 온톨로지 (승인된 설정 + 미확정 후보 표시)",
 };
 
 /** only ranks 4–7 may be dropped (04 §9.5) */

@@ -27,6 +27,13 @@ export const castDraftProposalSchema = z.object({
         desire: z.string(),
         weakness: z.string(),
         notes: z.string(),
+        /** 0008 required fields (lenient: older drafts without them stay valid) */
+        appearance: z.string().default(""),
+        motivation: z.string().default(""),
+        speech_sample: z.string().default(""),
+        arc_start: z.string().default(""),
+        arc_end: z.string().default(""),
+        story_role: z.string().default(""),
         relationships: z.array(z.object({ target_name: z.string(), kind: z.string(), description: z.string() })),
       }),
     )
@@ -54,7 +61,10 @@ const CAST_SYSTEM = `당신은 웹소설 공동 기획자(concept_partner)입니
 - 적대자(antagonist)와 조연(supporting)은 이야기에 필요할 때만 제안합니다.
 - 이미 있는 캐릭터를 보완할 때는 existing_id에 그 ID를 넣습니다. 새 캐릭터는 existing_id를 ""로 둡니다.
 - "사용자 확정" 표시가 있는 항목은 사용자가 정한 값입니다. 바꾸지 말고 빈 문자열로 두세요.
-- 성격·배경·욕망·약점은 각 2~4문장, 한국어로 씁니다. 관계는 다른 캐릭터 이름(target_name)과 관계 이름(kind)으로 적습니다.
+- 성격(장점과 결점)·욕망(목표)·동기·약점(두려움)은 각 2~4문장, 배경(핵심 과거사)은 2~3줄, 말투 예시(speech_sample)는 그 인물이 실제로 할 대사 1~2줄, 외형(appearance)은 1~2문장, 변화 아크는 시작(arc_start)과 끝(arc_end) 상태를 한 문장씩 한국어로 씁니다.
+- 조연·적대자는 story_role(이야기 속 역할)과 욕망(목표), 주인공과의 관계를 반드시 채웁니다.
+- 관계는 다른 캐릭터 이름(target_name)과 관계 이름(kind)으로 적습니다.
+- "빈 필수 항목 채우기" 요청이 있으면 그 인물들만 existing_id로 가리키고, 목록의 빈 항목만 채우며 나머지는 빈 문자열로 둡니다. 새 인물은 만들지 않습니다.
 - 연령 등급을 넘는 설정은 넣지 않습니다. 실존 인물·기존 작품 캐릭터를 베끼지 않습니다.`;
 
 function characterLine(c: Character): string {
@@ -75,6 +85,13 @@ function characterLine(c: Character): string {
     desire: c.desire,
     weakness: c.weakness,
     notes: c.notes,
+    appearance: c.appearance,
+    motivation: c.motivation,
+    speech_sample: c.speechSample,
+    arc_start: c.arcStart,
+    arc_end: c.arcEnd,
+    story_role: c.storyRole,
+    relationships: (c.relationships ?? []).map((r) => ({ target_id: r.targetCharacterId, kind: r.kind })),
     사용자_확정: userFields,
   });
 }
@@ -82,10 +99,21 @@ function characterLine(c: Character): string {
 export function renderCastDraftPrompt(v: {
   novel: { title: string; genre: string | null; ageRating: string };
   brief: unknown;
+  /** 설계 추가(world): approved world ontology + candidates flagged 미확정 (empty = none yet) */
+  world?: string;
   cast: Character[];
-  request: { subProtagonistCount?: number; includeAntagonist: boolean; instructions?: string };
+  request: { subProtagonistCount?: number; includeAntagonist: boolean; instructions?: string; fillMissing?: Array<{ id: string; name: string; fields: string[] }> };
 }): { system: string; messages: Array<{ role: "user"; content: string }> } {
-  const want = [
+  const fill = v.request.fillMissing;
+  const want = fill
+    ? [
+        "# 빈 필수 항목 채우기 — 아래 인물의 빈 항목만 채우세요. 이미 값이 있는 항목과 새 인물은 만들지 않습니다.",
+        ...fill.map((f) => `- ${f.name} (existing_id: ${f.id}): ${f.fields.join(", ")}`),
+        v.request.instructions ? `추가 요청: ${v.request.instructions}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : [
     v.request.subProtagonistCount !== undefined ? `서브 주인공 수: ${v.request.subProtagonistCount}명(이미 있는 서브 주인공 포함)` : "서브 주인공 수: 이야기에 맞게",
     v.request.includeAntagonist ? "적대자: 필요하면 제안" : "적대자: 제안하지 않음",
     v.request.instructions ? `추가 요청: ${v.request.instructions}` : "",
@@ -100,6 +128,7 @@ export function renderCastDraftPrompt(v: {
         content: [
           `# 작품\n제목: ${v.novel.title}\n장르: ${v.novel.genre ?? "미정"}\n연령 등급: ${labelKo("age_rating", v.novel.ageRating)}`,
           `# 승인된 컨셉 브리프\n${JSON.stringify(v.brief ?? {})}`,
+          ...(v.world?.trim() ? [`# 세계관 온톨로지 (인물의 소속·능력·배경은 승인된 설정을 따르고, [미확정 후보]는 참고만)\n${v.world.trim()}`] : []),
           `# 지금 캐스트 (${v.cast.length}명)\n${v.cast.map(characterLine).join("\n") || "(없음)"}`,
           `# 요청\n${want}`,
         ].join("\n\n"),

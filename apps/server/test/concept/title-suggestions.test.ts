@@ -8,6 +8,7 @@ import { conceptInternals } from "../../src/modules/concept/module.js";
 import { normalizeTitleSuggestions, hasTitleMaterial } from "../../src/modules/concept/domain/title.js";
 import { emptyWorkingBrief } from "../../src/modules/concept/domain/brief.js";
 import { createTestCore, type TestCore } from "../support/test-core.js";
+import { notWorld } from "../support/world.js";
 import { conceptHarness, installConceptStubs, type Scripted } from "./support.js";
 
 let t: TestCore;
@@ -211,7 +212,8 @@ describe("title suggestions in the concept conversation", () => {
       });
       await h.say("사막 도시의 점술사 이야기");
       await h.run();
-      expect(t.claude.unmatched).toHaveLength(0);
+      // (earlier novels' concept approval queued build_world_ontology, unscripted here)
+      expect(notWorld(t.claude.unmatched)).toHaveLength(0);
       expect((await conceptSvc().getSessionView(h.scope))!.titleSuggestions.items).toHaveLength(3);
 
       await conceptSvc().requestTitleSuggestions(h.scope, (await h.session()).id, t.owner);
@@ -220,7 +222,7 @@ describe("title suggestions in the concept conversation", () => {
         json: { suggestions: [{ title: "점술사의 사막", reason: "도치" }, { title: "열사의 예언자", reason: "직설" }, { title: "모래시계 점술관", reason: "키워드" }, { title: "오아시스의 거짓 예언", reason: "훅" }] },
       });
       await h.run();
-      expect(t.claude.unmatched).toHaveLength(0);
+      expect(notWorld(t.claude.unmatched)).toHaveLength(0);
       const view = (await conceptSvc().getSessionView(h.scope))!;
       expect(view.titleSuggestions.items.map((x) => x.title)).toEqual(["점술사의 사막", "열사의 예언자", "모래시계 점술관", "오아시스의 거짓 예언"]);
     } finally {

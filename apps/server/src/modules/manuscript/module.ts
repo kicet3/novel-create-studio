@@ -4,6 +4,7 @@ import type { AuditService } from "../audit/index.js";
 import type { AgentsService } from "../agents/index.js";
 import type { HitlService } from "../hitl/index.js";
 import type { LinkingService } from "../linking/index.js";
+import type { MessagingService } from "../messaging/index.js";
 import type { NovelService } from "../novel/index.js";
 import type { OntologyService } from "../ontology/index.js";
 import type { OrchestrationService } from "../orchestration/index.js";
@@ -13,6 +14,7 @@ import { createTaskRegistrar } from "./application/agent-task.js";
 import { createContextSections } from "./application/context-sections.js";
 import { createManuscriptService } from "./application/manuscript-service.js";
 import { createPlanning } from "./application/planning.js";
+import { createStructure } from "./application/structure.js";
 import { createPorts, createRegistries } from "./application/support.js";
 import { createWriting } from "./application/writing.js";
 
@@ -25,28 +27,36 @@ export interface ManuscriptModuleDeps {
   orchestration: OrchestrationService;
   agents: AgentsService;
   hitl: HitlService;
+  /** 설계 추가: web channel of the structure decision (hitl.acceptAnswer); optional for older compositions */
+  messaging?: MessagingService;
 }
 
 /** test seam: approval handlers / scheduler of a built module (tests only; other modules use index.ts) */
-export const manuscriptTestHooks = new WeakMap<ManuscriptService, { approvalHandlers: ReturnType<typeof createPlanning>["approvalHandlers"] }>();
+export const manuscriptTestHooks = new WeakMap<
+  ManuscriptService,
+  { approvalHandlers: ReturnType<typeof createPlanning>["approvalHandlers"] & ReturnType<typeof createStructure>["approvalHandlers"] }
+>();
 
 export function createManuscriptModule(deps: ManuscriptModuleDeps): ServerModule<ManuscriptService> {
   const reg = createRegistries();
   const ports = createPorts(deps, reg);
   const { service, internals } = createManuscriptService(ports);
   const getService = () => service;
-  const planning = createPlanning(internals, getService);
+  const structure = createStructure(internals, getService);
+  const planning = createPlanning(internals, getService, structure);
   const writing = createWriting(internals, getService);
   service.requestArcPlanApproval = planning.requestArcPlanApproval;
   service.schedule = planning.schedule;
+  Object.assign(service, structure.service);
 
   // registrations (CONVENTIONS §6): context sections, task kinds, approval handlers, N3 hook
-  const sections = createContextSections(ports);
+  const sections = [...createContextSections(ports), structure.section];
   for (const s of sections) deps.agents.registerContextSection(s);
   const register = createTaskRegistrar(ports, sections);
-  for (const h of [...planning.handlers, ...writing.handlers]) register(h);
-  for (const [type, handler] of Object.entries(planning.approvalHandlers)) {
-    deps.hitl.registerApprovalHandler(type as keyof typeof planning.approvalHandlers, handler);
+  for (const h of [...planning.handlers, ...structure.handlers, ...writing.handlers]) register(h);
+  const approvalHandlers = { ...planning.approvalHandlers, ...structure.approvalHandlers };
+  for (const [type, handler] of Object.entries(approvalHandlers)) {
+    deps.hitl.registerApprovalHandler(type as keyof typeof approvalHandlers, handler);
   }
   deps.novel.onGoalSaved((ctx) => planning.onGoalSaved(ctx));
   // scene texts for extract_facts / link_mentions (linking registry, CONVENTIONS §6)
@@ -67,7 +77,7 @@ export function createManuscriptModule(deps: ManuscriptModuleDeps): ServerModule
       }));
     },
   });
-  manuscriptTestHooks.set(service, { approvalHandlers: planning.approvalHandlers });
+  manuscriptTestHooks.set(service, { approvalHandlers });
 
   const tick = async (signal: AbortSignal) => {
     for (const n of await deps.novel.listNovels()) {

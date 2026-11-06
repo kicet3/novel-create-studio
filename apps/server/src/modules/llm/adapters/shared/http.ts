@@ -31,6 +31,30 @@ export function linkedSignal(signal: AbortSignal | undefined, timeoutMs: number)
   };
 }
 
+/**
+ * Response body that reports liveness (`LlmInvokeOptions.onProgress`) once now (headers arrived) and on every chunk,
+ * so the gateway's idle timeout only fires when the stream really goes silent. No hook → the body unchanged.
+ */
+export function tapProgress(body: ReadableStream<Uint8Array> | null, onProgress: (() => void) | undefined): ReadableStream<Uint8Array> | null {
+  if (!body || !onProgress) return body;
+  const ping = () => {
+    try {
+      onProgress();
+    } catch {
+      /* liveness only */
+    }
+  };
+  ping();
+  return body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, c) {
+        ping();
+        c.enqueue(chunk);
+      },
+    }),
+  );
+}
+
 /** Retry-After (seconds or HTTP date) or "try again in 7.5s" in the message → absolute time */
 export function retryNotBefore(headers: Headers | undefined, message = "", now = Date.now()): Date | undefined {
   const ra = headers?.get("retry-after");

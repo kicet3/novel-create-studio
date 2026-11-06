@@ -69,6 +69,8 @@ export interface EngineOptions {
   coalesceWindowMs?: number;
   maxConcurrentPerNovel?: number;
   maxConcurrentGlobal?: number;
+  /** crash-loop guard (default task.max_interruptions) */
+  maxInterruptions?: number;
 }
 
 export interface EngineDeps {
@@ -96,13 +98,22 @@ interface ActiveRun {
   taskId: string;
   ac: AbortController;
   stopCause: RunStop["reason"] | null;
+  /** the server is stopping (runtime signal / abortAll): the run ends as interrupted and is re-queued */
+  shutdown: boolean;
   timer: NodeJS.Timeout | null;
 }
 
+/** why a run was cut off without its own fault (audit `details.cause`); never uses an attempt */
+type InterruptCause = "shutdown" | "lease_lost" | "orphan";
+
 type FinishOutcome =
   | CommitOutcome
-  | { kind: "stopped"; stop: RunStop }
+  | { kind: "stopped"; stop: RunStop; interrupt?: InterruptCause }
   | { kind: "error"; error: unknown };
+
+/** task.input key: consecutive interruptions (crash-loop guard, `task.max_interruptions`); reset by T5 / T12 */
+const INTERRUPTIONS_KEY = "interrupted_runs";
+const SHUTDOWN_STOP_MESSAGE = "server stopping";
 
 class LeaseLost extends Error {
   constructor() {
@@ -135,6 +146,7 @@ export function createOrchestrationEngine(deps: EngineDeps): OrchestrationEngine
     coalesceWindowMs: deps.options?.coalesceWindowMs ?? DEFAULTS["wake.coalesce_window_seconds"] * 1000,
     maxPerNovel: deps.options?.maxConcurrentPerNovel ?? config.run.max_concurrent_per_novel,
     maxGlobal: deps.options?.maxConcurrentGlobal ?? config.run.max_concurrent_global,
+    maxInterruptions: deps.options?.maxInterruptions ?? DEFAULTS["task.max_interruptions"],
   };
   const handlers = new Map<TaskKind, TaskKindHandler>();
   const recoveryHooks: RunRecoveryHook[] = [];
@@ -322,6 +334,27 @@ export function createOrchestrationEngine(deps: EngineDeps): OrchestrationEngine
     safePointSeq: number;
   }
 
+  /**
+   * A run of `t` was cut off without its own fault (server stop / crash / lease loss): the task goes back to `ready`
+   * (T10) with a `reclaim` wake and keeps its attempt count. Only a crash loop — more than `task.max_interruptions`
+   * consecutive interruptions — ends the task as failed (T6), so a task that kills the server is not re-run forever.
+   */
+  const requeueInterrupted = async (tx: Tx, scope: NovelScope, t: Task, runId: string, cause: InterruptCause, fenced: boolean): Promise<"requeued" | "failed"> => {
+    const interruptions = (Number(inputOf(t)[INTERRUPTIONS_KEY]) || 0) + 1;
+    const input = { ...inputOf(t), [INTERRUPTIONS_KEY]: interruptions };
+    const details = { runId, cause, interruptions, maxInterruptions: opt.maxInterruptions, attemptCount: t.attemptCount };
+    const lease = fenced ? { leaseRunId: runId } : {};
+    if (interruptions > opt.maxInterruptions) {
+      const reason = `서버 중단·재시작으로 실행이 ${interruptions}회 연속 끊겨 자동 재시도를 멈췄습니다. 서버 상태를 확인한 뒤 [다시 시도]를 누르세요.`;
+      await transition(tx, scope, t, "T6", { ...CLEAR_LEASE, input, completedAt: clock.date() }, SYS, { ...lease, reason, details });
+      return "failed";
+    }
+    const reason = cause === "shutdown" ? "서버가 멈춰 실행이 중단됨 — 자동으로 다시 실행합니다(시도 횟수 미사용)" : "실행이 끊겨 회수함 — 자동으로 다시 실행합니다(시도 횟수 미사용)";
+    await transition(tx, scope, t, "T10", { ...CLEAR_LEASE, input }, SYS, { ...lease, reason, details });
+    await requestWake(tx, scope, { taskId: t.id, reason: "reclaim", idempotencyKey: wakeKeys.reclaim(runId, t.id), source: { refType: "run", refId: runId } });
+    return "requeued";
+  };
+
   // ── finish (T4–T7, T10, T11s, TSP; R4–R7) ─────────────────────────────
   const finishInTx = async (tx: Tx, scope: NovelScope, runId: string, outcome: FinishOutcome, notes?: ActiveRunNotes) => {
     const now = clock.date();
@@ -420,9 +453,9 @@ export function createOrchestrationEngine(deps: EngineDeps): OrchestrationEngine
           await transition(tx, scope, t, "T7", { ...CLEAR_LEASE, blockReason: "question" }, agent, { leaseRunId: runId });
           await finishRun("R6", "awaiting_human");
         } else if (reason === "lease_lost") {
-          await transition(tx, scope, t, "T10", { ...CLEAR_LEASE }, SYS, { leaseRunId: runId });
+          // server stop / lease loss: interrupted (R7), re-queued without using an attempt
+          await requeueInterrupted(tx, scope, t, runId, outcome.interrupt ?? "lease_lost", true);
           await finishRun("R7", "lease_lost");
-          await requestWake(tx, scope, { taskId: t.id, reason: "reclaim", idempotencyKey: wakeKeys.reclaim(runId, t.id) });
         } else {
           // paused (task / arc / novel / shutdown): running → ready, paused_at kept (03 §4.2 하단)
           await transition(tx, scope, t, "TSP", { ...CLEAR_LEASE }, SYS, { leaseRunId: runId, reason: outcome.stop.message });
@@ -454,7 +487,8 @@ export function createOrchestrationEngine(deps: EngineDeps): OrchestrationEngine
         );
         const err = { family: c.errorFamily, message: c.message };
         if (d.kind === "retry") {
-          await transition(tx, scope, t, "T5", { ...CLEAR_LEASE, attemptCount: d.attemptCount, notBeforeAt: d.notBefore }, SYS, { leaseRunId: runId, reason: c.message.slice(0, 500) });
+          const input = INTERRUPTIONS_KEY in inputOf(t) ? { input: withoutKeys(t, [INTERRUPTIONS_KEY]) } : {};
+          await transition(tx, scope, t, "T5", { ...CLEAR_LEASE, ...input, attemptCount: d.attemptCount, notBeforeAt: d.notBefore }, SYS, { leaseRunId: runId, reason: c.message.slice(0, 500) });
           await finishRun("R5", "error", err);
           await requestWake(tx, scope, { taskId: t.id, reason: "retry", idempotencyKey: wakeKeys.retry(t.id, d.attemptCount), notBefore: d.notBefore });
         } else if (d.kind === "failed") {
@@ -486,13 +520,15 @@ export function createOrchestrationEngine(deps: EngineDeps): OrchestrationEngine
   // ── execution ───────────────────────────────────────────────────────────
   const execute = async (scope: NovelScope, task: Task, run: Run, handler: TaskKindHandler, chain: string[], outer: AbortSignal) => {
     const ac = new AbortController();
-    const entry: ActiveRun = { novelId: scope.novelId, taskId: task.id, ac, stopCause: null, timer: null };
+    const entry: ActiveRun = { novelId: scope.novelId, taskId: task.id, ac, stopCause: null, shutdown: false, timer: null };
     active.set(run.id, entry);
     const notes: ActiveRunNotes = { modelsUsed: [], safePointSeq: 0 };
     // graceful stop (02 §7.3, 04 §8.3): an in-flight provider call is received and saved; the run then
-    // stops at its next safe point. Only the hard deadline (`abortAll`) aborts the provider signal.
+    // stops at its next safe point as interrupted (R7) and the task is re-queued (T10, no attempt used) —
+    // the next process reruns it and reuses the saved responses (RU-2). Only the hard deadline (`abortAll`)
+    // aborts the provider signal.
     const onOuterAbort = () => {
-      entry.stopCause ??= "paused";
+      entry.shutdown = true;
     };
     outer.addEventListener("abort", onOuterAbort, { once: true });
     if (outer.aborted) onOuterAbort();
@@ -507,6 +543,19 @@ export function createOrchestrationEngine(deps: EngineDeps): OrchestrationEngine
     entry.timer = setInterval(() => void renew(), opt.renewIntervalMs);
     entry.timer.unref?.();
     const llmTask = isLlmHandler(handler);
+    /** the DB half of a safe point (lease, cancel, reassign, pause, budget) */
+    const dbSafePoint = async () => {
+      const t = await repo.getTask(uow.db, scope, task.id);
+      if (!t || t.status !== "running" || t.leaseRunId !== run.id) throw new RunStop("lease_lost", "lease lost");
+      const input = inputOf(t);
+      if (input.cancel_requested) throw new RunStop("cancelled_by_user");
+      if (input.reassign_to) throw new RunStop("superseded", "reassigned");
+      if (t.pausedAt) throw new RunStop("paused", "task paused");
+      const n = await novel.getNovel(scope);
+      if (n.pausedAt) throw new RunStop("paused", `novel paused (${n.pauseReason})`);
+      if (t.arcId && (await novel.getArc(scope, t.arcId)).pausedAt) throw new RunStop("paused", "arc paused");
+      if (llmTask && !(await budget.admission(scope)).ok) throw new RunStop("budget_blocked");
+    };
 
     const handle: RunHandle = {
       novelId: scope.novelId,
@@ -518,17 +567,8 @@ export function createOrchestrationEngine(deps: EngineDeps): OrchestrationEngine
       rerunOfRunId: run.rerunOfRunId,
       runChain: chain,
       async checkpoint() {
-        if (ac.signal.aborted || entry.stopCause) throw new RunStop(entry.stopCause ?? "lease_lost");
-        const t = await repo.getTask(uow.db, scope, task.id);
-        if (!t || t.status !== "running" || t.leaseRunId !== run.id) throw new RunStop("lease_lost", "lease lost");
-        const input = inputOf(t);
-        if (input.cancel_requested) throw new RunStop("cancelled_by_user");
-        if (input.reassign_to) throw new RunStop("superseded", "reassigned");
-        if (t.pausedAt) throw new RunStop("paused", "task paused");
-        const n = await novel.getNovel(scope);
-        if (n.pausedAt) throw new RunStop("paused", `novel paused (${n.pauseReason})`);
-        if (t.arcId && (await novel.getArc(scope, t.arcId)).pausedAt) throw new RunStop("paused", "arc paused");
-        if (llmTask && !(await budget.admission(scope)).ok) throw new RunStop("budget_blocked");
+        if (ac.signal.aborted || entry.stopCause || entry.shutdown) throw new RunStop(entry.stopCause ?? "lease_lost", entry.shutdown ? SHUTDOWN_STOP_MESSAGE : undefined);
+        await dbSafePoint();
       },
       noteModelUsed(m) {
         if (!notes.modelsUsed.some((x) => x.provider === m.provider && x.modelId === m.modelId && x.modelVersion === (m.modelVersion ?? null))) {
@@ -564,7 +604,10 @@ export function createOrchestrationEngine(deps: EngineDeps): OrchestrationEngine
       };
       try {
         proposal = await handler.execute(ctx);
-        await handle.checkpoint();
+        // a finished proposal is still committed while the server is stopping (grace period, DB up): only a hard
+        // abort or a real stop cause (lease, cancel, pause, budget) keeps it from landing
+        if (entry.shutdown && !entry.stopCause && !ac.signal.aborted) await dbSafePoint();
+        else await handle.checkpoint();
         await uow.run(async (tx) => {
           // fencing (04 §5.2): the lease must still be ours, otherwise roll back
           const fenced = await repo.getTask(tx.db, scope, task.id, true);
@@ -579,8 +622,15 @@ export function createOrchestrationEngine(deps: EngineDeps): OrchestrationEngine
           await finish({ kind: "stopped", stop: new RunStop("lease_lost") });
           await uncommitted("stopped", "lease_lost");
         } else if (err instanceof RunStop) {
-          await finish({ kind: "stopped", stop: err });
+          await finish({ kind: "stopped", stop: err, interrupt: entry.shutdown ? "shutdown" : "lease_lost" });
           await uncommitted("stopped", err.reason);
+        } else if (ac.signal.aborted || (entry.shutdown && !(err instanceof TaskFailure))) {
+          // anything that broke while the server was stopping (aborted call, closing pool…) is an interruption,
+          // not a failure of the task: re-queued without using an attempt. A classified failure (TaskFailure: the
+          // provider answered during the grace period with an error) is still a real result and is classified below.
+          log.info({ err, taskId: task.id, kind: task.kind }, "run interrupted by server stop");
+          await finish({ kind: "stopped", stop: new RunStop("lease_lost", SHUTDOWN_STOP_MESSAGE), interrupt: "shutdown" });
+          await uncommitted("stopped", "lease_lost");
         } else {
           if (!(err instanceof TaskFailure)) log.warn({ err, taskId: task.id, kind: task.kind }, "task run failed");
           await finish({ kind: "error", error: err });
@@ -709,7 +759,7 @@ export function createOrchestrationEngine(deps: EngineDeps): OrchestrationEngine
       started++;
       perNovel.set(t.novelId, (perNovel.get(t.novelId) ?? 0) + 1);
       // register before the job starts so concurrent ticks see the slot as taken
-      active.set(claimed.run.id, { novelId: t.novelId, taskId: t.id, ac: new AbortController(), stopCause: null, timer: null });
+      active.set(claimed.run.id, { novelId: t.novelId, taskId: t.id, ac: new AbortController(), stopCause: null, shutdown: false, timer: null });
       const p = pool
         .submit(() => execute({ novelId: t.novelId }, claimed.task, claimed.run, handler, claimed.chain, signal))
         .catch((err) => log.error({ err }, "task execution crashed"));
@@ -756,24 +806,56 @@ export function createOrchestrationEngine(deps: EngineDeps): OrchestrationEngine
             after: { status: rt.to, stopReason: "lease_lost" },
             details: { taskId: r.taskId, startup },
           });
-          // 4 (T10) + 5 reclaim wake
+          // 4 (T10) + 5 reclaim wake — no attempt used; a crash loop ends as failed (task.max_interruptions)
           const t = await repo.getTask(tx.db, scope, r.taskId, true);
+          let crashLoopFailed: Task | null = null;
           if (t && t.status === "running" && t.leaseRunId === r.id) {
-            await transition(tx, scope, t, "T10", { ...CLEAR_LEASE }, SYS, { details: { runId: r.id } });
-          }
-          if (t && !TERMINAL_TASK_STATUSES.includes(t.status)) {
+            if ((await requeueInterrupted(tx, scope, t, r.id, startup ? "orphan" : "lease_lost", false)) === "failed") crashLoopFailed = t;
+          } else if (t && !TERMINAL_TASK_STATUSES.includes(t.status)) {
             await requestWake(tx, scope, { taskId: t.id, reason: "reclaim", idempotencyKey: wakeKeys.reclaim(r.id, t.id), source: { refType: "run", refId: r.id } });
           }
           await updateRunCache(tx, scope, r.id);
-          return true;
+          return { run: r, crashLoopFailed };
         })
         .catch((err) => {
           log.error({ err, runId: run.id }, "reclaim failed");
-          return false;
+          return false as const;
         });
-      if (done) n++;
+      if (!done) continue;
+      n++;
+      // the task ended for good without a live run: let its handler clean up (e.g. concept session in-flight marker)
+      if (done.crashLoopFailed) await uncommittedAfterReclaim(done.crashLoopFailed, done.run);
     }
     return n;
+  };
+
+  /** onUncommitted for a task whose (dead) run was reclaimed into a terminal state; best effort */
+  const uncommittedAfterReclaim = async (task: Task, run: Run) => {
+    const handler = handlers.get(task.kind);
+    if (!handler?.onUncommitted) return;
+    try {
+      const scope = { novelId: task.novelId };
+      const input = handler.inputSchema.parse(task.input);
+      const ac = new AbortController();
+      ac.abort();
+      const handle: RunHandle = {
+        novelId: task.novelId,
+        runId: run.id,
+        taskId: task.id,
+        role: task.agentRole,
+        signal: ac.signal,
+        attempt: task.attemptCount + 1,
+        rerunOfRunId: run.rerunOfRunId,
+        runChain: [],
+        async checkpoint() {
+          throw new RunStop("lease_lost", "reclaimed");
+        },
+      };
+      const ctx: TaskContext<unknown> = { scope, task, input, run: handle, log: log.child({ taskId: task.id, runId: run.id, kind: task.kind }) };
+      await uow.run((tx) => handler.onUncommitted!(tx, ctx, { outcome: "stopped", reason: "lease_lost", proposal: undefined }));
+    } catch (err) {
+      log.warn({ err, taskId: task.id, kind: task.kind }, "onUncommitted hook after reclaim failed");
+    }
   };
 
   // ── service ─────────────────────────────────────────────────────────────
@@ -790,7 +872,7 @@ export function createOrchestrationEngine(deps: EngineDeps): OrchestrationEngine
     /** hard stop at the shutdown deadline: aborts in-flight provider calls (they close as `unknown`) */
     abortAll() {
       for (const a of active.values()) {
-        a.stopCause ??= "paused";
+        a.shutdown = true; // → interrupted (R7) + re-queued (T10), no attempt used
         a.ac.abort();
       }
     },
@@ -930,7 +1012,8 @@ export function createOrchestrationEngine(deps: EngineDeps): OrchestrationEngine
       return uow.run(async (tx) => {
         const t = await mustTask(tx, scope, taskId, true);
         if (t.status !== "failed") throw new ConflictError("invalid_transition", "실패한 작업만 다시 시도할 수 있습니다.", { status: t.status });
-        const updated = await transition(tx, scope, t, "T12", { maxAttempts: t.maxAttempts + 1, notBeforeAt: null, completedAt: null }, actor, { reason: "사용자 재시도(T12)" });
+        const input = INTERRUPTIONS_KEY in inputOf(t) ? { input: withoutKeys(t, [INTERRUPTIONS_KEY]) } : {};
+        const updated = await transition(tx, scope, t, "T12", { ...input, maxAttempts: t.maxAttempts + 1, notBeforeAt: null, completedAt: null }, actor, { reason: "사용자 재시도(T12)" });
         await requestWake(tx, scope, { taskId: t.id, reason: "user_resume", idempotencyKey: wakeKeys.resume(`retry${updated.maxAttempts}`, t.id) });
         return updated;
       });

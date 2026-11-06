@@ -473,3 +473,21 @@ export const characterSheetViewSchema = z.enum(CHARACTER_SHEET_VIEW);
 export const CHARACTER_FIELD_ORIGIN = ENUMS.character_field_origin;
 export type CharacterFieldOrigin = (typeof CHARACTER_FIELD_ORIGIN)[number];
 export const characterFieldOriginSchema = z.enum(CHARACTER_FIELD_ORIGIN);
+
+export const STORY_STRUCTURE_STATUS = ENUMS.story_structure_status;
+export type StoryStructureStatus = (typeof STORY_STRUCTURE_STATUS)[number];
+export const storyStructureStatusSchema = z.enum(STORY_STRUCTURE_STATUS);
+export const ARC_PLAN_FLAG = ENUMS.arc_plan_flag;
+export type ArcPlanFlag = (typeof ARC_PLAN_FLAG)[number];
+export const arcPlanFlagSchema = z.enum(ARC_PLAN_FLAG);
+
+// 설계 추가: 세계관 온톨로지 후보(module world)
+export const WORLD_ITEM_KIND = ENUMS.world_item_kind;
+export type WorldItemKind = (typeof WORLD_ITEM_KIND)[number];
+export const worldItemKindSchema = z.enum(WORLD_ITEM_KIND);
+export const WORLD_ITEM_STATUS = ENUMS.world_item_status;
+export type WorldItemStatus = (typeof WORLD_ITEM_STATUS)[number];
+export const worldItemStatusSchema = z.enum(WORLD_ITEM_STATUS);
+export const WORLD_ITEM_ORIGIN = ENUMS.world_item_origin;
+export type WorldItemOrigin = (typeof WORLD_ITEM_ORIGIN)[number];
+export const worldItemOriginSchema = z.enum(WORLD_ITEM_ORIGIN);

@@ -60,6 +60,7 @@ export function createOntologyService(deps: OntologyModuleDeps): OntologyService
       return rows.filter((r): r is NonNullable<typeof r> => !!r);
     },
     createEntity: (tx, scope, input, actor) => E.createEntity(d, tx, scope, input, actor),
+    updateEntity: (tx, scope, entityId, patch, actor) => E.updateEntity(d, tx, scope, entityId, patch, actor),
     addEntityName: (tx, scope, entityId, name, actor) => E.addEntityName(d, tx, scope, entityId, name, actor),
     setPreferredName: (tx, scope, entityId, nameId, actor) => E.setPreferredName(d, tx, scope, entityId, nameId, actor),
     setEntityNameStatus: (tx, scope, nameId, to, actor) => E.setNameStatus(d, tx, scope, nameId, to, actor),
@@ -77,6 +78,12 @@ export function createOntologyService(deps: OntologyModuleDeps): OntologyService
     // ── facts ──
     writeCandidateFacts: (tx, scope, drafts, actor) => F.writeCandidateFacts(d, tx, scope, drafts, actor),
     withdrawFacts: (tx, scope, ids, actor, reason) => F.withdrawFacts(d, tx, scope, ids, actor, reason),
+    reviseCandidateFact: (tx, scope, factId, patch, actor) => F.reviseCandidateFact(d, tx, scope, factId, patch, actor),
+    async approveCandidateFacts(tx, scope, factIds, actor) {
+      const r = await F.promoteCandidates(d, tx, scope, { factIds: [...new Set(factIds)] }, actor);
+      return { promoted: r.promoted, held: r.held, heldReasons: r.heldReasons };
+    },
+    getFactsByIds: (scope, ids, tx) => R.getFactsByIds(db(tx), scope, ids),
     async promoteEpisodeFacts(tx, scope, episodeId, to, actor) {
       if (to === "approved") {
         const r = await F.promoteCandidates(d, tx, scope, { episodeId }, actor);

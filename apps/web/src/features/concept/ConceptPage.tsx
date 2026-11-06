@@ -10,6 +10,7 @@ import { novelPath } from "../../components/layout/nav.js";
 import { Badge, Button, ButtonLink, Callout, ConfirmDialog, EmptyState, QueryView, Select, StatusBadge } from "../../components/ui/index.js";
 import { GoalForm } from "../home/GoalForm.js";
 import { CastStepCard } from "../cast/CastStepCard.js";
+import { WorldStepCard } from "../ontology/WorldOntologyPanel.js";
 import { useInvalidateNovel, useNovel } from "../novels/api.js";
 import { WorkingTitleBar } from "./WorkingTitleBar.js";
 import { BriefPanel } from "./BriefPanel.js";
@@ -121,7 +122,7 @@ const ENTRY_MODES: ConceptEntryMode[] = ["conversation", "import", "direct_input
 
 function ConceptBody({ novelId, novel, view }: { novelId: string; novel?: NovelDto; view: ConceptSessionViewDto }) {
   const s = view.session;
-  const messages = useConceptMessages(novelId, s.id, s.inFlightTaskId !== null);
+  const messages = useConceptMessages(novelId, s.id, s.inFlightTaskId !== null || !!view.autoApprove?.enabled);
   const cmd = useSessionCommand(novelId, s.id);
   const extend = useExtendSession(novelId, s.id);
   const switchMode = useSwitchEntryMode(novelId, s.id);
@@ -145,8 +146,12 @@ function ConceptBody({ novelId, novel, view }: { novelId: string; novel?: NovelD
     el?.focus({ preventScroll: true });
   };
 
+  // 설계 변경: 대화는 브리프 필수 항목이 모두 확정될 때까지 이어지고, 턴 상한은 숨은 안전 상한(가까워질 때만 표시)
   const turnsLeft = view.turns.limit - view.turns.used;
-  const nearLimit = view.turns.used >= view.turns.softWarning;
+  const { requiredConfirmed, requiredTotal, missing } = view.progress;
+  const briefComplete = missing.length === 0;
+  const atLimit = turnsLeft <= 0;
+  const nearLimit = !briefComplete && view.turns.used >= view.turns.softWarning;
   const budgetLeft = view.budget.limitMicros - view.budget.spentMicros;
   const err = cmd.error ?? extend.error ?? switchMode.error ?? abandon.error;
 
@@ -157,7 +162,7 @@ function ConceptBody({ novelId, novel, view }: { novelId: string; novel?: NovelD
         subtitle={
           <>
             {s.purpose === "revision" ? "컨셉 개정 · " : ""}
-            {view.stageLabel} · 턴 {view.turns.used}/{view.turns.limit} · 비용 {formatUsd(view.budget.spentMicros)} / {formatUsd(view.budget.limitMicros)}
+            {view.stageLabel} · 필수 항목 {requiredConfirmed}/{requiredTotal} 확정 · 비용 {formatUsd(view.budget.spentMicros)} / {formatUsd(view.budget.limitMicros)}
           </>
         }
         actions={
@@ -211,19 +216,38 @@ function ConceptBody({ novelId, novel, view }: { novelId: string; novel?: NovelD
             )}
           </Callout>
         )}
-        {s.status === "active" && nearLimit && (
+        {s.status === "active" && (nearLimit || (atLimit && !briefComplete)) && (
           <Callout
             tone="warn"
-            title={`남은 턴 ${Math.max(0, turnsLeft)}회`}
+            title={atLimit ? `대화 안전 상한(${view.turns.limit}턴)에 닿았습니다` : `대화 안전 상한까지 ${Math.max(0, turnsLeft)}턴 남았습니다`}
             actions={
               view.turns.extensionsLeft > 0 ? (
                 <Button size="sm" loading={extend.isPending} onClick={() => extend.mutate({ turns: true })}>
-                  턴 상한 올리기
+                  {view.turns.extension}턴 더 이어 하기
                 </Button>
               ) : undefined
             }
           >
-            상한에 가까워지면 지금까지 내용으로 정리해 승인 요청하는 것을 권합니다. 남은 비용 {formatUsd(Math.max(0, budgetLeft))}.
+            대화는 브리프 필수 항목이 모두 확정될 때까지 이어집니다. 남은 필수 항목 {missing.length}개: {missing.map((m) => m.label).join(", ")}.{" "}
+            {view.turns.extensionsLeft > 0
+              ? `상한은 여기서나 아래 '진행 방식 바꾸기'에서 ${view.turns.extension}턴씩 올릴 수 있습니다(${view.turns.extensionsLeft}회 남음).`
+              : "상한은 더 올릴 수 없으니 [전부 맡기기]나 브리프 패널 폼으로 남은 항목을 정리해 주세요."}{" "}
+            남은 비용 {formatUsd(Math.max(0, budgetLeft))}.
+          </Callout>
+        )}
+        {s.status === "active" && briefComplete && (
+          <Callout
+            tone={view.canSubmit ? "ok" : "warn"}
+            title={view.canSubmit ? "브리프 필수 항목이 모두 확정됐습니다" : "필수 항목은 확정됐지만 승인 요청 전에 해결할 항목이 있습니다"}
+            actions={
+              <Button size="sm" variant="primary" disabled={!view.canSubmit} onClick={() => setConfirmSubmit(true)}>
+                승인 요청
+              </Button>
+            }
+          >
+            {view.canSubmit
+              ? "컨셉 파트너는 더 묻지 않습니다. 브리프를 검토한 뒤 [승인 요청]으로 컨셉을 확정해 주세요. 고칠 부분은 대화로 말하거나 브리프 패널에서 직접 고칠 수 있습니다."
+              : `브리프 패널의 '승인 요청 전에 해결할 것'${view.blockers.length ? `(${view.blockers.length}개)` : ""}을 고치면 [승인 요청]을 누를 수 있습니다. 고칠 부분은 대화로 말하거나 브리프 패널에서 직접 고칠 수 있습니다.`}
           </Callout>
         )}
         {s.llmDisabled && <Callout tone="info">LLM 없이 진행 중입니다. 정해진 질문 순서대로 묻고, 브리프는 직접 고칠 수 있습니다.</Callout>}
@@ -231,8 +255,9 @@ function ConceptBody({ novelId, novel, view }: { novelId: string; novel?: NovelD
         {s.status === "approved" && novel?.status === "onboarding" && (
           <>
             <Callout tone="ok" title="컨셉이 승인됐습니다">
-              다음은 캐릭터 설정 단계입니다. 주인공과 서브 주인공을 정해 캐스트를 확정한 뒤, 아래 연재 목표를 저장하면 기획서 작성이 시작됩니다.
+              승인된 컨셉으로 세계관 온톨로지 후보를 자동으로 만듭니다(아래 카드에서 검토). 다음은 캐릭터 설정 단계입니다. 주인공과 서브 주인공을 정해 캐스트를 확정한 뒤, 아래 연재 목표를 저장하면 기획서 작성이 시작됩니다.
             </Callout>
+            <WorldStepCard novelId={novelId} title="세계관 온톨로지 (자동 생성 · 검토)" />
             <CastStepCard novelId={novelId} title="1. 캐릭터 설정 (필수)" />
             <GoalForm novelId={novelId} title="2. 연재 목표" />
           </>
@@ -262,6 +287,17 @@ function ConceptBody({ novelId, novel, view }: { novelId: string; novel?: NovelD
               <Button variant="danger" onClick={() => setConfirmRestart(true)}>
                 처음부터 다시
               </Button>
+              <div className="flex flex-col gap-1 text-[12.5px]">
+                <span className="font-semibold text-muted">대화 안전 상한</span>
+                <span className="flex items-center gap-2">
+                  <span className="tabular">
+                    {view.turns.used} / {view.turns.limit}턴
+                  </span>
+                  <Button size="sm" disabled={view.turns.extensionsLeft <= 0} loading={extend.isPending} onClick={() => extend.mutate({ turns: true })} title={view.turns.extensionsLeft > 0 ? `${view.turns.extensionsLeft}회 더 올릴 수 있습니다` : "더 올릴 수 없습니다"}>
+                    +{view.turns.extension}턴
+                  </Button>
+                </span>
+              </div>
               <Badge>질문 세트 {s.questionSetVersion}</Badge>
             </div>
           </details>

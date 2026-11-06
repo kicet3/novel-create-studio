@@ -5,7 +5,7 @@
 import { and, eq, inArray, isNull, or, sql } from "@ncs/db/orm";
 import { entities, entityNames, facts, factVersions, identityDecisions, mentions } from "@ncs/db/schema";
 import type { CanonStatus } from "@ncs/shared";
-import type { ActorRef, NovelScope, Tx } from "../../../../platform/index.js";
+import { ConflictError, NotFoundError, type ActorRef, type NovelScope, type Tx } from "../../../../platform/index.js";
 import type { CandidateFactDraft, CandidateFactResult, Fact } from "../../index.js";
 import { lookupPredicate, type OntologySchemaData } from "../../domain/base-schema.js";
 import {
@@ -265,12 +265,17 @@ export interface PromotionTarget {
   /** current-version content filter */
   episodeId?: string;
   seriesBibleId?: string;
+  /** 설계 추가(world): explicit candidate facts reviewed one by one (세계관 온톨로지 후보 승인) */
+  factIds?: string[];
 }
 
 async function factsByTarget(tx: Tx, scope: NovelScope, t: PromotionTarget, statuses: CanonStatus[]): Promise<Fact[]> {
-  const cond = t.episodeId
-    ? sql`${factVersions.content}->>'episodeId' = ${t.episodeId}`
-    : sql`(${factVersions.content}->>'seriesBibleId' = ${t.seriesBibleId!} or (${facts.sourceRefType} = 'series_bible' and ${facts.sourceRefId} = ${t.seriesBibleId!}))`;
+  if (t.factIds && !t.factIds.length) return [];
+  const cond = t.factIds
+    ? inArray(facts.id, t.factIds)
+    : t.episodeId
+      ? sql`${factVersions.content}->>'episodeId' = ${t.episodeId}`
+      : sql`(${factVersions.content}->>'seriesBibleId' = ${t.seriesBibleId!} or (${facts.sourceRefType} = 'series_bible' and ${facts.sourceRefId} = ${t.seriesBibleId!}))`;
   const rows = await tx.db
     .select({ f: facts })
     .from(facts)
@@ -355,7 +360,9 @@ export async function promoteCandidates(d: OntoDeps, tx: Tx, scope: NovelScope, 
   for (const e of entRows) {
     if (e.status !== "candidate") continue;
     const check = (e.equivalenceCheck ?? null) as { status?: string } | null;
-    const okCheck = target.seriesBibleId ? check?.status !== "failed" && check?.status !== "question" : !check || check.status === "passed";
+    // bible path: the bible approval is the author's approval of the entities it names (a world "review" candidate
+    // included); an entity the author rejected in the world review ("rejected") is never activated here
+    const okCheck = target.seriesBibleId ? check?.status !== "failed" && check?.status !== "question" && check?.status !== "rejected" : !check || check.status === "passed";
     if (!okCheck || blockedByDecision.has(e.id) || !e.preferredNameId) continue;
     // the entity's own mentions must not be ambiguous (new_entity_candidate is what we resolve here)
     const amb = await tx.db
@@ -468,7 +475,7 @@ export async function promoteCandidates(d: OntoDeps, tx: Tx, scope: NovelScope, 
       novelId: scope.novelId,
       actor,
       action: "fact.status_changed",
-      target: target.episodeId ? { type: "episode", id: target.episodeId } : { type: "series_bible", id: target.seriesBibleId! },
+      target: target.episodeId ? { type: "episode", id: target.episodeId } : target.factIds ? { type: "fact", id: target.factIds[0]! } : { type: "series_bible", id: target.seriesBibleId! },
       approvalId: opts.approvalId ?? null,
       before: { canonStatus: "candidate" },
       after: { canonStatus: "approved" },
@@ -527,7 +534,7 @@ export async function approveBible(d: OntoDeps, tx: Tx, scope: NovelScope, serie
     const [e] = await tx.db.select().from(entities).where(and(eq(entities.novelId, scope.novelId), eq(entities.id, id))).for("update");
     if (!e || e.status !== "candidate") continue;
     const check = (e.equivalenceCheck ?? null) as { status?: string; seriesBibleId?: string } | null;
-    if (check?.status === "failed" || check?.status === "question") continue;
+    if (check?.status === "failed" || check?.status === "question" || check?.status === "rejected") continue;
     if (check?.seriesBibleId && check.seriesBibleId !== seriesBibleId) continue;
     await tx.db.update(entities).set({ status: "active", updatedAt: d.platform.clock.date() }).where(and(eq(entities.novelId, scope.novelId), eq(entities.id, id)));
     await tx.db
@@ -585,4 +592,25 @@ export async function withdrawFacts(d: OntoDeps, tx: Tx, scope: NovelScope, fact
     changed.push(f.id);
   }
   return changed;
+}
+
+/**
+ * 설계 추가(world): the author edits a candidate fact before approving it (value only — subject / predicate / object
+ * changes go through withdraw + a new candidate). New FactVersion with change_reason user_edit; non-candidates → 409.
+ */
+export async function reviseCandidateFact(d: OntoDeps, tx: Tx, scope: NovelScope, factId: string, patch: { value: unknown }, actor: ActorRef): Promise<Fact> {
+  const [f] = await tx.db.select().from(facts).where(and(eq(facts.novelId, scope.novelId), eq(facts.id, factId))).for("update");
+  if (!f) throw new NotFoundError("사실", factId);
+  if (f.canonStatus !== "candidate") throw new ConflictError("fact_not_candidate", "확정 전(후보) 사실만 고칠 수 있습니다.");
+  const { fact } = await appendFactVersion(d, tx, scope, f, { value: patch.value === undefined ? null : patch.value }, { changeReason: "user_edit", actor });
+  await d.audit.record(tx, {
+    novelId: scope.novelId,
+    actor,
+    action: "fact.version_created",
+    target: { type: "fact", id: factId },
+    before: { value: f.value },
+    after: { value: fact.value },
+    details: { versionNo: fact.currentVersionNo },
+  });
+  return fact;
 }

@@ -4,9 +4,11 @@
  * ima2-gen lib/grokRuntime.ts); a 401 on the OAuth lane refreshes once and replays.
  * JSON: `response_format: {type:"json_schema", json_schema:{name, schema, strict}}` (docs.x.ai structured outputs);
  * a 400 on the format retries once with the schema described in the prompt. zod validation stays in the gateway.
+ * Web search (설계 추가 0011): not supported on this Chat Completions lane → `webSearchSupport` says why; the call runs
+ * without search.
  */
 import type { LlmAdapter, LlmCapabilities, LlmCredential, LlmEnvironmentCheck, LlmInvokeOptions, LlmRequest, LlmResult, LlmUsage } from "../../index.js";
-import { StreamError, credentialOf, fetchWithCredential, httpFailure, jsonInstruction, linkedSignal, parseJsonText, readSse, thrownFailure, trimSlash, type FailureCopy } from "../shared/http.js";
+import { StreamError, credentialOf, fetchWithCredential, httpFailure, jsonInstruction, linkedSignal, parseJsonText, readSse, tapProgress, thrownFailure, trimSlash, type FailureCopy } from "../shared/http.js";
 import { jsonSchemaFormat } from "../shared/json-schema.js";
 import { BAD_KEY_HINT } from "../../domain/errors.js";
 
@@ -86,6 +88,11 @@ export class XaiLlmAdapter implements LlmAdapter {
     this.api = trimSlash(opts.apiBaseUrl ?? XAI_API_BASE_URL);
   }
 
+  /** 설계 추가 0011: Chat Completions has no current search tool (Live Search was retired for the Agent Tools API) */
+  webSearchSupport(): string {
+    return "Grok(xAI) 연결은 인터넷 검색을 아직 지원하지 않아 검색 없이 진행합니다.";
+  }
+
   capabilities(_modelId: string): LlmCapabilities {
     return { structuredOutput: "json_schema", maxContextTokens: 500_000, maxOutputTokens: 128_000, promptCaching: true, reportsUsage: true, reportsCost: false, outputLimitCoversReasoning: "unknown" };
   }
@@ -132,7 +139,7 @@ export class XaiLlmAdapter implements LlmAdapter {
           }
           return await httpFailure(res, copy);
         }
-        const c = await collectChatStream(res.body);
+        const c = await collectChatStream(tapProgress(res.body, opts.onProgress));
         const finishReason = c.finish === "stop" ? "stop" : c.finish === "length" ? "length" : c.finish === "content_filter" ? "content_filter" : c.finish ? "other" : "stop";
         if (finishReason === "content_filter" || (c.refusal && !c.text)) {
           return { ok: false, errorFamily: "content_filtered", message: "Grok이 안전 정책으로 응답을 거절했습니다.", billed: "yes", usage: c.usage, providerRequestId: c.id };

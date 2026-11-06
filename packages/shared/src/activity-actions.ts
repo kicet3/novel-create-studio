@@ -12,6 +12,8 @@ export const ACTIVITY_ACTIONS = [
   "concept_session.created", "concept_session.status_changed", "concept_session.stage_changed", "concept_session.paused", "concept_session.resumed",
   "concept_session.limit_extended", "concept_session.entry_mode_changed",
   "concept_brief.version_created", "concept_brief.status_changed", "concept_brief.field_edited", "concept_brief.change_proposal_decided",
+  // 설계 추가: 컨셉 대화 자동 승인 모드
+  "concept_session.auto_approve_changed", "concept_brief.auto_accepted",
   // 기획서·아크
   "series_bible.version_created", "series_bible.status_changed",
   "arc.created", "arc.updated", "arc.status_changed", "arc.paused", "arc.resumed",
@@ -35,7 +37,7 @@ export const ACTIVITY_ACTIONS = [
   "cost.overrun_recorded", "cost.unknown_recorded", "cost.restored_carryover",
   // 온톨로지
   "fact.created", "fact.status_changed", "fact.version_created", "fact.retconned", "fact.reverted",
-  "entity.created", "entity.status_changed", "entity.preferred_name_changed",
+  "entity.created", "entity.status_changed", "entity.preferred_name_changed", "entity.updated",
   "entity_name.added", "entity_name.updated", "entity_name.retired",
   "mention.batch_linked", "mention.link_decided", "mention.relinked",
   "identity.proposed", "identity.applied", "identity.rejected", "identity.reverted",
@@ -56,6 +58,10 @@ export const ACTIVITY_ACTIONS = [
   "character.created", "character.updated", "character.deleted", "character.reordered", "character.status_changed",
   "cast.draft_requested", "cast.draft_applied", "cast.confirmed",
   "design_sheet.updated", "design_sheet.draft_requested", "design_sheet.image_requested", "design_sheet.image_selected",
+  // 전체 구성(1~4부 + 결말)·플롯
+  "structure.created", "structure.updated", "structure.status_changed",
+  "arc.plan_flagged", "arc.plan_flags_cleared",
+  "cast.plot_characters_proposed", "cast.plot_characters_confirmed", "cast.first_appearance_set",
 ] as const;
 
 export type ActivityAction = (typeof ACTIVITY_ACTIONS)[number];

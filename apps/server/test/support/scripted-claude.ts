@@ -8,6 +8,7 @@
  *   t.claude.reply({ when: { system: /초고/ }, text: "본문…" });
  *   t.claude.reply({ error: { status: 529 } });             // next request (any) fails once
  *   t.claude.reply({ json: {...}, chunkSize: 8, chunkDelayMs: 20 }); // streamed in several text deltas
+ *   t.claude.reply({ json: {...}, webSearch: { query: "포도청 직책", results: [{ url, title }] } }); // server web search
  *
  * Matching: scripts are tried in the order they were added; the first unexhausted one whose `when`
  * matches is used (`times` defaults to 1; `Infinity` = sticky).
@@ -64,6 +65,12 @@ export interface ClaudeScript {
   /** pause between streamed chunks (ms) */
   chunkDelayMs?: number;
   usage?: { input_tokens?: number; output_tokens?: number };
+  /**
+   * 설계 추가 0011: answer as if the server-side web search tool ran first — a preamble text block, a
+   * `server_tool_use` + `web_search_tool_result` pair, then the answer text citing the first result
+   * (`web_search_result_location`); usage.server_tool_use.web_search_requests = 1.
+   */
+  webSearch?: { query: string; results: Array<{ url: string; title: string }>; preamble?: string; cite?: boolean };
 }
 
 export interface ScriptedClaude {
@@ -146,16 +153,46 @@ async function writeMessage(res: ServerResponse, r: ClaudeRequest, text: string,
     type: "message_start",
     message: { id, type: "message", role: "assistant", model: r.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: inputTokens, output_tokens: 1 } },
   });
-  ev("content_block_start", { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } });
+  let index = 0;
+  const ws = s.webSearch;
+  if (ws) {
+    ev("content_block_start", { type: "content_block_start", index, content_block: { type: "text", text: "" } });
+    ev("content_block_delta", { type: "content_block_delta", index, delta: { type: "text_delta", text: ws.preamble ?? "검색해 볼게요 {잠시만요}." } });
+    ev("content_block_stop", { type: "content_block_stop", index: index++ });
+    const toolId = `srvtoolu_scripted_${msgSeq}`;
+    ev("content_block_start", { type: "content_block_start", index, content_block: { type: "server_tool_use", id: toolId, name: "web_search", input: {} } });
+    ev("content_block_delta", { type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: JSON.stringify({ query: ws.query }) } });
+    ev("content_block_stop", { type: "content_block_stop", index: index++ });
+    ev("content_block_start", {
+      type: "content_block_start",
+      index,
+      content_block: { type: "web_search_tool_result", tool_use_id: toolId, content: ws.results.map((x) => ({ type: "web_search_result", url: x.url, title: x.title, encrypted_content: "enc", page_age: null })) },
+    });
+    ev("content_block_stop", { type: "content_block_stop", index: index++ });
+  }
+  const textIndex = index;
+  ev("content_block_start", { type: "content_block_start", index: textIndex, content_block: { type: "text", text: "", ...(ws ? { citations: [] } : {}) } });
+  if (ws && ws.cite !== false && ws.results[0]) {
+    const first = ws.results[0];
+    ev("content_block_delta", {
+      type: "content_block_delta",
+      index: textIndex,
+      delta: { type: "citations_delta", citation: { type: "web_search_result_location", url: first.url, title: first.title, cited_text: "…", encrypted_index: "idx" } },
+    });
+  }
   const size = s.chunkSize && s.chunkSize > 0 ? s.chunkSize : Math.max(1, text.length);
   const chars = [...text]; // never split a surrogate pair
   for (let i = 0; i < chars.length; i += size) {
     if (i > 0 && s.chunkDelayMs) await new Promise((ok) => setTimeout(ok, s.chunkDelayMs));
     if (res.destroyed) return;
-    ev("content_block_delta", { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: chars.slice(i, i + size).join("") } });
+    ev("content_block_delta", { type: "content_block_delta", index: textIndex, delta: { type: "text_delta", text: chars.slice(i, i + size).join("") } });
   }
-  ev("content_block_stop", { type: "content_block_stop", index: 0 });
-  ev("message_delta", { type: "message_delta", delta: { stop_reason: s.stop ?? "end_turn", stop_sequence: null }, usage: { output_tokens: outputTokens } });
+  ev("content_block_stop", { type: "content_block_stop", index: textIndex });
+  ev("message_delta", {
+    type: "message_delta",
+    delta: { stop_reason: s.stop ?? "end_turn", stop_sequence: null },
+    usage: { output_tokens: outputTokens, ...(ws ? { server_tool_use: { web_search_requests: 1, web_fetch_requests: 0 } } : {}) },
+  });
   ev("message_stop", { type: "message_stop" });
   res.end();
 }

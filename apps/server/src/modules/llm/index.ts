@@ -41,6 +41,41 @@ export interface LlmCapabilities {
   billing?: "per_call" | "subscription";
 }
 
+// ── web search (설계 추가 0011: 인터넷 검색) ──
+/** per-call web search request (LlmRequest.webSearch): the provider's own search tool, at most `maxUses` searches */
+export interface LlmWebSearchSpec {
+  maxUses: number;
+}
+
+/** a source the model got through web search (stored in provider_calls.response.webSearch) */
+export interface LlmCitation {
+  url: string;
+  title: string | null;
+  /** ISO time the call returned */
+  retrievedAt: string;
+}
+
+/**
+ * Web search outcome of one adapter call. `unsupported` = the lane cannot search (the call ran without it);
+ * `requests` = searches (and fetches) the provider ran — billed per search where priced.
+ */
+export interface LlmWebSearchResult {
+  status: "used" | "not_used" | "unsupported";
+  requests: number;
+  citations: LlmCitation[];
+  /**
+   * "cited": `citations` are what the answer cited (API citations / annotations / grounding); "results": only the
+   * search result lists (claude_code) — shown only when the model names them in its source trailer.
+   */
+  citationsKind?: "cited" | "results";
+  /** search results that were not kept as citations (audit only) */
+  results?: LlmCitation[];
+  /** queries the model sent (audit only; formed by the model, never our manuscript / brief text) */
+  queries?: string[];
+  /** why search was unavailable (Korean, shown as a flag) */
+  note?: string;
+}
+
 /** `claude auth status` projection (installed / signed in / auth method — never credentials) */
 export interface LlmCliStatus {
   installed: boolean;
@@ -72,6 +107,8 @@ export interface LlmRequest {
   maxOutputTokens: number;
   temperature?: number;
   seed?: number;
+  /** optional web search (the provider's server-side search tool); adapters without one return webSearch.status=unsupported */
+  webSearch?: LlmWebSearchSpec;
   /** Non-hashed call metadata (purpose, role, sample index); adapters may ignore it. Never put secrets here. */
   meta?: { purpose: string; role?: AgentRole; sampleIndex?: number; repairAttempt?: number };
 }
@@ -108,6 +145,12 @@ export interface LlmInvokeOptions {
   idempotencyKey?: string;
   /** optional streaming hook; adapters that cannot stream ignore it (never throws into the adapter) */
   onStream?: (ev: LlmStreamEvent) => void;
+  /**
+   * optional liveness hook: call whenever response bytes arrive (headers, SSE chunks, CLI stdout lines). The gateway's
+   * idle timeout (`llm.idle_timeout_seconds`) arms at the first call and aborts `signal` when the stream goes silent;
+   * adapters that never call it only get the hard cap `timeoutMs`.
+   */
+  onProgress?: () => void;
 }
 
 export interface LlmUsage {
@@ -116,6 +159,8 @@ export interface LlmUsage {
   cachedInputTokens?: number;
   reasoningTokens?: number;
   reportedCostMicros?: number;
+  /** server-side web searches (+ fetches) billed per request (anthropic `server_tool_use`, openai web_search calls, gemini grounding queries) */
+  webSearchRequests?: number;
 }
 
 export type LlmResult =
@@ -127,6 +172,8 @@ export type LlmResult =
       usage: LlmUsage;
       modelVersion?: string;
       providerRequestId?: string;
+      /** present when the request asked for web search */
+      webSearch?: LlmWebSearchResult;
       raw: unknown;
     }
   | {
@@ -150,6 +197,11 @@ export interface LlmAdapter {
   invoke(req: LlmRequest, opts: LlmInvokeOptions): Promise<LlmResult>;
   /** gateway limits for this adapter: concurrent calls (others wait for a slot) and per-call timeout */
   readonly limits?: { maxConcurrent?: number; callTimeoutMs?: number };
+  /**
+   * 설계 추가 0011: can `modelId` search the web on the lane of `method`? true, or why not (Korean, surfaced as a flag).
+   * Absent → unsupported. The call then runs without search.
+   */
+  webSearchSupport?(modelId: string, method?: LlmCredential["method"]): true | string;
   /** local CLI adapters (claude_code): installation / sign-in state, no credentials read */
   status?(signal?: AbortSignal): Promise<LlmCliStatus>;
 }
@@ -170,6 +222,21 @@ export interface ModelCallInput<T> {
    * attempt and when the call finally fails. The returned value is still the only validated result.
    */
   onStream?: (ev: LlmStreamEvent) => void;
+  /**
+   * 설계 추가 0011: allow internet search for facts / genre conventions / terminology. The novel setting decides
+   * (`novels.web_search_enabled`, cap `web_search_max_uses`); `maxUses` can only lower the cap. The model forms its
+   * own queries; the gateway adds the search policy (no manuscript / brief text as queries, no real-person lookups)
+   * to the system prompt. Unsupported provider lanes run without search (`ModelCallOutput.webSearch.status`).
+   */
+  webSearch?: boolean | { maxUses?: number };
+}
+
+/** web search outcome surfaced to the caller (sources to show next to whatever used the result) */
+export interface ModelCallWebSearch {
+  status: "used" | "not_used" | "disabled" | "unsupported";
+  requests: number;
+  citations: LlmCitation[];
+  note?: string;
 }
 
 export interface ModelCallOutput<T> {
@@ -180,6 +247,8 @@ export interface ModelCallOutput<T> {
   costMicros: number;
   modelId: string;
   modelVersion?: string;
+  /** present when the input asked for web search */
+  webSearch?: ModelCallWebSearch;
 }
 
 export interface ModelCallPort {

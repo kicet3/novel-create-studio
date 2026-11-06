@@ -86,7 +86,7 @@ export function WorkingTitleBar({ novelId, novel, view }: { novelId: string; nov
             <span className="text-[12px] font-semibold text-muted">작품 제목</span>
             <Badge tone={badge.tone}>{badge.text}</Badge>
           </div>
-          <p className={cx("mt-0.5 truncate text-[17px] font-bold", src === "user" ? "text-text" : "text-faint")} aria-live="polite" title={novel.title}>
+          <p className={cx("mt-0.5 text-[17px] font-bold [overflow-wrap:anywhere]", src === "user" ? "text-text" : "text-faint")} aria-live="polite" title={novel.title}>
             {novel.title}
           </p>
           <p className="mt-0.5 text-[12px] text-muted">{locked ? "승인을 기다리는 중에는 제목을 바꿀 수 없습니다. 승인 요청을 취소하거나 승인한 뒤에 바꾸세요." : HINT[src]}</p>

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   conceptMessageDtoSchema,
   conceptSessionViewDtoSchema,
+  type ConceptAutoApproveRequest,
   type ConceptEntryMode,
   type ConceptMessageDto,
   type ConceptPostMessageRequest,
@@ -32,7 +33,8 @@ export function useConceptSession(novelId: string) {
   return useQuery({
     queryKey: [...queryKeys.novel(novelId).concept(), "session"],
     queryFn: ({ signal }) => api.get(`/novels/${novelId}/concept/session`, { signal }).then((d) => (d ? viewParser.parse(d) : null)),
-    refetchInterval: (q) => (q.state.data?.session.inFlightTaskId || q.state.data?.titleSuggestions?.refreshing ? TURN_POLL_MS : POLL_INTERVAL_MS),
+    refetchInterval: (q) =>
+      q.state.data?.session.inFlightTaskId || q.state.data?.titleSuggestions?.refreshing || q.state.data?.autoApprove?.enabled ? TURN_POLL_MS : POLL_INTERVAL_MS,
   });
 }
 
@@ -85,6 +87,11 @@ export function usePostConceptMessage(novelId: string, sessionId: string) {
 /** "답변 멈추기": cancels the in-flight turn (the typed draft stays) */
 export function useStopTurn(novelId: string, sessionId: string) {
   return useConceptMutation(novelId, () => api.post(`${base(novelId, sessionId)}/stop-turn`, {}));
+}
+
+/** 설계 추가: 자동 승인 on/off (+ 설정) → SessionView. The loop runs on the server. */
+export function useSetAutoApprove(novelId: string, sessionId: string) {
+  return useConceptMutation(novelId, (body: ConceptAutoApproveRequest) => api.post<ConceptSessionViewDto>(`${base(novelId, sessionId)}/auto-approve`, body));
 }
 
 export function useEditBrief(novelId: string, sessionId: string) {

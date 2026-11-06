@@ -39,6 +39,7 @@ export const CHECK_CONTINUITY_KINDS: readonly ContinuityIssueKind[] = [
   "published_canon_conflict",
   "answer_constraint",
   "glossary_spelling",
+  "plan_deviation", // 설계 추가: 전체 구성·플롯·화 계획 이탈 (medium, never blocks the gate)
 ];
 export const SETUP_KINDS: readonly ContinuityIssueKind[] = ["setup_missing", "setup_contradiction"];
 

@@ -7,7 +7,7 @@ import { assertBriefTransition, assertSessionTransition, assertStageTransition }
 import { conceptTurnProposalSchema } from "../../src/modules/concept/domain/proposal.js";
 import { planFieldEdit, planImport, planTurn, sortByQuestionOrder, type TurnMessage } from "../../src/modules/concept/domain/turn.js";
 
-const limits = { flipLimit: 3, softWarning: 30, agentTurnCount: 0, turnLimit: 40, messenger: false, replyMaxChars: 1200 };
+const limits = { flipLimit: 3, softWarning: 180, agentTurnCount: 0, turnLimit: 200, messenger: false, replyMaxChars: 1200 };
 let n = 0;
 const newId = () => `cpr_${++n}`;
 const userMsg = (id: string, body: string, extra: Partial<TurnMessage> = {}): TurnMessage => ({ id, seq: 2, authorKind: "user", kind: "text", body, channelId: "chn_web", pickedIdx: null, options: null, askedFieldPaths: null, ...extra });

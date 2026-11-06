@@ -31,6 +31,13 @@ export interface CharacterOntologySyncJson {
     weakness: string;
     relationships: CharacterRelationshipJson[];
     notes: string;
+    /** 0008 required profile fields (absent on rows confirmed before 0008) */
+    appearance?: string;
+    motivation?: string;
+    speechSample?: string;
+    arcStart?: string;
+    arcEnd?: string;
+    storyRole?: string;
   };
 }
 
@@ -51,6 +58,15 @@ export const characters = pgTable("characters", {
   weakness: text("weakness").notNull().default(""),
   relationships: jsonb("relationships").$type<CharacterRelationshipJson[]>().notNull().default([]),
   notes: text("notes").notNull().default(""),
+  /** 0008 required profile fields + first appearance */
+  appearance: text("appearance").notNull().default(""),
+  motivation: text("motivation").notNull().default(""),
+  speechSample: text("speech_sample").notNull().default(""),
+  arcStart: text("arc_start").notNull().default(""),
+  arcEnd: text("arc_end").notNull().default(""),
+  storyRole: text("story_role").notNull().default(""),
+  firstAppearanceEpisodeNo: integer("first_appearance_episode_no"),
+  introducedArcId: text("introduced_arc_id"),
   fieldOrigins: jsonb("field_origins").$type<Record<string, "user" | "agent">>().notNull().default({}),
   proposed: boolean("proposed").notNull().default(false),
   conceptCharacterKey: text("concept_character_key"),

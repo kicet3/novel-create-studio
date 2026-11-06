@@ -3,6 +3,7 @@ import { Callout } from "../../components/ui/index.js";
 import { AutonomySection } from "../settings/sections/AutonomySection.js";
 import { ChannelsSection } from "../settings/sections/ChannelsSection.js";
 import { CastStepCard } from "../cast/CastStepCard.js";
+import { WorldStepCard } from "../ontology/WorldOntologyPanel.js";
 import { GoalForm } from "./GoalForm.js";
 
 /**
@@ -21,6 +22,7 @@ export function NovelSetupFlow({ novel }: { novel: NovelDto }) {
           컨셉 브리프가 승인됐습니다. 캐릭터를 정해 캐스트를 확정한 뒤 연재 목표를 저장하면 기획서 작성이 시작됩니다. 자율성 수준과 채널은 나중에 설정에서 바꿀 수 있습니다.
         </Callout>
       </div>
+      <WorldStepCard novelId={novel.id} title="세계관 온톨로지 (자동 생성 · 검토)" />
       <ol className="m-0 flex list-none flex-col gap-3 p-0">
         <li>
           <CastStepCard novelId={novel.id} title="1. 캐릭터 설정 (필수)" />

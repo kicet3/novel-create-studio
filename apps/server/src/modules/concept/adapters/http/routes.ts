@@ -2,6 +2,7 @@
 import { z } from "zod";
 import {
   conceptAbandonRequestSchema,
+  conceptAutoApproveRequestSchema,
   conceptChangeProposalDecisionSchema,
   conceptChooseTitleRequestSchema,
   conceptConfirmRequestSchema,
@@ -65,6 +66,11 @@ export function mountConceptRoutes({ novel }: ApiRouters, svc: ConceptService, s
   novel.post("/concept/sessions/:sessionId/stop-turn", validate({ params: sessionParams }), async (_req, res) => {
     const { params } = valid<{ params: P }>(res);
     res.json(await svc.stopTurn(scopeOf(res), params.sessionId, actorOf(res)));
+  });
+  novel.post("/concept/sessions/:sessionId/auto-approve", validate({ params: sessionParams, body: conceptAutoApproveRequestSchema }), async (_req, res) => {
+    const { params, body } = valid<{ params: P; body: z.output<typeof conceptAutoApproveRequestSchema> }>(res);
+    await svc.setAutoApprove(scopeOf(res), params.sessionId, body, actorOf(res));
+    res.json(await svc.getSessionView(scopeOf(res), params.sessionId));
   });
   novel.post("/concept/sessions/:sessionId/resume", validate({ params: sessionParams }), async (_req, res) => {
     const { params } = valid<{ params: P }>(res);

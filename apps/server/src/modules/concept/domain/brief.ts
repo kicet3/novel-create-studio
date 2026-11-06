@@ -7,6 +7,7 @@ import { z } from "zod";
 import { ENUMS } from "@ncs/shared/enums";
 import type { ConceptFieldOrigin, ConceptSlotState } from "@ncs/shared";
 import type { TitleRefreshMeta, TitleSuggestionsMeta } from "./title.js";
+import type { AutoApproveState } from "./auto-approve.js";
 
 // ── content schema (lenient: every field optional, unknown keys kept) ──────
 const characterBase = {
@@ -96,13 +97,36 @@ export interface FieldProvenance {
   history_count: number;
 }
 
+/**
+ * How a proposal left `pending` (domain/change-proposals.ts): button = [제안 수락]/[지금 값 유지],
+ * decided_in_chat = the user's words (quote-verified model decision or a yes/no reply),
+ * applied_in_chat / form_edit = the user set the proposed value themselves, already_applied = the value
+ * got there without a user decision, field_changed = the field moved to another value, replaced = a newer
+ * proposal for the same field.
+ */
+export type ProposalResolution =
+  | "button"
+  | "decided_in_chat"
+  | "applied_in_chat"
+  | "form_edit"
+  | "already_applied"
+  | "field_changed"
+  | "replaced"
+  /** 설계 추가: accepted by the auto-approve mode the user turned on (domain/auto-approve.ts) */
+  | "auto_accepted";
+
 export interface ChangeProposal {
   id: string;
   field_path: string;
   new_value: unknown;
   reason: string;
-  status: "pending" | "accepted" | "rejected";
+  status: "pending" | "accepted" | "rejected" | "superseded";
   run_id: string | null;
+  /** field value when the proposal was made (absent on proposals stored before this field existed) */
+  base_value?: unknown;
+  resolution?: ProposalResolution;
+  /** user message that settled it (null: settled by the agent turn itself, e.g. replaced) */
+  resolved_message_id?: string | null;
 }
 
 export interface Conflict {
@@ -142,6 +166,8 @@ export interface BriefMeta {
   title_suggestions?: TitleSuggestionsMeta | null;
   /** pending or failed "다른 추천 받기" */
   title_refresh?: TitleRefreshMeta | null;
+  /** 설계 추가: 자동 승인 모드 (domain/auto-approve.ts) */
+  auto_approve?: AutoApproveState | null;
 }
 
 export interface WorkingBrief {

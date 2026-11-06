@@ -17,3 +17,4 @@ export * from "./novel.js";
 export * from "./ontology.js";
 export * from "./orchestration.js";
 export * from "./system.js";
+export * from "./world.js";

@@ -5,6 +5,7 @@
 import { actors, type ActorRef, type NovelScope, type Tx } from "../../../platform/index.js";
 import type { ApprovalDecisionContext } from "../../hitl/index.js";
 import type { Arc } from "../../novel/index.js";
+import type { LlmCitation } from "../../llm/index.js";
 import { manuscriptRepo as repo } from "../adapters/db/manuscript-repository.js";
 import {
   arcPlanProposalSchema,
@@ -17,10 +18,15 @@ import {
 } from "../domain/schemas.js";
 import { bibleMarkdown, synthArcPlan, synthBible } from "../domain/synth.js";
 import { IN_FLIGHT_STATUSES } from "../domain/transitions.js";
+import { belowFloorByCounts } from "../domain/text.js";
+import { EPISODE_HARD_MIN_CHARS } from "@ncs/shared";
 import type { ScheduleResult } from "../index.js";
 import { promptOf, type PipelineHandler } from "./agent-task.js";
 import type { ManuscriptInternals } from "./manuscript-service.js";
-import { settings, soft } from "./support.js";
+import { castPortOf, settings, soft } from "./support.js";
+import { structureGateRef, type StructureApi } from "./structure.js";
+import { DomainValidationError } from "../../../platform/index.js";
+import type { PlotCharacterDraft } from "../index.js";
 
 const BIBLE_INSTRUCTION = `당신은 웹소설 기획자(planner)입니다. 승인된 컨셉과 목표를 바탕으로 연재 기획서를 JSON으로 작성합니다.
 - logline은 컨셉의 로그라인을 그대로 씁니다.
@@ -29,8 +35,11 @@ const BIBLE_INSTRUCTION = `당신은 웹소설 기획자(planner)입니다. 승�
 - arc_outline은 아크별 제목·화수·요약입니다. 연령 등급을 넘는 내용은 넣지 않습니다.
 - 컨텍스트에 확정된 캐릭터 설정이 있으면 characters는 그 이름·역할을 그대로 쓰고 바꾸지 않습니다.`;
 
-const ARC_INSTRUCTION = `당신은 웹소설 기획자(planner)입니다. 기획서와 이전 아크 결과를 바탕으로 이번 아크의 목표·갈등·종료 조건과 화별 개요를 JSON으로 씁니다.
-화 번호는 주어진 범위 안에서만 씁니다.`;
+const ARC_INSTRUCTION = `당신은 웹소설 기획자(planner)입니다. 기획서·전체 구성(결말·현재 부)과 이전 플롯 결과를 바탕으로 이번 플롯(큰 사건)의 목표·갈등·종료 조건과 화별 계획을 JSON으로 씁니다.
+- 화 번호는 주어진 범위 안에서만 씁니다. 화마다 summary(이번 화에서 일어날 일), scene_count(씬 수), target_chars(목표 분량, 주어진 최소~최대 안)를 적습니다.
+- core_event(핵심 사건), change_text(이 플롯이 만들어 내는 변화), involved_character_ids(roster id만), setup_plan(심을 떡밥 plant·회수할 떡밥 payoff)을 채웁니다.
+- 플롯이 전체 구성의 현재 부 목표와 결말 방향을 벗어나지 않게 합니다.
+- 새 인물이 필요하면 new_characters에 필수 항목을 모두 채워 제안합니다(주인공급: 나이·외형·성격(장점·결점)·목표·동기·두려움·과거사 2~3줄·말투 예시 1~2줄·주인공과의 관계·변화 아크 시작과 끝 / 조연·적대자: 이야기 속 역할·목표·주인공과의 관계). 첫 등장 화(first_appearance_episode_no)도 적습니다.`;
 
 export interface PlanningApi {
   handlers: Array<PipelineHandler<any, any>>;
@@ -40,21 +49,23 @@ export interface PlanningApi {
   onGoalSaved(ctx: { tx: Tx; scope: NovelScope; enteredPlanning: boolean; actor: ActorRef; novel: { approvedConceptBriefId: string | null } }): Promise<void>;
 }
 
-export function createPlanning(m: ManuscriptInternals, getService: () => import("../index.js").ManuscriptService): PlanningApi {
+export function createPlanning(m: ManuscriptInternals, getService: () => import("../index.js").ManuscriptService, structure: StructureApi): PlanningApi {
   const { ports } = m;
+  const cast = () => castPortOf(ports.reg);
   const { novel, orchestration, ontology, platform } = ports.deps;
   const scheduler = actors.system("scheduler");
   const cfg = settings();
 
   // ── B1 plan_series_bible ──
-  const planSeriesBible: PipelineHandler<import("../domain/schemas.js").PlanSeriesBibleInput, { bible: BibleProposal; supersede: string[]; modelId: string }> = {
+  const planSeriesBible: PipelineHandler<import("../domain/schemas.js").PlanSeriesBibleInput, { bible: BibleProposal; supersede: string[]; modelId: string; sources?: LlmCitation[] }> = {
     kind: "plan_series_bible",
     role: "planner",
     promptTemplateVersion: "planner.plan_series_bible@0.1.0",
     inputSchema: planSeriesBibleInputSchema,
     allowedWrites: ["novel.createBibleVersion", "hitl.requestApproval"],
     // 설계 추가: the confirmed cast (module cast, context section "cast") is an input of the series bible
-    context: async () => ({ anchor: { storyPoint: 0, timelineId: "" }, sections: ["cast"] }),
+    // 설계 추가(world): the world ontology (approved + flagged candidates) too
+    context: async () => ({ anchor: { storyPoint: 0, timelineId: "" }, sections: ["cast", "world"] }),
     async execute(run, input, context, llm) {
       const scope = { novelId: run.novelId };
       const n = await novel.getNovel(scope);
@@ -68,7 +79,10 @@ export function createPlanning(m: ManuscriptInternals, getService: () => import(
         purpose: "plan_series_bible",
         ...p,
         output: { kind: "object", schemaName: "SeriesBibleProposal", schema: bibleProposalSchema },
+        // 설계 추가 0011: facts / genre conventions / terminology (novel setting 인터넷 검색)
+        webSearch: true,
       });
+      const sources = out.webSearch?.status === "used" ? out.webSearch.citations : [];
       const synth = synthBible(facts, input.rejection_note);
       const v = out.value as BibleProposal;
       const bible: BibleProposal = {
@@ -79,7 +93,7 @@ export function createPlanning(m: ManuscriptInternals, getService: () => import(
         arc_outline: v.arc_outline.length ? v.arc_outline : synth.arc_outline,
         characters: v.characters.length ? v.characters : synth.characters,
       };
-      return { bible, supersede: bibles.filter((b) => b.status === "draft" || b.status === "awaiting_approval").map((b) => b.id), modelId: out.modelId };
+      return { bible, supersede: bibles.filter((b) => b.status === "draft" || b.status === "awaiting_approval").map((b) => b.id), modelId: out.modelId, ...(sources.length ? { sources } : {}) };
     },
     async commit(tx, run, input, p) {
       const scope = { novelId: run.novelId };
@@ -94,7 +108,7 @@ export function createPlanning(m: ManuscriptInternals, getService: () => import(
       const bible = await novel.createBibleVersion(
         tx,
         scope,
-        { logline: p.bible.logline, synopsis: p.bible.synopsis, content: { ...p.bible, model_id: p.modelId }, contentMd: bibleMarkdown(p.bible), conceptBriefId: input.concept_brief_id },
+        { logline: p.bible.logline, synopsis: p.bible.synopsis, content: { ...p.bible, model_id: p.modelId, ...(p.sources?.length ? { sources: p.sources } : {}) }, contentMd: bibleMarkdown(p.bible) + (p.sources?.length ? `\n\n## 출처 (인터넷 검색)\n${p.sources.map((x, i) => `${i + 1}. ${x.title ? `${x.title} — ` : ""}${x.url}`).join("\n")}\n` : ""), conceptBriefId: input.concept_brief_id },
         agent,
       );
       const req = await ports.requestApproval(tx, scope, {
@@ -114,7 +128,10 @@ export function createPlanning(m: ManuscriptInternals, getService: () => import(
   };
 
   // ── P0 schedule_episodes (showrunner; deterministic) ──
-  const scheduleEpisodes: PipelineHandler<import("../domain/schemas.js").ScheduleEpisodesInput, { arc: { ord: number; title: string; from: number; to: number; summary: string } | null }> = {
+  const scheduleEpisodes: PipelineHandler<
+    import("../domain/schemas.js").ScheduleEpisodesInput,
+    { arc: { ord: number; title: string; from: number; to: number; summary: string } | null; planArcId?: string | null; note?: string }
+  > = {
     kind: "schedule_episodes",
     role: "showrunner",
     promptTemplateVersion: "code.schedule_episodes@0.1.0",
@@ -127,6 +144,18 @@ export function createPlanning(m: ManuscriptInternals, getService: () => import(
       const goal = await novel.getGoal(scope);
       if (!bible || !goal) return { arc: null };
       const arcs = (await novel.listArcs(scope)).filter((a) => a.status !== "cancelled");
+      // 설계 추가: with a story structure the plots already exist (created on approval) — plan the next one
+      const st = await novel.getStructure(scope);
+      if (st || !arcs.length) {
+        if (!st || st.status !== "approved") return { arc: null, note: "no_approved_structure" };
+        const eps = await repo.listEpisodes(platform.uow.db, scope);
+        const count = (id: string) => eps.filter((e) => e.arcId === id).length;
+        const active = await orchestration.listTasks(scope, { kinds: ["plan_arc"], statuses: ["pending", "ready", "running", "blocked"], limit: 50 });
+        const inPlanning = arcs.some((a) => a.status === "plan_awaiting_approval" || (a.status === "planned" && (count(a.id) > 0 || active.some((t) => t.targetId === a.id))));
+        if (inPlanning || arcs.some((a) => (a.planFlags ?? []).length)) return { arc: null, note: "plot_in_planning" };
+        const next = arcs.filter((a) => a.status === "planned" && count(a.id) === 0).sort((a, b) => a.plannedEpisodeFrom - b.plannedEpisodeFrom)[0];
+        return { arc: null, planArcId: next?.id ?? null, note: next ? undefined : "all_plots_planned" };
+      }
       if (arcs.some((a) => a.status === "planned" || a.status === "plan_awaiting_approval")) return { arc: null }; // next arc already being planned
       const ord = arcs.reduce((n, a) => Math.max(n, a.ord), 0) + 1;
       const from = arcs.reduce((n, a) => Math.max(n, a.plannedEpisodeTo), 0) + 1;
@@ -137,6 +166,14 @@ export function createPlanning(m: ManuscriptInternals, getService: () => import(
       return { arc: { ord, title: outline?.title ?? `${ord}부`, from, to, summary: outline?.summary ?? "" } };
     },
     async commit(tx, run, _input, p) {
+      if (p.planArcId) {
+        const scope = { novelId: run.novelId };
+        const agent = actors.agent("showrunner", run.runId);
+        const arc = await novel.getArc(scope, p.planArcId, tx);
+        if (arc.status !== "planned") return { kind: "done", outputRefs: [] };
+        await ports.createTask(tx, scope, { kind: "plan_arc", targetType: "arc", targetId: arc.id, arcId: arc.id, input: { arc_id: arc.id }, createdBy: agent, priority: 400 });
+        return { kind: "done", outputRefs: [{ refType: "arc", refId: arc.id }] };
+      }
       if (!p.arc) return { kind: "done", outputRefs: [] };
       const scope = { novelId: run.novelId };
       const agent = actors.agent("showrunner", run.runId);
@@ -152,20 +189,45 @@ export function createPlanning(m: ManuscriptInternals, getService: () => import(
   };
 
   // ── B3 plan_arc ──
-  const planArc: PipelineHandler<import("../domain/schemas.js").PlanArcInput, { plan: ArcPlanProposal; modelId: string }> = {
+  const planArc: PipelineHandler<import("../domain/schemas.js").PlanArcInput, { plan: ArcPlanProposal; modelId: string; newCharacters: PlotCharacterDraft[] }> = {
     kind: "plan_arc",
     role: "planner",
     promptTemplateVersion: "planner.plan_arc@0.1.0",
     inputSchema: planArcInputSchema,
     allowedWrites: ["novel.updateArc", "manuscript.createPlannedEpisodes", "orchestration.createTask", "hitl.requestApproval"],
-    context: async () => null,
+    // 설계 추가: an unapproved story structure blocks plot planning (ST2 unblocks it)
+    async gate(scope) {
+      const st = await novel.getStructure(scope);
+      if (!st || st.status === "approved") return { ok: true as const };
+      return { ok: false as const, blockReason: "approval" as const, blockedRef: structureGateRef(scope) };
+    },
+    async context(input, task) {
+      const scope = { novelId: task.novelId };
+      const arc = await soft(() => novel.getArc(scope, input.arc_id), null);
+      const roster = await cast().roster(scope);
+      const entityIds = (arc?.involvedCharacterIds ?? []).map((id) => roster.find((r) => r.id === id)?.entityId).filter((x): x is string => !!x);
+      return { anchor: { storyPoint: (arc?.plannedEpisodeFrom ?? 0) * 1000, timelineId: "" }, sections: ["cast", "story_plan"], arcId: input.arc_id, seeds: { entityIds, setupIds: [], answerIds: input.answer_ids ?? [], mentionIds: [] } };
+    },
     async execute(run, input, context, llm) {
       const scope = { novelId: run.novelId };
       const arc = await novel.getArc(scope, input.arc_id);
       const bible = await novel.getApprovedBible(scope);
-      const outline = ((bible?.content as { arc_outline?: Array<{ title: string; summary?: string }> })?.arc_outline ?? [])[arc.ord - 1];
-      const previous = (await novel.listArcs(scope)).filter((a) => a.ord < arc.ord && a.status !== "cancelled").map((a) => ({ title: a.title, goal: a.goalText, end: a.endCondition }));
-      const data = JSON.stringify({ arc: { ord: arc.ord, title: arc.title, from: arc.plannedEpisodeFrom, to: arc.plannedEpisodeTo }, bible: bible ? { logline: bible.logline, synopsis: bible.synopsis, arcOutline: outline } : null, previous, rejectionNote: input.rejection_note ?? null });
+      const st = await novel.getStructure(scope);
+      const part = st && arc.partId ? st.parts.find((x) => x.id === arc.partId) : undefined;
+      const roster = await cast().roster(scope);
+      const profile = await m.lengthProfile(scope);
+      const outline = part ? undefined : ((bible?.content as { arc_outline?: Array<{ title: string; summary?: string }> })?.arc_outline ?? [])[arc.ord - 1];
+      const previous = (await novel.listArcs(scope)).filter((a) => a.ord < arc.ord && a.status !== "cancelled").map((a) => ({ title: a.title, goal: a.goalText, end: a.endCondition, change: a.changeText }));
+      const data = JSON.stringify({
+        arc: { ord: arc.ord, title: arc.title, from: arc.plannedEpisodeFrom, to: arc.plannedEpisodeTo, coreEvent: arc.coreEvent },
+        part: part ? { ord: part.ord, title: part.title, goal: part.goalText, turningPoints: part.turningPoints, from: part.plannedEpisodeFrom, to: part.plannedEpisodeTo } : null,
+        bible: bible ? { logline: bible.logline, synopsis: bible.synopsis, arcOutline: outline } : null,
+        roster: roster.map((r) => ({ id: r.id, name: r.name, role: r.role, firstAppearanceEpisodeNo: r.firstAppearanceEpisodeNo })),
+        episodeLength: { minChars: profile.minChars, maxChars: profile.maxChars, basis: profile.countBasis },
+        maxScenesPerEpisode: cfg.maxScenes,
+        previous,
+        rejectionNote: input.rejection_note ?? null,
+      });
       const out = await llm.call({
         run,
         purpose: "plan_arc",
@@ -175,28 +237,67 @@ export function createPlanning(m: ManuscriptInternals, getService: () => import(
       const v = out.value as ArcPlanProposal;
       const synth = synthArcPlan(arc, outline ? { title: outline.title, summary: outline.summary ?? "" } : undefined);
       const byNo = new Map(v.episodes.filter((e) => e.episode_no >= arc.plannedEpisodeFrom && e.episode_no <= arc.plannedEpisodeTo).map((e) => [e.episode_no, e]));
+      const known = new Set(roster.map((r) => r.id));
+      const clampScenes = (n: number | null) => (n === null || !Number.isFinite(n) ? Math.min(cfg.maxScenes, 3) : Math.min(cfg.maxScenes, Math.max(1, Math.round(n))));
+      const clampTarget = (n: number | null) => Math.min(profile.maxChars, Math.max(profile.minChars, n ?? Math.round((profile.minChars + profile.maxChars) / 2)));
       const plan: ArcPlanProposal = {
         title: v.title || synth.title,
         goal_text: v.goal_text || synth.goal_text,
         conflict_text: v.conflict_text || synth.conflict_text,
         end_condition: v.end_condition || synth.end_condition,
-        episodes: synth.episodes.map((e) => ({ ...e, ...(byNo.get(e.episode_no) ?? {}) })), // INV-ARC-01: only the arc range
+        core_event: v.core_event || arc.coreEvent,
+        involved_character_ids: [...new Set(v.involved_character_ids.filter((id) => known.has(id)))],
+        change_text: v.change_text,
+        setup_plan: { plant: v.setup_plan.plant.filter((x) => x.trim()).slice(0, 20), payoff: v.setup_plan.payoff.filter((x) => x.trim()).slice(0, 20) },
+        new_characters: [],
+        // INV-ARC-01: only the arc range
+        episodes: synth.episodes.map((e) => {
+          const got = byNo.get(e.episode_no);
+          const merged = { ...e, ...(got ?? {}) };
+          return { ...merged, scene_count: clampScenes(merged.scene_count), target_chars: clampTarget(merged.target_chars) };
+        }),
       };
-      return { plan, modelId: out.modelId };
+      const names = new Set(roster.map((r) => r.name.replace(/\s+/g, "")));
+      const newCharacters: PlotCharacterDraft[] = v.new_characters
+        .filter((c) => c.name.trim() && !names.has(c.name.replace(/\s+/g, "")))
+        .slice(0, 8)
+        .map((c) => ({
+          name: c.name.trim(),
+          role: c.role,
+          age: c.age,
+          appearance: c.appearance,
+          personality: c.personality,
+          desire: c.desire,
+          motivation: c.motivation,
+          weakness: c.weakness,
+          background: c.background,
+          speechSample: c.speech_sample,
+          arcStart: c.arc_start,
+          arcEnd: c.arc_end,
+          storyRole: c.story_role,
+          relationToProtagonist: c.relation_to_protagonist,
+          firstAppearanceEpisodeNo:
+            c.first_appearance_episode_no && c.first_appearance_episode_no >= arc.plannedEpisodeFrom && c.first_appearance_episode_no <= arc.plannedEpisodeTo ? c.first_appearance_episode_no : arc.plannedEpisodeFrom,
+        }));
+      return { plan, modelId: out.modelId, newCharacters };
     },
     async commit(tx, run, input, p) {
       const scope = { novelId: run.novelId };
       const agent = actors.agent("planner", run.runId);
       const arc = await novel.getArc(scope, input.arc_id, tx);
-      if (arc.status !== "planned") return { kind: "done", outputRefs: [] }; // already decided elsewhere
-      await novel.updateArc(scope, arc.id, { title: p.plan.title, goalText: p.plan.goal_text, conflictText: p.plan.conflict_text, endCondition: p.plan.end_condition }, agent, tx);
-      const eps = await getService().createPlannedEpisodes(
-        tx,
-        scope,
-        arc.id,
-        p.plan.episodes.map((e) => ({ episodeNo: e.episode_no, title: e.title, hookNote: e.hook_note })),
-        agent,
-      );
+      const replanActive = input.replan === true && arc.status === "active";
+      if (arc.status !== "planned" && !replanActive) return { kind: "done", outputRefs: [] }; // already decided elsewhere
+      if (replanActive) {
+        // a running plot's new plan is applied only after the author approves it (any level but full_auto)
+        const n = await novel.getNovel(scope, tx);
+        if (n.autonomyLevel !== "full_auto") {
+          await requestReplanApproval(tx, scope, arc, p, agent, run.taskId);
+          return { kind: "done", outputRefs: [{ refType: "arc", refId: arc.id }] };
+        }
+        await applyArcPlan(tx, scope, arc, p, agent);
+        return { kind: "done", outputRefs: [{ refType: "arc", refId: arc.id }] };
+      }
+      const eps = await applyArcPlan(tx, scope, arc, p, agent);
       if (ports.isRegistered("plan_setups")) {
         await ports.createTask(tx, scope, { kind: "plan_setups", targetType: "arc", targetId: arc.id, arcId: arc.id, input: { arc_id: arc.id }, createdBy: agent, priority: 400 });
       } else {
@@ -206,13 +307,88 @@ export function createPlanning(m: ManuscriptInternals, getService: () => import(
     },
   };
 
+  type ArcPlanResult = { plan: ArcPlanProposal; modelId: string; newCharacters: PlotCharacterDraft[] };
+
+  /** writes a plan_arc proposal: plot fields, planned episodes, the characters it introduces (also listed as involved) */
+  const applyArcPlan = async (tx: Tx, scope: NovelScope, arc: Arc, p: ArcPlanResult, actor: ActorRef) => {
+    const introduced = p.newCharacters.length ? (await cast().proposePlotCharacters(tx, scope, arc.id, p.newCharacters, actor)).characterIds : [];
+    await novel.updateArc(
+      scope,
+      arc.id,
+      {
+        title: p.plan.title,
+        goalText: p.plan.goal_text,
+        conflictText: p.plan.conflict_text,
+        endCondition: p.plan.end_condition,
+        coreEvent: p.plan.core_event,
+        involvedCharacterIds: [...new Set([...p.plan.involved_character_ids, ...introduced])],
+        changeText: p.plan.change_text,
+        setupPlan: p.plan.setup_plan,
+      },
+      actor,
+      tx,
+    );
+    const eps = await getService().createPlannedEpisodes(
+      tx,
+      scope,
+      arc.id,
+      p.plan.episodes.map((e) => ({ episodeNo: e.episode_no, title: e.title, hookNote: e.hook_note, planSummary: e.summary, plannedSceneCount: e.scene_count, targetChars: e.target_chars })),
+      actor,
+    );
+    // first appearances of the involved cast (new characters carry their own)
+    const roster = await cast().roster(scope, tx);
+    const firsts = p.plan.involved_character_ids
+      .filter((id) => roster.find((r) => r.id === id && r.firstAppearanceEpisodeNo === null))
+      .map((characterId) => ({ characterId, episodeNo: arc.plannedEpisodeFrom }));
+    if (firsts.length) await cast().applyFirstAppearances(tx, scope, firsts, actor);
+    if ((arc.planFlags ?? []).length) await novel.setArcPlanFlags(tx, scope, arc.id, [], actor);
+    return eps;
+  };
+
+  /** a re-plan of a running plot waits for the author: the proposal travels in the arc_plan approval payload */
+  const requestReplanApproval = async (tx: Tx, scope: NovelScope, arc: Arc, p: ArcPlanResult, actor: ActorRef, taskId: string | null) => {
+    const eps = (await repo.listEpisodes(tx.db, scope, { arcId: arc.id })).filter((e) => e.status === "planned");
+    const planned = new Set(eps.map((e) => e.episodeNo));
+    const lines = p.plan.episodes
+      .filter((e) => planned.has(e.episode_no))
+      .slice(0, 20)
+      .map((e) => `- ${e.episode_no}화${e.title ? ` ${e.title}` : ""}${e.summary ? `: ${e.summary}` : ""} (씬 ${e.scene_count ?? "?"}개, 목표 ${e.target_chars ?? "?"}자)`);
+    return ports.requestApproval(tx, scope, {
+      approvalType: "arc_plan",
+      target: { type: "arc", id: arc.id },
+      question: {
+        title: `「${p.plan.title || arc.title}」 플롯 재계획 승인 요청`,
+        body: [
+          `진행 중인 플롯 「${arc.title}」(${arc.plannedEpisodeFrom}~${arc.plannedEpisodeTo}화)의 새 계획입니다. 승인하면 아직 아웃라인을 쓰지 않은 화의 계획만 바뀌고, 반려하면 지금 계획을 유지합니다.`,
+          "",
+          `핵심 사건: ${p.plan.core_event || "-"}`,
+          `만들어 낼 변화: ${p.plan.change_text || "-"}`,
+          ...(p.newCharacters.length ? [`새 인물 제안: ${p.newCharacters.map((c) => c.name).join(", ")}`] : []),
+          "",
+          ...(lines.length ? lines : ["(바뀌는 화 계획이 없습니다)"]),
+        ].join("\n"),
+        links: [{ type: "arc", id: arc.id }],
+      },
+      requestedBy: actor,
+      taskId,
+      payload: { replan: p },
+    });
+  };
+
   // ── AR1 / AR4 ──
   const requestArcPlanApproval = async (tx: Tx, scope: NovelScope, arcId: string, actor: ActorRef) => {
     const arc = await novel.getArc(scope, arcId, tx);
     if (arc.status !== "planned") return { approvalId: arc.planApprovalId ?? null };
+    // 설계 추가: plots wait for the approved structure; the plot's new characters must be complete first
+    const st = await novel.getStructure(scope, tx);
+    if (st && st.status !== "approved") return { approvalId: null };
+    const gaps = await cast().completeness(scope, { scope: "arc", arcId }, tx);
     const n = await novel.getNovel(scope, tx);
+    if (!gaps.complete) await cast().requestFill(tx, scope, gaps.items.filter((i) => i.missing.length).map((i) => i.characterId), actor);
     if (n.autonomyLevel === "full_auto") {
+      if (!gaps.complete) return { approvalId: null }; // stays planned until the new characters are filled and accepted
       await novel.transitionArc(tx, scope, arcId, "active", actor, { reason: "full_auto: 계획 승인 없이 시작" }); // AR4
+      await cast().confirmPlotCharacters(tx, scope, arcId, actor);
       return { approvalId: null };
     }
     const eps = await repo.listEpisodes(tx.db, scope, { arcId });
@@ -220,14 +396,15 @@ export function createPlanning(m: ManuscriptInternals, getService: () => import(
       approvalType: "arc_plan",
       target: { type: "arc", id: arcId },
       question: {
-        title: `${arc.ord}번째 아크 계획 승인 요청`,
-        body: `${arc.title} (${arc.plannedEpisodeFrom}~${arc.plannedEpisodeTo}화)\n목표: ${arc.goalText}\n갈등: ${arc.conflictText}\n종료 조건: ${arc.endCondition}\n\n${eps
+        title: `「${arc.title}」 플롯 계획 승인 요청`,
+        body: `${arc.title} (${arc.plannedEpisodeFrom}~${arc.plannedEpisodeTo}화)\n${arc.coreEvent ? `핵심 사건: ${arc.coreEvent}\n` : ""}목표: ${arc.goalText}\n갈등: ${arc.conflictText}\n종료 조건: ${arc.endCondition}${arc.changeText ? `\n만들어 낼 변화: ${arc.changeText}` : ""}\n\n${eps
           .slice(0, 20)
-          .map((e) => `- ${e.episodeNo}화${e.title ? ` ${e.title}` : ""}${e.hookNote ? `: ${e.hookNote}` : ""}`)
-          .join("\n")}`,
-        links: [{ type: "arc", id: arcId }],
+          .map((e) => `- ${e.episodeNo}화${e.title ? ` ${e.title}` : ""}${e.planSummary ? `: ${e.planSummary}` : e.hookNote ? `: ${e.hookNote}` : ""}${e.plannedSceneCount ? ` (씬 ${e.plannedSceneCount}개, 목표 ${e.targetChars ?? "?"}자)` : ""}`)
+          .join("\n")}${gaps.complete ? "" : `\n\n⚠ 이 플롯에 새로 등장하는 인물을 캐릭터 화면에서 확인해야 승인할 수 있습니다.\n${gaps.message}`}`,
+        links: [{ type: "arc", id: arcId }, ...gaps.items.map((i) => ({ type: "character" as const, id: i.characterId }))],
       },
       requestedBy: actor,
+      ...(gaps.complete ? {} : { payload: { castIncomplete: true, characterIds: gaps.items.map((i) => i.characterId) } }),
     });
     await novel.transitionArc(tx, scope, arcId, "plan_awaiting_approval", actor, req.approvalId ? { planApprovalId: req.approvalId } : {});
     return { approvalId: req.approvalId };
@@ -248,7 +425,15 @@ export function createPlanning(m: ManuscriptInternals, getService: () => import(
           await ports.createTask(tx, scope, { kind: "build_initial_ontology", targetType: "novel", targetId: scope.novelId, input: { series_bible_id: bible.id }, createdBy: actor, priority: 400 });
         }
         const goal = await novel.getGoal(scope, tx);
-        if (goal) await ports.createTask(tx, scope, { kind: "schedule_episodes", targetType: "goal", targetId: goal.id, input: { goal_id: goal.id, reason: "bible_approved" }, createdBy: actor, priority: 400 });
+        // 설계 추가: 기획서 → 전체 구성(plan_structure, cast completeness gate) → 승인 → 플롯. 0008 이전 작품(구성 없이 아크가 있음)은 기존 경로
+        const st = await novel.getStructure(scope, tx);
+        const legacy = !st && (await novel.listArcs(scope, tx)).some((a) => a.status !== "cancelled");
+        if (goal && (legacy || st?.status === "approved")) {
+          await ports.createTask(tx, scope, { kind: "schedule_episodes", targetType: "goal", targetId: goal.id, input: { goal_id: goal.id, reason: "bible_approved" }, createdBy: actor, priority: 400 });
+        } else if (goal && !st) {
+          const g = await structure.gate(scope, tx);
+          if (!g.reasons.some((r) => r.code !== "bible_not_approved")) await structure.createPlanStructureTask(tx, scope, { scope: "all" }, actor);
+        }
       } else {
         await novel.transitionBible(tx, scope, bible.id, "draft", actor, { approvalId: approval.id, reason: ctx.decisionNote ?? undefined }); // B3
         await ports.createTask(tx, scope, {
@@ -265,9 +450,20 @@ export function createPlanning(m: ManuscriptInternals, getService: () => import(
     async arc_plan(ctx) {
       const { tx, scope, approval, actor } = ctx;
       const arc = await novel.getArc(scope, approval.subjectId, tx);
+      const replan = (approval.payload as { replan?: ArcPlanResult } | null)?.replan;
+      if (replan) {
+        // re-plan of a running plot: approve = apply the stored proposal, reject = keep the current plan
+        if (arc.status === "active" && ctx.decision === "approved") await applyArcPlan(tx, scope, arc, replan, actor);
+        await unblock(tx, scope, approval.id);
+        tx.afterCommit(() => platform.workSignal.notify("wake", scope.novelId));
+        return;
+      }
       if (arc.status !== "plan_awaiting_approval") return;
       if (ctx.decision === "approved") {
+        const gaps = await cast().completeness(scope, { scope: "arc", arcId: arc.id }, tx);
+        if (!gaps.complete) throw new DomainValidationError("plot_cast_incomplete", gaps.message, { items: gaps.items });
         await novel.transitionArc(tx, scope, arc.id, "active", actor, { planApprovalId: approval.id }); // AR2
+        await cast().confirmPlotCharacters(tx, scope, arc.id, actor);
       } else {
         await novel.transitionArc(tx, scope, arc.id, "planned", actor, { reason: ctx.decisionNote ?? undefined }); // AR3
         await ports.createTask(tx, scope, { kind: "plan_arc", targetType: "arc", targetId: arc.id, arcId: arc.id, input: { arc_id: arc.id, rejection_note: ctx.decisionNote ?? null }, createdBy: actor, priority: 400 });
@@ -292,9 +488,19 @@ export function createPlanning(m: ManuscriptInternals, getService: () => import(
       const arc = await novel.getArc(scope, approval.subjectId, tx);
       const eps = (await repo.listEpisodes(tx.db, scope, { arcId: arc.id })).filter((e) => e.status === "awaiting_approval");
       if (ctx.decision === "approved") {
-        for (const e of eps) await m.approveInTx(tx, scope, e.id, actor, approval.id);
+        // 설계 추가: an under-floor episode is never approved in bulk — it keeps its own "분량 미달" approval request
+        const basis = (await m.lengthProfile(scope, tx)).countBasis;
+        const short = new Set<string>();
+        for (const e of eps) {
+          const v = e.currentVersionId ? await repo.getVersion(tx.db, scope, e.currentVersionId) : null;
+          if (v && belowFloorByCounts(v, basis)) short.add(e.id);
+        }
+        for (const e of eps) if (!short.has(e.id)) await m.approveInTx(tx, scope, e.id, actor, approval.id);
         const fresh = await novel.getArc(scope, arc.id, tx);
-        if (fresh.status === "awaiting_approval") await novel.transitionArc(tx, scope, arc.id, "completed", actor, { arcApprovalId: approval.id }); // AR7
+        if (fresh.status === "awaiting_approval") {
+          if (short.size) await novel.transitionArc(tx, scope, arc.id, "active", actor, { reason: "분량 미달 화는 따로 승인합니다" }); // AR6
+          else await novel.transitionArc(tx, scope, arc.id, "completed", actor, { arcApprovalId: approval.id }); // AR7
+        }
       } else {
         if (arc.status === "awaiting_approval") await novel.transitionArc(tx, scope, arc.id, "active", actor, { reason: ctx.decisionNote ?? undefined }); // AR6
         for (const e of eps) {
@@ -351,11 +557,17 @@ export function createPlanning(m: ManuscriptInternals, getService: () => import(
       for (const arc of arcs.filter((a) => a.status === "active")) {
         const eps = await repo.listEpisodes(platform.uow.db, scope, { arcId: arc.id });
         if (!eps.length || !eps.every((e) => e.status === "awaiting_approval")) continue;
+        const short = (await getService().withLengthFlags(scope, eps)).filter((e) => e.lengthBelowFloor);
+        if (short.length === eps.length) continue; // only under-floor episodes: each keeps its own approval request
         await platform.uow.run(async (tx) => {
           const req = await ports.requestApproval(tx, scope, {
             approvalType: "arc",
             target: { type: "arc", id: arc.id },
-            question: { title: `${arc.ord}번째 아크 승인 요청`, body: `${arc.title}의 ${eps.length}개 화가 모두 승인 대기입니다.`, links: [{ type: "arc", id: arc.id }] },
+            question: {
+              title: `「${arc.title}」 플롯 승인 요청`,
+              body: `${arc.title}의 ${eps.length}개 화가 모두 승인 대기입니다.${short.length ? `\n\n⚠ 분량 미달(${EPISODE_HARD_MIN_CHARS.toLocaleString("ko-KR")}자 미만): ${short.map((e) => `${e.episodeNo}화`).join(", ")} — 일괄 승인에서 빠지며 화마다 따로 승인해야 합니다.` : ""}`,
+              links: [{ type: "arc", id: arc.id }],
+            },
             requestedBy: scheduler,
           });
           await novel.transitionArc(tx, scope, arc.id, "awaiting_approval", scheduler, req.approvalId ? { arcApprovalId: req.approvalId } : {});
@@ -368,7 +580,16 @@ export function createPlanning(m: ManuscriptInternals, getService: () => import(
     const reserve = await getService().reserveSummary(scope);
     result.reserve = reserve;
     let inFlight = all.filter((e) => IN_FLIGHT_STATUSES.includes(e.status)).length;
-    const startable = (arc: Arc | undefined) => !!arc && !arc.pausedAt && (arc.status === "active" || (n.autonomyLevel === "full_auto" && arc.status === "planned"));
+    const st = await novel.getStructure(scope);
+    // plots with a structure change flag get no new outline (the user re-plans or keeps the plot first); an edited
+    // structure waiting for re-approval stops new outlines too (the writing context would carry the unapproved ending)
+    const structureOk = !st || st.status === "approved";
+    const startable = (arc: Arc | undefined) =>
+      structureOk &&
+      !!arc &&
+      !arc.pausedAt &&
+      !(arc.planFlags ?? []).length &&
+      (arc.status === "active" || (n.autonomyLevel === "full_auto" && arc.status === "planned" && !arc.partId));
     const arcById = new Map(arcs.map((a) => [a.id, a]));
     for (const ep of all.filter((e) => e.status === "planned")) {
       if (inFlight >= cfg.maxEpisodesInFlight || reserve.includingAwaiting + inFlight >= reserve.target) break;
@@ -398,10 +619,13 @@ export function createPlanning(m: ManuscriptInternals, getService: () => import(
     result.inFlight = inFlight;
 
     // next arc via schedule_episodes when the planned queue runs short (04 §3.4 step 4)
-    const planning = arcs.some((a) => a.status === "planned" || a.status === "plan_awaiting_approval");
+    const epsOf = (arcId: string) => all.filter((e) => e.arcId === arcId).length;
+    const planning = st
+      ? st.status !== "approved" || arcs.some((a) => a.status === "plan_awaiting_approval" || (a.status === "planned" && (epsOf(a.id) > 0 || hasActive("plan_arc", a.id))))
+      : !arcs.length || arcs.some((a) => a.status === "planned" || a.status === "plan_awaiting_approval"); // no structure and no arcs: waits for plan_structure
     const remaining = all.filter((e) => e.status === "planned" && startable(arcById.get(e.arcId))).length;
     const maxPlanned = arcs.reduce((x, a) => Math.max(x, a.plannedEpisodeTo), 0);
-    const goalOpen = !goal.totalEpisodesMax || maxPlanned < goal.totalEpisodesMax;
+    const goalOpen = st ? arcs.some((a) => a.status === "planned" && epsOf(a.id) === 0) : !goal.totalEpisodesMax || maxPlanned < goal.totalEpisodesMax;
     if (!planning && goalOpen && remaining < reserve.target && !hasActive("schedule_episodes", goal.id)) {
       const taskId = await platform.uow.run((tx) =>
         ports.createTask(tx, scope, { kind: "schedule_episodes", targetType: "goal", targetId: goal.id, input: { goal_id: goal.id, reason: "reserve_low" }, createdBy: scheduler, priority: 400 }),

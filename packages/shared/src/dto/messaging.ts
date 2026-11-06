@@ -6,8 +6,12 @@ import { z } from "zod";
 import { ENUMS } from "../enum-registry.js";
 import { isoDateTime } from "./common.js";
 
+/** bot kinds that can be registered (Telegram long polling, Discord Gateway) */
+export const messagingBotKindSchema = z.enum(["telegram", "discord"]);
+export type MessagingBotKind = z.infer<typeof messagingBotKindSchema>;
+
 export const messagingRegisterBotRequestSchema = z.object({
-  kind: z.literal("telegram"),
+  kind: messagingBotKindSchema,
   label: z.string().trim().min(1).max(80),
   token: z.string().trim().min(10).max(200),
   receiveMode: z.enum(ENUMS.telegram_receive_mode).optional(),
@@ -24,6 +28,10 @@ export const messagingBotDtoSchema = z.object({
   lastConnectedAt: isoDateTime.nullable(),
   createdAt: isoDateTime,
   updatedAt: isoDateTime,
+  /** bot username when known (not secret) */
+  username: z.string().nullable().optional(),
+  /** Discord OAuth2 invite URL (scopes bot + applications.commands, no permissions); null for Telegram */
+  inviteUrl: z.string().nullable().optional(),
 });
 export type MessagingBotDto = z.infer<typeof messagingBotDtoSchema>;
 
@@ -44,7 +52,7 @@ export const messagingChannelDtoSchema = z.object({
 export type MessagingChannelDto = z.infer<typeof messagingChannelDtoSchema>;
 
 export const messagingIssueBindingRequestSchema = z.object({
-  kind: z.literal("telegram"),
+  kind: messagingBotKindSchema,
   botId: z.string().regex(/^bot_/),
 });
 export type MessagingIssueBindingRequest = z.infer<typeof messagingIssueBindingRequestSchema>;
@@ -53,7 +61,7 @@ export const messagingBindingTokenDtoSchema = z.object({
   /** plaintext, shown once (DB keeps only the hash) — user sends `/start <token>` */
   token: z.string(),
   expiresAt: isoDateTime,
-  /** `https://t.me/<bot>?start=<token>` when the bot username is known */
+  /** Telegram: `https://t.me/<bot>?start=<token>` when the bot username is known; Discord: `https://discord.com/users/<botId>` (DM `/start <token>`) */
   deepLink: z.string().nullable(),
 });
 export type MessagingBindingTokenDto = z.infer<typeof messagingBindingTokenDtoSchema>;

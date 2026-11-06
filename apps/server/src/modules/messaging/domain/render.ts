@@ -10,6 +10,8 @@ export interface RenderedMessage {
   buttons: Array<Array<{ label: string; data: string }>>;
   forceReply?: boolean;
   replyToRef?: string | null;
+  /** Discord split messages: parts before this index were already delivered (set by the outbox on a partial 429) */
+  resumeFromPart?: number;
 }
 
 export interface ChannelCapabilities {

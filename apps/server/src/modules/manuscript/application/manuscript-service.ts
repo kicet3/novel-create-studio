@@ -18,7 +18,8 @@ import { computeSpans, coversExactly, initialSpans, lineAttribution } from "../d
 import { diffText } from "../domain/diff.js";
 import { decideGate } from "../domain/gate.js";
 import { retainSceneIds, storyPoint } from "../domain/scenes.js";
-import { checkLength, countChars, normalizeText } from "../domain/text.js";
+import { belowFloorByCounts, checkLength, countBasisLabel, countChars, normalizeText, type LengthCheck } from "../domain/text.js";
+import { EPISODE_HARD_MIN_CHARS } from "@ncs/shared";
 import { findEpisodeRule, HUMAN_EDITABLE_STATUSES } from "../domain/transitions.js";
 import type {
   AttributionSpan,
@@ -64,7 +65,7 @@ export interface ManuscriptInternals {
   /** post-gate step: E6 then polish task, or straight to E8 when the checked version is already polished */
   afterGatePass(tx: Tx, scope: NovelScope, ep: Episode, actor: ActorRef): Promise<"polish_episode" | "awaiting_approval">;
   /** E8 + approval request (or full_auto E9(c)) */
-  enterAwaitingApproval(tx: Tx, scope: NovelScope, episodeId: string, actor: ActorRef, summary: { lengthWarning: string | null }): Promise<Episode>;
+  enterAwaitingApproval(tx: Tx, scope: NovelScope, episodeId: string, actor: ActorRef, summary: { lengthWarning: string | null; length?: LengthCheck | null }): Promise<Episode>;
 }
 
 export function createManuscriptService(ports: Ports): { service: ManuscriptService; internals: ManuscriptInternals } {
@@ -171,7 +172,7 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
       action: "manuscript.version_created",
       target: { type: "manuscript_version", id },
       after: { episodeId, versionNo, kind: input.kind, stage: version.stage, charCountWithSpaces: version.charCountWithSpaces, charCountWithoutSpaces: version.charCountWithoutSpaces },
-      details: { parentVersionId: parent?.id ?? null, lengthDeviation: length?.deviation ?? null, humanSpansChanged },
+      details: { parentVersionId: parent?.id ?? null, lengthDeviation: length?.deviation ?? null, belowFloor: length?.belowFloor ?? null, humanSpansChanged },
     });
     if (humanSpansChanged) {
       // INV-MV-03: an agent version changed user-written text → high issue, never confirmed without approval
@@ -265,6 +266,9 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
     if (ep.status !== "awaiting_approval") throw new InvalidTransitionError("episode", ep.status, "approved");
     if (!ep.currentVersionId) throw new DomainValidationError("no_version", "승인할 원고 버전이 없습니다.");
     const source = await mustVersion(tx, scope, ep.currentVersionId);
+    if (actor.type !== "user" && belowFloorByCounts(source, (await lengthProfile(scope, tx)).countBasis)) {
+      throw new DomainValidationError("length_below_floor", "분량 미달(3,000자 미만) 원고는 자동 승인할 수 없습니다."); // 설계 추가 L11
+    }
     const final = await saveVersion(tx, scope, episodeId, {
       kind: "final",
       content: source.content,
@@ -314,6 +318,9 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
   const publishInTx = async (tx: Tx, scope: NovelScope, episodeId: string, actor: ActorRef) => {
     const ep = await mustEpisode(tx, scope, episodeId, true);
     if (ep.status !== "approved" || !ep.approvedVersionId) throw new InvalidTransitionError("episode", ep.status, "published");
+    if (actor.type !== "user" && belowFloorByCounts(await mustVersion(tx, scope, ep.approvedVersionId), (await lengthProfile(scope, tx)).countBasis)) {
+      throw new DomainValidationError("length_below_floor", "분량 미달(3,000자 미만) 원고는 자동 공개할 수 없습니다."); // 설계 추가 L12
+    }
     const updated = await transition(tx, scope, episodeId, "published", actor, {
       ruleId: "E13",
       patch: { publishedVersionId: ep.approvedVersionId, publishedAt: clock.date(), publishedByActorType: actor.type, publishedByActorId: actor.id }, // INV-EP-03
@@ -392,17 +399,24 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
   };
 
   // ── E8 entry ────────────────────────────────────────────────────────
-  const enterAwaitingApproval = async (tx: Tx, scope: NovelScope, episodeId: string, actor: ActorRef, summary: { lengthWarning: string | null }) => {
+  const enterAwaitingApproval = async (tx: Tx, scope: NovelScope, episodeId: string, actor: ActorRef, summary: { lengthWarning: string | null; length?: LengthCheck | null }) => {
     const n = await novel.getNovel(scope, tx);
-    let ep = await transition(tx, scope, episodeId, "awaiting_approval", actor, { ruleId: "E8", details: { lengthWarning: summary.lengthWarning } });
-    if (n.autonomyLevel === "full_auto") {
+    const pre = await mustEpisode(tx, scope, episodeId);
+    const preVersion = pre.currentVersionId ? await mustVersion(tx, scope, pre.currentVersionId) : null;
+    const profile = await lengthProfile(scope, tx);
+    // 설계 추가 L10: under the 3,000-char floor → never auto-approved / auto-published; the user decides this episode alone
+    const belowFloor = summary.length?.belowFloor ?? (preVersion ? belowFloorByCounts(preVersion, profile.countBasis) : false);
+    let ep = await transition(tx, scope, episodeId, "awaiting_approval", actor, { ruleId: "E8", details: { lengthWarning: summary.lengthWarning, belowFloor } });
+    if (n.autonomyLevel === "full_auto" && !belowFloor) {
       // E9(c): gate already guaranteed no open high issue (INV-EP-02); actor recorded as the agent (D-24)
       return approveInTx(tx, scope, episodeId, actor.type === "agent" ? actor : orchestrator, null);
     }
-    if (n.autonomyLevel === "arc_approval") return ep; // MVP-β: arc approval requested when the whole arc waits
+    if (n.autonomyLevel === "arc_approval" && !belowFloor) return ep; // MVP-β: arc approval requested when the whole arc waits
     const version = ep.currentVersionId ? await mustVersion(tx, scope, ep.currentVersionId) : null;
     const counts = version ? `공백 포함 ${version.charCountWithSpaces}자 / 공백 제외 ${version.charCountWithoutSpaces}자` : "";
+    const floorCount = version ? (profile.countBasis === "without_spaces" ? version.charCountWithoutSpaces : version.charCountWithSpaces) : 0;
     const body = [
+      belowFloor ? `⚠ 분량 미달: ${countBasisLabel(profile.countBasis)} ${floorCount.toLocaleString("ko-KR")}자 (최소 ${EPISODE_HARD_MIN_CHARS.toLocaleString("ko-KR")}자). 자동 승인·공개하지 않습니다.` : null,
       `${ep.episodeNo}화${ep.title ? ` 「${ep.title}」` : ""} 원고가 검사와 다듬기를 마쳤습니다.`,
       ep.hookNote ? `회차 말 훅: ${ep.hookNote}` : null,
       counts ? `분량: ${counts}${summary.lengthWarning ? ` (${summary.lengthWarning})` : ""}` : null,
@@ -414,8 +428,9 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
     const req = await ports.requestApproval(tx, scope, {
       approvalType: "episode",
       target: epRef(episodeId),
-      question: { title: `${ep.episodeNo}화 승인 요청`, body, links: [epRef(episodeId), ...(version ? [{ type: "manuscript_version" as const, id: version.id }] : [])] },
+      question: { title: `${ep.episodeNo}화 승인 요청${belowFloor ? " (분량 미달)" : ""}`, body, links: [epRef(episodeId), ...(version ? [{ type: "manuscript_version" as const, id: version.id }] : [])] },
       requestedBy: actor,
+      ...(belowFloor ? { payload: { lengthBelowFloor: true } } : {}),
     });
     ep = await repo.updateEpisode(tx.db, scope, episodeId, { blockReasons: [...new Set([...ep.blockReasons, "approval" as const])] });
     await audit.record(tx, { novelId: scope.novelId, actor, action: "episode.blocked", target: epRef(episodeId), after: { blockReasons: ep.blockReasons }, approvalId: req.approvalId });
@@ -428,7 +443,7 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
     if (current && current.agentRole === "line_editor") {
       // the checked version is the polished candidate (E7 recheck passed) → E8 right away
       const length = checkLength(current.content, await lengthProfile(scope, tx));
-      await enterAwaitingApproval(tx, scope, ep.id, actor, { lengthWarning: length.deviation ? lengthWarningText(length.deviation) : null });
+      await enterAwaitingApproval(tx, scope, ep.id, actor, { lengthWarning: lengthWarningOf(length), length });
       return "awaiting_approval" as const;
     }
     await ports.createTask(tx, scope, {
@@ -598,12 +613,33 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
         if (existing) {
           if (existing.arcId !== arcId) throw new ConflictError("episode_no_taken", `${e.episodeNo}화는 이미 다른 아크에 있습니다.`); // INV-EP-01
           if (existing.status === "planned") {
-            out.push(await repo.updateEpisode(tx.db, scope, existing.id, { title: e.title ?? existing.title, hookNote: e.hookNote ?? existing.hookNote }));
+            // replan keeps the episode number and replaces only the plan fields (no outline exists yet)
+            out.push(
+              await repo.updateEpisode(tx.db, scope, existing.id, {
+                title: e.title ?? existing.title,
+                hookNote: e.hookNote ?? existing.hookNote,
+                ...(e.planSummary !== undefined ? { planSummary: e.planSummary } : {}),
+                ...(e.plannedSceneCount !== undefined ? { plannedSceneCount: e.plannedSceneCount } : {}),
+                ...(e.targetChars !== undefined ? { targetChars: e.targetChars === null ? null : Math.max(EPISODE_HARD_MIN_CHARS, e.targetChars) } : {}),
+              }),
+            );
           } else out.push(existing);
           continue;
         }
         const [row] = await repo.insertEpisodes(tx.db, [
-          { id: ids.next("epi"), novelId: scope.novelId, arcId, episodeNo: e.episodeNo, title: e.title ?? null, hookNote: e.hookNote ?? null, primaryTimelineId: timelineId, status: "planned" },
+          {
+            id: ids.next("epi"),
+            novelId: scope.novelId,
+            arcId,
+            episodeNo: e.episodeNo,
+            title: e.title ?? null,
+            hookNote: e.hookNote ?? null,
+            primaryTimelineId: timelineId,
+            status: "planned",
+            planSummary: e.planSummary ?? "",
+            plannedSceneCount: e.plannedSceneCount ?? null,
+            targetChars: e.targetChars == null ? null : Math.max(EPISODE_HARD_MIN_CHARS, e.targetChars),
+          },
         ]);
         await audit.record(tx, { novelId: scope.novelId, actor, action: "episode.created", target: epRef(row!.id), after: { episodeNo: e.episodeNo, arcId, status: "planned" } });
         out.push(row!);
@@ -784,6 +820,30 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
     requestArcPlanApproval: () => {
       throw new Error("wired in module.ts");
     },
+    getStructureView: () => {
+      throw new Error("wired in module.ts");
+    },
+    requestStructure: () => {
+      throw new Error("wired in module.ts");
+    },
+    decideStructure: () => {
+      throw new Error("wired in module.ts");
+    },
+    replanArc: () => {
+      throw new Error("wired in module.ts");
+    },
+    registerPlanningCastPort: (port) => {
+      reg.castPort = port;
+    },
+    async withLengthFlags(scope, list) {
+      const basis = (await lengthProfile(scope)).countBasis;
+      const out = [];
+      for (const e of list) {
+        const v = e.currentVersionId ? await repo.getVersion(uow.db, scope, e.currentVersionId) : null;
+        out.push({ ...e, lengthBelowFloor: v ? belowFloorByCounts(v, basis) : false });
+      }
+      return out;
+    },
     schedule: () => {
       throw new Error("wired in module.ts");
     },
@@ -826,6 +886,11 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
   };
 }
 
-export function lengthWarningText(d: "short" | "long"): string {
-  return d === "short" ? "분량 기준보다 짧습니다" : "분량 기준보다 깁니다";
+export function lengthWarningText(d: "short" | "long" | "floor"): string {
+  return d === "floor" ? "분량 미달(최소 3,000자)" : d === "short" ? "분량 기준보다 짧습니다" : "분량 기준보다 깁니다";
+}
+
+/** warning text of a length check: the hard floor first, then the profile deviation */
+export function lengthWarningOf(l: LengthCheck): string | null {
+  return l.belowFloor ? lengthWarningText("floor") : l.deviation ? lengthWarningText(l.deviation) : null;
 }

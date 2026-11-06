@@ -8,6 +8,7 @@ import {
   getPath,
   isEmptyValue,
   normalizeText,
+  sameValue,
   setPath,
   slotState,
   valueToText,
@@ -32,6 +33,16 @@ import {
 import type { ConceptTurnProposal, ImportProposal } from "./proposal.js";
 import { COMMON_1, DEF_BY_PATH, isKnownPath, requiredLevel, requiredPaths, slotLabel } from "./question-set.js";
 import { applyClaim, splitConflicts, writeSlot, type GuardContext, type SlotClaim, type SlotDiff, type StoredOption } from "./slot-guard.js";
+import {
+  addProposal,
+  decisionVerified,
+  promptProposalId,
+  reconcileProposals,
+  settleProposal,
+  yesNoAnswer,
+  type ProposalSettlement,
+} from "./change-proposals.js";
+import type { ChangeProposal, ProposalResolution } from "./brief.js";
 
 export interface TurnMessage {
   id: string;
@@ -43,6 +54,8 @@ export interface TurnMessage {
   pickedIdx: number | null;
   options: StoredOption[] | null;
   askedFieldPaths: string[] | null;
+  /** 설계 추가: posted by the auto-approve mode on the user's behalf (domain/auto-approve.ts) */
+  autoApproved?: boolean;
 }
 
 export interface TurnLimits {
@@ -91,6 +104,8 @@ export interface PlanTurnOutput {
   pauseRequested: boolean;
   extendRequested: boolean;
   formModeRequested: boolean;
+  /** change proposals that left `pending` in this commit (audit trail) */
+  settled: ProposalSettlement[];
 }
 
 const DELEGATE_RE = /알아서|아무거나|추천대로|맡길게|맡겨|맡깁니다|네가 정해|니가 정해|정해\s*줘|추천해\s*줘/;
@@ -98,7 +113,7 @@ const NONE_RE = /^(없음|없어|없어요|아직 없음|모르겠어|몰라)\.?
 
 function newGuard(b: WorkingBrief, input: PlanTurnInput, notices: string[], diffs: Map<string, SlotDiff[]>, changed: Set<string>, copyTitle: string | null): GuardContext {
   return {
-    messages: input.messages.map((m) => ({ id: m.id, body: m.body, channelId: m.channelId, authorKind: m.authorKind })),
+    messages: input.messages.map((m) => ({ id: m.id, body: m.body, channelId: m.channelId, authorKind: m.authorKind, auto: !!m.autoApproved })),
     promptOptions: input.prompt?.options ?? [],
     lists: input.lists,
     copyTitle,
@@ -113,7 +128,16 @@ function newGuard(b: WorkingBrief, input: PlanTurnInput, notices: string[], diff
     diffs,
     changed,
     flipLimit: input.limits.flipLimit,
+    settled: [],
   };
+}
+
+/** the user's decision on a pending proposal: accept writes the proposed value (button-equivalent) */
+function decideProposal(b: WorkingBrief, g: GuardContext, cp: ChangeProposal, decision: "accepted" | "rejected", resolution: ProposalResolution, messageId: string): void {
+  if (cp.status !== "pending") return;
+  settleProposal(cp, decision, resolution, messageId, g.settled);
+  const origin = resolution === "auto_accepted" ? "agent_auto_accepted" : "agent_proposed_accepted";
+  if (decision === "accepted") writeSlot(b, g, cp.field_path, cp.new_value, origin, "confirmed", [messageId], { messageId });
 }
 
 export function resolveOption(prompt: TurnMessage | null, m: TurnMessage, optionValue?: string | null): StoredOption | null {
@@ -155,12 +179,14 @@ function delegateFill(b: WorkingBrief, g: GuardContext, path: string, value: unk
   return true;
 }
 
-function confirmPaths(b: WorkingBrief, g: GuardContext, paths: string[], messageId: string): number {
+function confirmPaths(b: WorkingBrief, g: GuardContext, paths: string[], messageId: string, auto = false): number {
   let n = 0;
   for (const path of paths) {
     const p = b.field_provenance[path];
     if (!p || p.slot_state === "confirmed" || isEmptyValue(getPath(b.content, path))) continue;
     p.slot_state = "confirmed";
+    // 자동 승인 confirmed the agent's interpretation on the user's behalf: distinct provenance (not a user confirmation)
+    if (auto && p.origin !== "user_stated" && p.origin !== "user_edited") p.origin = "agent_auto_accepted";
     p.evidence_message_ids = [...new Set([...p.evidence_message_ids, messageId])];
     (b.meta as { reconfirm?: string[] }).reconfirm = ((b.meta as { reconfirm?: string[] }).reconfirm ?? []).filter((x) => x !== path);
     g.diffs.set(messageId, [...(g.diffs.get(messageId) ?? []), { field_path: path, before: getPath(b.content, path) ?? null, after: getPath(b.content, path) ?? null, origin: p.origin, slot_state: "confirmed" }]);
@@ -198,6 +224,10 @@ export function planTurn(input: PlanTurnInput): PlanTurnOutput {
   const copyTitle = proposal?.copy_request_detected?.work_title?.trim() || null;
   const g = newGuard(b, input, notices, diffs, changed, copyTitle);
   const askedPath = input.prompt?.askedFieldPaths?.[0] ?? null;
+  /** proposals pending before this commit (reconciled at the end) */
+  const existingProposals = new Set(b.change_proposals.filter((p) => p.status === "pending").map((p) => p.id));
+  /** the prompt was "'X'을(를) …로 바꾸자는 제안이 있습니다. 바꿀까요?" — a text reply is a yes/no, never the field value */
+  const askedProposalId = promptProposalId(input.prompt?.options);
   let stage = input.stage;
   let stageBy: "user" | "system" = "system";
   let delegateSignal = false;
@@ -242,14 +272,11 @@ export function planTurn(input: PlanTurnInput): PlanTurnOutput {
           const paths = Object.entries(b.field_provenance).filter(([, p]) => p.origin === "imported" && p.slot_state === "proposed").map(([k]) => k);
           confirmPaths(b, g, paths, m.id);
         } else if (v.startsWith("@confirm_field:")) {
-          confirmPaths(b, g, [v.slice("@confirm_field:".length)], m.id);
+          confirmPaths(b, g, [v.slice("@confirm_field:".length)], m.id, !!m.autoApproved);
         } else if (v.startsWith("@accept_proposal:") || v.startsWith("@reject_proposal:")) {
           const id = v.split(":")[1];
           const cp = b.change_proposals.find((p) => p.id === id && p.status === "pending");
-          if (cp) {
-            cp.status = v.startsWith("@accept") ? "accepted" : "rejected";
-            if (cp.status === "accepted") writeSlot(b, g, cp.field_path, cp.new_value, "agent_proposed_accepted", "confirmed", [m.id], { messageId: m.id });
-          }
+          if (cp) decideProposal(b, g, cp, v.startsWith("@accept") ? "accepted" : "rejected", m.autoApproved ? "auto_accepted" : "button", m.id);
         }
         continue;
       }
@@ -258,15 +285,20 @@ export function planTurn(input: PlanTurnInput): PlanTurnOutput {
       if (!path) continue;
       b.meta.conflicts = (b.meta.conflicts ?? []).filter((c) => c.field_path !== path);
       b.meta.flip_cards = (b.meta.flip_cards ?? []).filter((c) => c.field_path !== path);
-      codeClaims.push({
-        field_path: path,
-        new_value: o.value,
-        origin_claim: o.source === "agent" ? "agent_proposed_accepted" : "user_stated",
-        evidence_message_id: m.id,
-        evidence_quote: m.body,
-        key_phrase: o.source === "agent" ? "" : m.body,
-        userAction: true,
-      });
+      codeClaims.push(
+        m.autoApproved
+          ? // 자동 승인: the partner's pick on the user's behalf — never user_stated, never overrides a user value
+            { field_path: path, new_value: o.value, origin_claim: "agent_proposed_accepted", evidence_message_id: m.id, evidence_quote: "", key_phrase: "", autoAccepted: true }
+          : {
+              field_path: path,
+              new_value: o.value,
+              origin_claim: o.source === "agent" ? "agent_proposed_accepted" : "user_stated",
+              evidence_message_id: m.id,
+              evidence_quote: m.body,
+              key_phrase: o.source === "agent" ? "" : m.body,
+              userAction: true,
+            },
+      );
       continue;
     }
     if (m.kind === "text") {
@@ -275,9 +307,31 @@ export function planTurn(input: PlanTurnInput): PlanTurnOutput {
     }
   }
 
+  // change proposals settled in the chat: quote-verified model decisions (INV-CON-03), else a plain yes/no
+  // answer to the proposal question. Decided fields take no further model claim in this commit.
+  const decidedPaths = new Set<string>();
+  for (const d of proposal?.proposal_decisions ?? []) {
+    const cp = b.change_proposals.find((p) => p.id === d.proposal_id && p.status === "pending");
+    const msg = input.messages.find((m) => m.id === d.evidence_message_id && m.authorKind === "user" && !m.autoApproved);
+    if (!cp || !msg || !decisionVerified(d.evidence_quote, msg.body)) continue;
+    decideProposal(b, g, cp, d.decision, "decided_in_chat", msg.id);
+    decidedPaths.add(cp.field_path);
+  }
+  const rawModelClaims = proposal?.slot_updates ?? [];
+  const asked = askedProposalId ? b.change_proposals.find((p) => p.id === askedProposalId && p.status === "pending") : undefined;
+  if (asked && !rawModelClaims.some((u) => u.field_path === asked.field_path)) {
+    for (const m of [...textMessages].reverse()) {
+      const answer = yesNoAnswer(m.body);
+      if (!answer) continue;
+      decideProposal(b, g, asked, answer, "decided_in_chat", m.id);
+      decidedPaths.add(asked.field_path);
+      break;
+    }
+  }
+
   // 2.7 slot updates: model claims, else deterministic fallback (answer to the asked slot)
-  const modelClaims: SlotClaim[] = (proposal?.slot_updates ?? []).map((u) => ({ ...u, evidence_message_id: u.evidence_message_id ?? null }));
-  if (!modelClaims.length && askedPath) {
+  const modelClaims: SlotClaim[] = rawModelClaims.filter((u) => !decidedPaths.has(u.field_path)).map((u) => ({ ...u, evidence_message_id: u.evidence_message_id ?? null }));
+  if (!rawModelClaims.length && askedPath && !askedProposalId) {
     for (const m of textMessages) {
       if (askedPath === "seed_notes" && NONE_RE.test(m.body.trim())) continue;
       codeClaims.push({ field_path: askedPath, new_value: m.body, origin_claim: "user_stated", evidence_message_id: m.id, evidence_quote: m.body, key_phrase: m.body });
@@ -287,7 +341,7 @@ export function planTurn(input: PlanTurnInput): PlanTurnOutput {
     for (const m of textMessages) if (!NONE_RE.test(m.body.trim())) codeClaims.push({ field_path: "seed_notes", new_value: m.body, origin_claim: "user_stated", evidence_message_id: m.id, evidence_quote: m.body, key_phrase: m.body });
   }
   for (const claim of splitConflicts(b, g, [...modelClaims, ...codeClaims])) applyClaim(b, g, claim);
-  if (proposal) for (const cp of proposal.change_proposals) if (isKnownPath(cp.field_path)) proposeIfDiffers(b, g, cp.field_path, cp.new_value, cp.reason);
+  if (proposal) for (const cp of proposal.change_proposals) if (isKnownPath(cp.field_path) && !decidedPaths.has(cp.field_path)) proposeIfDiffers(b, g, cp.field_path, cp.new_value, cp.reason);
 
   // 3.5 delegation
   const delegate = b.meta.delegate ?? null;
@@ -336,7 +390,7 @@ export function planTurn(input: PlanTurnInput): PlanTurnOutput {
   }
 
   // X-9 deterministic checks (+ model flags)
-  const userTexts = input.messages.filter((m) => m.authorKind === "user").map((m) => ({ messageId: m.id, text: m.body }));
+  const userTexts = input.messages.filter((m) => m.authorKind === "user" && !m.autoApproved).map((m) => ({ messageId: m.id, text: m.body }));
   b.checks = runDeterministicChecks(b, input.lists, userTexts);
   if (proposal) {
     for (const f of proposal.safety_flags) {
@@ -369,6 +423,9 @@ export function planTurn(input: PlanTurnInput): PlanTurnOutput {
   }
   if (stage === "converging" && !divergingDone(b) && before === "converging") stage = "converging";
 
+  // proposals the conversation made moot (the user said the proposed value, or moved the field elsewhere)
+  reconcileProposals(b, { existing: existingProposals, changed, messageId: input.messages[input.messages.length - 1]?.id ?? null, acceptedResolution: "applied_in_chat" }, g.settled);
+
   // logline candidates (CQ-21)
   if (stage === "confirming" && isEmptyValue(b.content.logline) && !(b.content.logline_options ?? []).length) {
     b.content.logline_options = proposal?.logline_options.length ? proposal.logline_options.slice(0, 3) : loglineCandidates(b);
@@ -392,6 +449,7 @@ export function planTurn(input: PlanTurnInput): PlanTurnOutput {
     pauseRequested,
     extendRequested,
     formModeRequested,
+    settled: g.settled,
   };
 }
 
@@ -399,8 +457,12 @@ function proposeIfDiffers(b: WorkingBrief, g: GuardContext, path: string, value:
   const cur = getPath(b.content, path);
   if (isEmptyValue(cur)) return;
   if (normalizeText(valueToText(cur)) === normalizeText(valueToText(value))) return;
-  if (b.change_proposals.some((p) => p.status === "pending" && p.field_path === path)) return;
-  b.change_proposals.push({ id: g.newId(), field_path: path, new_value: value, reason: reason || "에이전트 수정 제안", status: "pending", run_id: g.runId });
+  // the user already turned this exact change down and the field has not moved since: don't nag
+  const declined = b.change_proposals.some(
+    (p) => p.status === "rejected" && p.field_path === path && sameValue(p.new_value, value) && (p.base_value === undefined || sameValue(p.base_value ?? null, cur)),
+  );
+  if (declined) return;
+  addProposal(b, { id: g.newId(), path, value, reason: reason || "에이전트 수정 제안", runId: g.runId }, g.settled);
 }
 
 function composeReply(
@@ -413,7 +475,8 @@ function composeReply(
 ): PlannedReply {
   const proposal = input.proposal;
   const lines: string[] = [...new Set(notices)];
-  if (o.summaryRequested) lines.push(summaryText(b));
+  // 설계 변경: brief complete → closing summary + [승인 요청] guidance, no new question
+  if (o.summaryRequested || step.kind === "ready") lines.push(summaryText(b, undefined, { omitStatus: step.kind === "ready" }));
   if (stage === "converging" && proposal?.weakness_notes.length) lines.push(...proposal.weakness_notes.slice(0, 2).map((w) => `[약점] ${w}`));
   let options = step.options;
   let askText = step.text;
@@ -452,10 +515,11 @@ function composeReply(
     );
   }
   if (o.streak > 3 && step.kind === "ask") lines.push(step.required ? "추천안으로 채워 둘까요? [추천해 줘]를 두 번 누르면 추천안으로 둡니다." : "이 항목은 [나중에]로 넘겨도 됩니다.");
+  // the turn cap is a hidden safety ceiling: warn only close to it, and only while required fields remain
   const used = input.limits.agentTurnCount + 1;
-  if (used >= input.limits.softWarning && used < input.limits.turnLimit) {
-    const n = missingRequired(b).length;
-    lines.push(`필수 항목 ${n}개 남았습니다. 정리할까요? (${used}/${input.limits.turnLimit}턴)`);
+  const missing = missingRequired(b);
+  if (missing.length && used >= input.limits.softWarning && used < input.limits.turnLimit) {
+    lines.push(`대화 안전 상한까지 ${input.limits.turnLimit - used}턴 남았습니다. 남은 필수 항목 ${missing.length}개(${missing.map(slotLabel).join(", ")})는 [전부 맡기기]로 정리할 수도 있습니다.`);
   }
   let body = lines.filter(Boolean).join("\n");
   if (body.length > input.limits.replyMaxChars) body = `${body.slice(0, input.limits.replyMaxChars - 1)}…`;
@@ -522,6 +586,7 @@ export function planImport(input: PlanImportInput): PlanTurnOutput {
   const diffs = new Map<string, SlotDiff[]>();
   const changed = new Set<string>();
   const g = newGuard(b, { ...input, entryMode: "import", messages: [input.message], prompt: null, proposal: null, runId: null }, notices, diffs, changed, null);
+  const existingProposals = new Set(b.change_proposals.filter((p) => p.status === "pending").map((p) => p.id));
   // parents before dependents (question-set order, logline last): a changed parent clears / reopens its dependents
   // (3.7), so a dependent extracted from the same text must be written after its parent or it is lost
   const updates = sortByQuestionOrder(input.proposal?.slot_updates.length ? input.proposal.slot_updates : extractImportLines(input.message.body));
@@ -543,6 +608,7 @@ export function planImport(input: PlanImportInput): PlanTurnOutput {
   if (!docs.some((d) => d.concept_message_id === input.message.id)) {
     docs.push({ concept_message_id: input.message.id, chars: input.message.body.length, kind: input.proposal?.source_kind ?? "synopsis" });
   }
+  reconcileProposals(b, { existing: existingProposals, changed, messageId: input.message.id, acceptedResolution: "applied_in_chat" }, g.settled);
   b.checks = runDeterministicChecks(b, input.lists, [{ messageId: input.message.id, text: input.message.body }]);
   const stage: ConceptStage = input.stage === "confirming" ? "confirming" : "converging";
   const step = selectNext(b, stage, {});
@@ -566,6 +632,7 @@ export function planImport(input: PlanImportInput): PlanTurnOutput {
     pauseRequested: false,
     extendRequested: false,
     formModeRequested: false,
+    settled: g.settled,
   };
 }
 
@@ -597,7 +664,7 @@ export interface PlanEditInput {
   newId: () => string;
 }
 
-export function planFieldEdit(input: PlanEditInput): { brief: WorkingBrief; diffs: SlotDiff[]; notices: string[]; stage: ConceptStage } {
+export function planFieldEdit(input: PlanEditInput): { brief: WorkingBrief; diffs: SlotDiff[]; notices: string[]; stage: ConceptStage; settled: ProposalSettlement[] } {
   const b = cloneBrief(input.brief);
   const notices: string[] = [];
   const diffs = new Map<string, SlotDiff[]>();
@@ -618,7 +685,9 @@ export function planFieldEdit(input: PlanEditInput): { brief: WorkingBrief; diff
     diffs,
     changed,
     flipLimit: input.flipLimit,
+    settled: [],
   };
+  const existingProposals = new Set(b.change_proposals.filter((p) => p.status === "pending").map((p) => p.id));
   const dummy = cloneBrief(b);
   const probe = applyClaim(dummy, { ...g, notices, diffs: new Map(), changed: new Set(), messages: [{ id: input.messageId, body: valueToText(input.value), channelId: "", authorKind: "user" }] }, {
     field_path: input.path,
@@ -637,7 +706,10 @@ export function planFieldEdit(input: PlanEditInput): { brief: WorkingBrief; diff
   } else if (probe.applied) {
     writeSlot(b, g, input.path, getPath(dummy.content, input.path), "user_edited", "confirmed", [input.messageId], { messageId: input.messageId });
   }
-  b.change_proposals = b.change_proposals.map((p) => (p.status === "pending" && p.field_path === input.path ? { ...p, status: "rejected" as const } : p));
+  // the user set this field by hand: its proposal is accepted (same value), superseded (another value)
+  // or, if the value stayed, declined
+  reconcileProposals(b, { existing: existingProposals, changed, messageId: input.messageId, acceptedResolution: "form_edit" }, g.settled);
+  for (const p of b.change_proposals) if (p.status === "pending" && p.field_path === input.path && existingProposals.has(p.id)) settleProposal(p, "rejected", "form_edit", input.messageId, g.settled);
   b.checks = runDeterministicChecks(b, input.lists, []);
   let stage = input.stage;
   if (stage === "opening") stage = "diverging";
@@ -648,5 +720,5 @@ export function planFieldEdit(input: PlanEditInput): { brief: WorkingBrief; diff
     if (!rest.length) b.content.logline_options = loglineCandidates(b);
   }
   if (input.entryMode === "direct_input" && convergingDone(b) && stage !== "confirming") stage = "confirming";
-  return { brief: b, diffs: [...diffs.values()].flat(), notices, stage };
+  return { brief: b, diffs: [...diffs.values()].flat(), notices, stage, settled: g.settled };
 }

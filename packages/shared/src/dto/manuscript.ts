@@ -14,10 +14,16 @@
  *   POST …/episodes/:episodeNo/pause|resume                                   → episodeDtoSchema
  *   POST …/planning/schedule                                                  → scheduleResultDtoSchema
  *   GET  …/reserve                                                            → reserveSummaryDtoSchema
+ *   GET  …/structure                                                          → structureViewSchema
+ *   POST …/structure/generate                 structureGenerateRequestSchema → 202 { taskId }
+ *   POST …/structure/decision                 structureDecisionRequestSchema → structureViewSchema
+ *   POST …/arcs/:arcId/replan                 arcReplanRequestSchema         → 202 { taskId }
  */
 import { z } from "zod";
 import { ENUMS } from "../enum-registry.js";
 import { isoDateTime } from "./common.js";
+import { arcDtoSchema, storyStructureDtoSchema } from "./novel.js";
+import { castCompletenessSchema } from "./cast.js";
 
 const csv = <T extends readonly [string, ...string[]]>(values: T) =>
   z
@@ -51,6 +57,12 @@ export const episodeDtoSchema = z.object({
   publishedByActorType: z.enum(ENUMS.actor_type).nullable(),
   publishedByActorId: z.string().nullable(),
   scheduledPublishAt: isoDateTime.nullable(),
+  /** 화 계획(plan_arc): 요약·씬 수·목표 분량 */
+  planSummary: z.string(),
+  plannedSceneCount: z.number().int().nullable(),
+  targetChars: z.number().int().nullable(),
+  /** 현재 원고가 절대 하한(3,000자) 미만 (목록·상세 응답에서 계산, 그 밖의 응답은 false) */
+  lengthBelowFloor: z.boolean().default(false),
   createdAt: isoDateTime,
   updatedAt: isoDateTime,
 });
@@ -144,6 +156,9 @@ export const episodeDetailDtoSchema = episodeDtoSchema.extend({
       minChars: z.number().int(),
       maxChars: z.number().int(),
       deviation: z.enum(["short", "long"]).nullable(),
+      /** 절대 하한(3,000자) */
+      hardMinChars: z.number().int(),
+      belowFloor: z.boolean(),
     })
     .nullable(),
 });
@@ -217,3 +232,66 @@ export const unpublishRequestSchema = z.object({
   confirmedNotPublishedExternally: z.literal(true),
 });
 export type UnpublishRequest = z.infer<typeof unpublishRequestSchema>;
+
+// ── 전체 구성(1~4부 + 결말) → 플롯 → 화 ───────────────────────────────────
+export const structureGenerateRequestSchema = z.object({
+  scope: z.enum(["all", "ending", "parts"]).default("all"),
+  instructions: z.string().trim().max(1000).optional(),
+});
+export type StructureGenerateRequest = z.input<typeof structureGenerateRequestSchema>;
+
+export const structureDecisionRequestSchema = z
+  .object({
+    decision: z.enum(["approved", "rejected"]),
+    note: z.string().trim().max(4000).optional(),
+    expectedRevision: z.number().int().min(1),
+  })
+  .refine((d) => d.decision === "approved" || !!d.note, { message: "반려 사유를 입력하세요.", path: ["note"] });
+export type StructureDecisionRequest = z.input<typeof structureDecisionRequestSchema>;
+
+export const arcReplanRequestSchema = z.object({ note: z.string().trim().max(2000).optional() });
+export type ArcReplanRequest = z.input<typeof arcReplanRequestSchema>;
+
+export const structurePlotDtoSchema = arcDtoSchema.extend({
+  episodeCount: z.number().int(),
+  /** outline = 화 계획 전, episodes_planned = 화 목록이 있음 */
+  planningStage: z.enum(["outline", "episodes_planned"]),
+  /** 이 플롯에서 새로 등장하는 인물 중 빈 항목이 있거나 AI 제안을 수락하지 않은 인물(있으면 플롯 계획을 승인할 수 없음) */
+  castGaps: castCompletenessSchema.nullable().default(null),
+  /** 진행 중인 플롯의 재계획안이 승인을 기다림(인박스) */
+  replanApprovalId: z.string().nullable().default(null),
+});
+export type StructurePlotDto = z.infer<typeof structurePlotDtoSchema>;
+
+export const structureEpisodeDtoSchema = z.object({
+  id: z.string(),
+  arcId: z.string(),
+  episodeNo: z.number().int(),
+  title: z.string().nullable(),
+  status: z.enum(ENUMS.episode_status),
+  planSummary: z.string(),
+  plannedSceneCount: z.number().int().nullable(),
+  targetChars: z.number().int().nullable(),
+  lengthBelowFloor: z.boolean(),
+});
+export type StructureEpisodeDto = z.infer<typeof structureEpisodeDtoSchema>;
+
+export const structureViewSchema = z.object({
+  structure: storyStructureDtoSchema.nullable(),
+  /** 구성 생성 가능 여부와 막는 이유(한국어) */
+  gate: z.object({
+    canGenerate: z.boolean(),
+    reasons: z.array(z.string()),
+    /** reasons와 같은 순서의 코드(concept_not_approved, cast_incomplete, goal_required, bible_not_approved, structure_too_short) */
+    codes: z.array(z.string()).default([]),
+    cast: castCompletenessSchema,
+  }),
+  /** 진행 중인 plan_structure 작업 */
+  task: z.object({ id: z.string(), status: z.string() }).nullable(),
+  lastError: z.string().nullable(),
+  plots: z.array(structurePlotDtoSchema),
+  episodes: z.array(structureEpisodeDtoSchema),
+  goal: z.object({ totalEpisodesMin: z.number().int(), totalEpisodesMax: z.number().int().nullable(), endingDirection: z.string() }).nullable(),
+});
+export type StructureView = z.infer<typeof structureViewSchema>;
+export const structureTaskAcceptedSchema = z.object({ taskId: z.string() });

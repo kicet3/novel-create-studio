@@ -2,7 +2,7 @@
  * Deterministic next-question selection (design/11 §3.5) + stage rules (§3.2, §3.7) + reserved buttons
  * (§4.2 idx 900–907) + summary / logline fallbacks. Pure.
  */
-import type { ConceptStage } from "@ncs/shared";
+import { DEFAULTS, type ConceptStage } from "@ncs/shared";
 import { getPath, isEmptyValue, slotState, valueToText, type WorkingBrief } from "./brief.js";
 import {
   COMMON_1,
@@ -31,7 +31,7 @@ export const CONTROL = {
   confirmDelegated: { idx: 911, value: "@confirm_delegated", label: "모두 확정" },
   confirmImported: { idx: 912, value: "@confirm_imported", label: "추출값 전체 확인" },
   retry: { idx: 913, value: "@retry", label: "다시 시도" },
-  extendTurns: { idx: 914, value: "@extend_turns", label: "20턴 더" },
+  extendTurns: { idx: 914, value: "@extend_turns", label: `${DEFAULTS["concept.turn_extension"]}턴 더` },
   submit: { idx: 915, value: "@submit", label: "승인 요청" },
   none: { idx: 916, value: "@none", label: "아직 없음" },
   later: { idx: 917, value: "@later", label: "나중에 이어 하기" },
@@ -124,7 +124,7 @@ export function loglineCandidates(b: WorkingBrief): string[] {
 }
 
 /** 3.9 / 903 summary line: "지금까지: … 남은 필수: …" */
-export function summaryText(b: WorkingBrief, maxChars = 3500): string {
+export function summaryText(b: WorkingBrief, maxChars = 3500, o: { omitStatus?: boolean } = {}): string {
   const c = b.content;
   const parts = [
     c.category?.genre_label && `장르 ${c.category.genre_label}${(c.category.trope_labels ?? []).length ? `·${c.category.trope_labels!.join("·")}` : ""}`,
@@ -137,7 +137,8 @@ export function summaryText(b: WorkingBrief, maxChars = 3500): string {
     c.logline && `로그라인 ${c.logline}`,
   ].filter(Boolean);
   const missing = missingRequired(b).map(slotLabel);
-  const text = `지금까지: ${parts.length ? parts.join(", ") : "아직 정한 항목이 없습니다"}. ${missing.length ? `남은 필수: ${missing.join(", ")}.` : "필수 항목이 모두 확정됐습니다."}`;
+  const status = missing.length ? `남은 필수: ${missing.join(", ")}.` : o.omitStatus ? "" : "필수 항목이 모두 확정됐습니다.";
+  const text = `지금까지: ${parts.length ? parts.join(", ") : "아직 정한 항목이 없습니다"}.${status ? ` ${status}` : ""}`;
   return text.length > maxChars ? `${text.slice(0, maxChars - 1)}…` : text;
 }
 
@@ -235,8 +236,9 @@ export function selectNext(b: WorkingBrief, stage: ConceptStage, opts: { candida
       return { kind: "ask", path: def.path, def, text: def.ask_ko, options: opts.candidatesFor === def.path ? fallbackCandidates(def, b) : seedOptions(def), required: false };
     }
   }
-  // (5) stage move / confirmation cards
-  if (stage === "diverging" || stage === "converging") {
+  // (5) stage move / confirmation cards — a complete brief (every required field confirmed, e.g. through the form)
+  // goes straight to the confirmation cards / ready: no extra "요약 확인으로 이동" round trip
+  if ((stage === "diverging" || stage === "converging") && !briefComplete(b)) {
     return {
       kind: "propose_stage",
       to: "confirming",
@@ -261,11 +263,44 @@ export function selectNext(b: WorkingBrief, stage: ConceptStage, opts: { candida
   if (imported.length) {
     return { kind: "confirm_imported", paths: imported, text: `붙여 넣은 원문에서 뽑은 항목 ${imported.length}개를 확인해 주세요.`, options: [control("confirmImported")] };
   }
-  return { kind: "ready", text: "필수 항목이 모두 확정됐습니다. 브리프를 검토한 뒤 [승인 요청]을 눌러 주세요.", options: [control("submit")] };
+  return { kind: "ready", text: READY_TEXT, options: [control("submit")] };
+}
+
+/**
+ * 설계 변경: the conversation ends when every required brief field is confirmed — the partner then closes with a
+ * summary and points to [승인 요청] instead of asking a new question (final confirmation stays manual).
+ */
+export const READY_TEXT =
+  "필수 항목이 모두 확정돼 컨셉 브리프가 완성됐습니다. 더 묻지 않겠습니다. 브리프 패널을 검토한 뒤 [승인 요청]을 눌러 컨셉을 확정해 주세요. 고칠 부분이 있으면 말씀해 주시거나 브리프 패널에서 직접 고칠 수 있습니다.";
+
+/** brief complete: every required field confirmed (the conversation's natural end) */
+export function briefComplete(b: WorkingBrief): boolean {
+  return missingRequired(b).length === 0;
+}
+
+/** notice when the hidden turn safety ceiling is hit (설계 변경: 대화는 브리프 완성까지, 상한은 폭주 방지용) */
+export function turnCapText(s: { turnLimit: number }, b: WorkingBrief, ready: boolean, canExtend: boolean, canDelegate = true): string {
+  const missing = missingRequired(b).map(slotLabel);
+  const head = `대화가 안전 상한(${s.turnLimit}턴)에 닿아 잠시 멈췄습니다.`;
+  const state = missing.length
+    ? `아직 확정되지 않은 필수 항목 ${missing.length}개: ${missing.join(", ")}.`
+    : ready
+      ? "필수 항목은 모두 확정됐으니 [승인 요청]으로 컨셉을 확정할 수 있습니다."
+      : "필수 항목은 모두 확정됐지만 승인 요청 전에 해결할 항목이 있습니다(브리프 패널 확인).";
+  const how = canExtend
+    ? `대화를 이어 가려면 [${CONTROL.extendTurns.label}]를 누르거나, 컨셉 화면 아래 '진행 방식 바꾸기'에서 대화 안전 상한을 ${DEFAULTS["concept.turn_extension"]}턴씩 올리세요.`
+    : "대화 안전 상한은 더 올릴 수 없습니다.";
+  const alt = !missing.length
+    ? ""
+    : canDelegate
+      ? " 남은 항목은 [전부 맡기기]로 추천안을 받거나(상한과 관계없이 한 번 더 실행) [폼으로 마저 입력]으로 직접 채울 수 있습니다."
+      : " 남은 항목은 [폼으로 마저 입력]으로 직접 채워 주세요.";
+  return `${head} ${state} ${how}${alt}`;
 }
 
 /** reserved buttons appended to an ask (R2) */
 export function escapeButtons(step: NextStep): StoredOption[] {
+  if (step.kind === "ready") return []; // the closing reply already carries the summary (설계 변경: 브리프 완성 = 대화 마무리)
   if (step.kind !== "ask") return [control("summary")];
   const out = [control("direct"), control("recommend")];
   if (!step.required) out.push(control("defer"));

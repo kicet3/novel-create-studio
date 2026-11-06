@@ -1,7 +1,8 @@
 /**
  * End-to-end through HTTP with the real modules and the real Claude adapter against the scripted Messages API
  * mock (every model response is stated in this file or in support/pipeline-script.ts):
- * N1 novel → concept brief (direct input) → approval (N2) → goal (N3) → series bible → arc plan →
+ * N1 novel → concept brief (direct input) → approval (N2) → cast (required fields, 설계 추가) → goal (N3) → series bible →
+ * 전체 구성(4부 + 결말, user approval) → plots → arc plan →
  * episode 1 pipeline (outline … polish, extraction, checks) → episode approval (E9) → publish → export.
  * Approvals are answered through the inbox API exactly like the web does.
  */
@@ -10,6 +11,8 @@ import { z } from "zod";
 import * as dto from "@ncs/shared";
 import { createTestCore, type TestCore } from "../support/test-core.js";
 import { SCENE_1, scriptPipeline } from "../support/pipeline-script.js";
+import { scriptWorld } from "../support/world.js";
+import { TEST_PROFILE } from "../support/cast.js";
 
 let t: TestCore;
 beforeAll(async () => {
@@ -29,6 +32,8 @@ beforeAll(async () => {
     },
   );
   scriptPipeline(t.claude);
+  // 설계 추가(world): N2 queues build_world_ontology
+  scriptWorld(t.claude);
 });
 afterAll(() => t.close());
 
@@ -99,6 +104,14 @@ describe("MVP-α end to end (scripted Claude responses)", () => {
     // brief approval (N2) → onboarding
     await drive(async () => (await t.modules.novel.service.getNovel(scope)).status === "onboarding", 20);
 
+    // 설계 추가(world): the approval queued the world ontology → candidates → approve all on the 세계관 page
+    await drive(async () => dto.worldOntologyViewSchema.parse((await t.http("GET", `${base}/world-ontology`)).body).generation.state === "done", 10);
+    let world = dto.worldOntologyViewSchema.parse((await t.http("GET", `${base}/world-ontology`)).body);
+    expect(world.counts.pending).toBeGreaterThan(5);
+    expect((await t.http("POST", `${base}/world-ontology/approve-all`)).body).toMatchObject({ held: [] });
+    world = dto.worldOntologyViewSchema.parse((await t.http("GET", `${base}/world-ontology`)).body);
+    expect(world.counts).toMatchObject({ pending: 0 });
+
     // goal (N3) → planning → plan_series_bible
     const defaults = await t.http("GET", `${base}/concept/goal-defaults`);
     expect(defaults.status).toBe(200);
@@ -123,10 +136,20 @@ describe("MVP-α end to end (scripted Claude responses)", () => {
     expect(hero.fieldOrigins).toMatchObject({ desire: "user", name: "agent" });
     expect((await t.http("POST", `${base}/cast/confirm`)).body.error.code).toBe("cast_invalid"); // name still 이름 미정
     expect((await t.http("PATCH", `${base}/cast/characters/${hero.id}`, { name: "한결" })).status).toBe(200);
-    expect((await t.http("POST", `${base}/cast/characters`, { role: "sub_protagonist", name: "서린", personality: "냉정한 기록관" })).status).toBe(201);
+    const subChar = await t.http("POST", `${base}/cast/characters`, { role: "sub_protagonist", name: "서린", personality: "냉정한 기록관" });
+    expect(subChar.status).toBe(201);
+    // 설계 추가 0008: required profile fields before the story structure (checklist on the cast page)
+    const before = dto.castViewSchema.parse((await t.http("GET", `${base}/cast`)).body);
+    expect(before.completeness.complete).toBe(false);
+    expect(before.completeness.message).toContain("서린");
+    const { storyRole: _r, ...mainFields } = TEST_PROFILE;
+    expect((await t.http("PATCH", `${base}/cast/characters/${hero.id}`, { ...mainFields, desire: "배신자에게 복수" })).status).toBe(200);
+    expect(
+      (await t.http("PATCH", `${base}/cast/characters/${subChar.body.id}`, { ...mainFields, personality: "냉정한 기록관. 결점: 감정을 숨긴다.", relationships: [{ targetCharacterId: hero.id, kind: "동료", description: "" }] })).status,
+    ).toBe(200);
     const confirmed = await t.http("POST", `${base}/cast/confirm`);
     expect(confirmed.status, JSON.stringify(confirmed.body)).toBe(200);
-    expect(confirmed.body).toMatchObject({ confirmed: true, stepRequired: false, counts: { protagonist: 1, subProtagonist: 1 } });
+    expect(confirmed.body).toMatchObject({ confirmed: true, stepRequired: false, counts: { protagonist: 1, subProtagonist: 1 }, completeness: { complete: true } });
 
     const goal = await t.http("PUT", `${base}/goal`, goalBody);
     expect(goal.status, JSON.stringify(goal.body)).toBe(200);
@@ -138,6 +161,12 @@ describe("MVP-α end to end (scripted Claude responses)", () => {
     };
     await drive(async () => ["approved", "published"].includes((await ep1())?.status));
     expect((await t.http("GET", `${base}/bibles/approved`)).body).toMatchObject({ status: "approved" });
+    // the structure was approved by the user through the inbox (story_structure), plots carry their part
+    const structure = dto.structureViewSchema.parse((await t.http("GET", `${base}/structure`)).body);
+    expect(structure.structure).toMatchObject({ status: "approved" });
+    expect(structure.structure!.parts).toHaveLength(4);
+    expect(structure.plots.every((p) => p.partId)).toBe(true);
+    expect(structure.episodes.find((e) => e.episodeNo === 1)?.lengthBelowFloor).toBe(false);
 
     // publish (E13) + export
     const pub = await t.http("POST", `${base}/episodes/1/publish`);
@@ -151,7 +180,7 @@ describe("MVP-α end to end (scripted Claude responses)", () => {
 
     // the chain really ran: provider calls journaled, scenes split, home aggregates
     const tasks = await tasksDump();
-    for (const kind of ["check_concept_brief", "plan_series_bible", "plan_arc", "outline_episode", "draft_episode", "split_scenes", "polish_episode"]) {
+    for (const kind of ["check_concept_brief", "plan_series_bible", "plan_structure", "plan_arc", "outline_episode", "draft_episode", "split_scenes", "polish_episode"]) {
       expect(tasks.some((x) => x.startsWith(`${kind}:done`)), `${kind} done\n${tasks.join("\n")}`).toBe(true);
     }
     // the writer saw the cast (entity_cards seeds) → the prose names bible characters → linked mentions + candidate facts
@@ -167,6 +196,11 @@ describe("MVP-α end to end (scripted Claude responses)", () => {
     expect(biblePrompt.prompt).toMatch(/\[주인공\] 한결/);
     expect(draftPrompt).toMatch(/\[서브 주인공\] 서린/);
     expect(cast.filter((c) => c.preferredName === "한결")).toHaveLength(1);
+    // the approved world ontology is an input of the bible and the structure (context section "world")
+    expect(biblePrompt.prompt).toContain("세계관 온톨로지");
+    expect(biblePrompt.prompt).toContain("태양 길드");
+    const structurePrompt = t.claude.requests.find((r) => r.schema && "parts" in ((r.schema.properties as object) ?? {}))!;
+    expect(structurePrompt.prompt).toContain("헌터 등급");
     const msFacts = await t.testDb.query<{ c: number }>(`SELECT count(*)::int AS c FROM facts WHERE novel_id = '${novelId}' AND source_kind = 'manuscript'`);
     expect(msFacts[0]!.c).toBeGreaterThan(0);
     expect(t.claude.unmatched.map((r) => r.system.slice(0, 80))).toEqual([]);
@@ -187,6 +221,7 @@ describe("MVP-α end to end (scripted Claude responses)", () => {
       [`${base}/goal`, dto.goalDtoSchema],
       [`${base}/cast`, dto.castViewSchema],
       [`${base}/arcs`, items(dto.arcDtoSchema)],
+      [`${base}/structure`, dto.structureViewSchema],
       [`${base}/bibles/approved`, dto.seriesBibleDtoSchema],
       [`${base}/episodes`, items(dto.episodeDtoSchema)],
       [`${base}/episodes/1`, dto.episodeDetailDtoSchema],

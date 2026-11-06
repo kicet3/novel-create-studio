@@ -21,6 +21,10 @@ import type {
   QuestionThreshold,
   CountBasis,
   AgeRating,
+  ArcPlanFlag,
+  StoryEnding,
+  StoryStructureStatus,
+  StructurePendingChanges,
 } from "@ncs/shared";
 import type {
   ArcsRow,
@@ -29,7 +33,10 @@ import type {
   NotificationPoliciesRow,
   NovelsRow,
   SeriesBiblesRow,
+  StoryPartsRow,
+  StoryStructuresRow,
   UsersRow,
+  ArcSetupPlanJson,
 } from "@ncs/db/schema";
 import type { ActorRef, ModuleName, NovelScope, Tx } from "../../platform/index.js";
 
@@ -40,6 +47,10 @@ export type SeriesBible = SeriesBiblesRow;
 export type Arc = ArcsRow;
 export type LengthProfile = LengthProfilesRow;
 export type NotificationPolicy = NotificationPoliciesRow;
+export type StoryStructure = StoryStructuresRow;
+export type StoryPart = StoryPartsRow;
+export type StoryStructureWithParts = StoryStructure & { parts: StoryPart[] };
+export type { StructureProposalInput, PartDraft } from "./domain/structure.js";
 
 // ── hooks ────────────────────────────────────────────────────────────────
 export interface NovelCreatedContext {
@@ -113,7 +124,8 @@ export interface GoalGuard {
 }
 
 /** hitl surface for `ending_change` approvals; wired late because hitl is built after novel */
-export type NovelApprovalPort = Pick<import("../hitl/index.js").HitlService, "requestApproval" | "registerApprovalHandler">;
+export type NovelApprovalPort = Pick<import("../hitl/index.js").HitlService, "requestApproval" | "registerApprovalHandler"> &
+  Partial<Pick<import("../hitl/index.js").HitlService, "cancelApproval">>;
 
 /** saveGoal result: the stored goal plus a pending ending_change approval when the ending was revised */
 export type SavedGoal = Goal & { pendingEndingChange?: { approvalId: string; questionId: string; endingDirection: string } };
@@ -135,6 +147,9 @@ export interface NovelSettingsPatch {
   defaultNarrationMode?: NarrationMode;
   timezone?: string;
   possessionModeEnabled?: boolean;
+  /** 설계 추가 0011: 인터넷 검색(기본 켬)과 호출 1회당 검색 상한(1~10) */
+  webSearchEnabled?: boolean;
+  webSearchMaxUses?: number;
 }
 
 export interface ChangeAutonomyInput {
@@ -186,6 +201,22 @@ export interface ArcInput {
   endCondition: string;
   plannedEpisodeFrom: number;
   plannedEpisodeTo: number;
+  /** 0008: plot (= arc) of a story part */
+  partId?: string | null;
+  coreEvent?: string;
+  involvedCharacterIds?: string[];
+  changeText?: string;
+  setupPlan?: ArcSetupPlanJson;
+}
+
+export interface StoryPartPatch {
+  title?: string;
+  goalText?: string;
+  turningPoints?: string[];
+  plannedEpisodeFrom?: number;
+  plannedEpisodeTo?: number;
+  characterStates?: Array<{ characterId: string; state: string }>;
+  plotOutline?: Array<{ title: string; coreEvent: string; episodeCount: number }>;
 }
 
 export interface LengthProfilePatch {
@@ -303,8 +334,36 @@ export interface NovelService {
   updateLengthProfile(scope: NovelScope, patch: LengthProfilePatch, actor: ActorRef): Promise<LengthProfile>;
   getNotificationPolicy(scope: NovelScope, tx?: Tx): Promise<NotificationPolicy>;
   updateNotificationPolicy(scope: NovelScope, patch: NotificationPolicyPatch, actor: ActorRef): Promise<NotificationPolicy>;
+
+  // ── 설계 추가: 전체 구성(1~4부 + 결말), plots = arcs (0008) ──
+  getStructure(scope: NovelScope, tx?: Tx): Promise<StoryStructureWithParts | null>;
+  /**
+   * agent write (plan_structure commit): creates the structure (4 parts) or merges the proposal keeping `user` fields.
+   * An approved structure goes back to draft (ST4, pending.regenerated + changed parts / ending); an awaiting one ST5.
+   */
+  saveStructureProposal(tx: Tx, scope: NovelScope, input: import("./domain/structure.js").StructureProposalInput, actor: ActorRef): Promise<StoryStructureWithParts>;
+  /** user edit (origin user); approved → ST4, awaiting → ST5 (+ pending approval cancelled) */
+  updateStructureEnding(scope: NovelScope, patch: Partial<StoryEnding>, expectedRevision: number, actor: ActorRef): Promise<StoryStructureWithParts>;
+  updateStoryPart(scope: NovelScope, partId: string, patch: StoryPartPatch, expectedRevision: number, actor: ActorRef): Promise<StoryStructureWithParts>;
+  transitionStructure(tx: Tx, scope: NovelScope, to: StoryStructureStatus, actor: ActorRef, opts?: { approvalId?: string; reason?: string; ruleId?: string }): Promise<StoryStructure>;
+  /** goal ending_change etc.: approved/awaiting → draft with pending changes merged (no-op without a structure) */
+  reopenStructure(tx: Tx, scope: NovelScope, change: StructurePendingChanges, actor: ActorRef, reason: string): Promise<void>;
+  /** structure revision+1 & first appearances (plan_structure / approval bookkeeping) */
+  setStructureFirstAppearances(tx: Tx, scope: NovelScope, items: Array<{ characterId: string; episodeNo: number }>): Promise<void>;
+  /** empty array = clear (`arc.plan_flags_cleared`) */
+  setArcPlanFlags(tx: Tx, scope: NovelScope, arcId: string, flags: ArcPlanFlag[], actor: ActorRef): Promise<Arc>;
 }
 
 export type { NovelModuleDeps } from "./module.js";
 export { createNovelModule } from "./module.js";
 export { NOVEL_TRANSITIONS, ARC_TRANSITIONS, SERIES_BIBLE_TRANSITIONS } from "./domain/transitions.js";
+export {
+  STRUCTURE_TRANSITIONS,
+  normalizeStructure,
+  structureCompleteness,
+  structureTotal,
+  toStoryStructureDto,
+  validatePartRanges,
+  distribute,
+  mergeAgentFields,
+} from "./domain/structure.js";

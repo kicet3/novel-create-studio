@@ -270,7 +270,8 @@ export function useChannels(novelId: string) {
 
 export function useIssueBinding(novelId: string) {
   return useMutation({
-    mutationFn: (botId: string) => api.post(`/novels/${novelId}/channels/bindings`, { kind: "telegram", botId }, { schema: messagingBindingTokenDtoSchema }),
+    mutationFn: (bot: { id: string; kind: "telegram" | "discord" }) =>
+      api.post(`/novels/${novelId}/channels/bindings`, { kind: bot.kind, botId: bot.id }, { schema: messagingBindingTokenDtoSchema }),
   });
 }
 

@@ -3,7 +3,7 @@ import { labelKo, type ConceptFieldOrigin, type ConceptSessionViewDto, type Conc
 import { errorMessage } from "../../api/client.js";
 import { Badge, Button, Callout, Input, Progress, Select, Textarea, toneForStatus, type Tone } from "../../components/ui/index.js";
 import { useConfirmFields, useDecideProposal, useEditBrief } from "./api.js";
-import { BRIEF_FIELDS, briefValueText, editText, fieldValueText, getBriefValue, isEmptyBriefValue, parseEditValue, type BriefFieldDef } from "./brief-fields.js";
+import { BRIEF_FIELDS, briefValueText, editText, fieldValueText, getBriefValue, isEmptyBriefValue, parseEditValue, proposalDecisionNote, proposalOutcomeText, splitProposals, type BriefFieldDef } from "./brief-fields.js";
 
 const ORIGIN_TONE: Record<ConceptFieldOrigin, Tone> = {
   user_stated: "accent",
@@ -13,6 +13,7 @@ const ORIGIN_TONE: Record<ConceptFieldOrigin, Tone> = {
   agent_delegated: "violet",
   template_default: "neutral",
   imported: "warn",
+  agent_auto_accepted: "violet",
 };
 const STATE_TONE: Record<ConceptSlotState, Tone> = { empty: "neutral", proposed: "violet", confirmed: "ok", deferred: "neutral" };
 
@@ -58,10 +59,11 @@ export function BriefPanel({ novelId, view, onJumpToMessage }: { novelId: string
 
   const visible = rows.filter((r) => showEmpty || !isEmptyBriefValue(r.value) || r.required);
   const groups = [...new Set(visible.map((r) => r.group))];
-  const pendingProposals = wb.change_proposals.filter((p) => p.status === "pending");
+  const { pending: pendingProposals, settled: settledProposals } = splitProposals(wb.change_proposals);
+  const fieldLabel = (path: string) => BRIEF_FIELDS.find((f) => f.path === path)?.label ?? path;
   const hasImported = rows.some((r) => r.origin === "imported" && r.state === "proposed");
   const hasDelegated = rows.some((r) => r.origin === "agent_delegated" && r.state === "proposed");
-  const { requiredConfirmed, requiredTotal } = view.progress;
+  const { requiredConfirmed, requiredTotal, missing } = view.progress;
 
   return (
     <aside aria-labelledby="brief-title" className="flex min-w-0 flex-col gap-3 rounded-[10px] border border-border bg-surface px-4 py-3.5 shadow-card">
@@ -73,13 +75,21 @@ export function BriefPanel({ novelId, view, onJumpToMessage }: { novelId: string
       </div>
       <div>
         <div className="mb-1 flex justify-between text-xs text-muted">
-          <span>필수 항목 확정</span>
+          <span>브리프 진행</span>
           <span className="tabular">
-            {requiredConfirmed} / {requiredTotal}
+            필수 항목 {requiredConfirmed}/{requiredTotal} 확정
           </span>
         </div>
         <Progress value={requiredConfirmed} max={Math.max(requiredTotal, 1)} tone={requiredConfirmed >= requiredTotal ? "ok" : "accent"} label="필수 항목 확정" valueText={`${requiredConfirmed} / ${requiredTotal}`} />
-        {view.nextStep.text && <p className="m-0 mt-1.5 text-xs text-muted">다음: {view.nextStep.text}</p>}
+        {view.session.status === "active" &&
+          (missing.length > 0 ? (
+            <p className="m-0 mt-1.5 text-xs text-muted">
+              남은 필수 항목: {missing.map((m) => m.label).join(", ")} — 모두 확정되면 대화가 마무리됩니다.
+            </p>
+          ) : (
+            <p className="m-0 mt-1.5 text-xs font-semibold text-ok">브리프 완성 — [승인 요청]으로 컨셉을 확정하세요.</p>
+          ))}
+        {view.nextStep.text && view.nextStep.kind !== "ready" && <p className="m-0 mt-1.5 text-xs text-muted">다음: {view.nextStep.text}</p>}
       </div>
 
       {view.session.status === "active" && view.blockers.length > 0 && (
@@ -98,13 +108,13 @@ export function BriefPanel({ novelId, view, onJumpToMessage }: { novelId: string
             <Callout
               key={p.id}
               tone="violet"
-              title={`변경 제안: ${BRIEF_FIELDS.find((f) => f.path === p.field_path)?.label ?? p.field_path}`}
+              title={`변경 제안: ${fieldLabel(p.field_path)}`}
               actions={
                 <>
-                  <Button size="sm" variant="primary" loading={decide.isPending} onClick={() => decide.mutate({ proposalId: p.id, decision: "accepted" })}>
+                  <Button size="sm" variant="primary" loading={decide.isPending && decide.variables?.proposalId === p.id && decide.variables.decision === "accepted"} disabled={decide.isPending} onClick={() => decide.mutate({ proposalId: p.id, decision: "accepted" })}>
                     수락
                   </Button>
-                  <Button size="sm" onClick={() => decide.mutate({ proposalId: p.id, decision: "rejected" })}>
+                  <Button size="sm" loading={decide.isPending && decide.variables?.proposalId === p.id && decide.variables.decision === "rejected"} disabled={decide.isPending} onClick={() => decide.mutate({ proposalId: p.id, decision: "rejected" })}>
                     거절
                   </Button>
                 </>
@@ -114,8 +124,23 @@ export function BriefPanel({ novelId, view, onJumpToMessage }: { novelId: string
               {p.reason && <p className="m-0 text-xs text-muted">이유: {p.reason}</p>}
             </Callout>
           ))}
+          <p className="m-0 text-xs text-muted">{proposalDecisionNote(s.inFlightTaskId !== null)}</p>
           {decide.error && <Callout tone="danger">{errorMessage(decide.error)}</Callout>}
         </section>
+      )}
+
+      {settledProposals.length > 0 && (
+        <details className="text-xs text-muted">
+          <summary className="cursor-pointer select-none">처리된 제안 {settledProposals.length}개</summary>
+          <ul className="m-0 mt-1.5 flex flex-col gap-1 pl-4">
+            {settledProposals.slice(0, 20).map((p) => (
+              <li key={p.id}>
+                <span className="font-medium text-text">{fieldLabel(p.field_path)}</span> → {fieldValueText(BRIEF_FIELDS.find((f) => f.path === p.field_path), p.new_value)}{" "}
+                <span className="text-faint">· {proposalOutcomeText(p)}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
       )}
 
       {editable && (hasImported || hasDelegated) && (

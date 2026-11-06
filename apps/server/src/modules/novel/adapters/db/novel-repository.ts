@@ -1,6 +1,7 @@
 /** drizzle access to the tables owned by `novel` (08 §2.3). Every novel-owned query filters by novel_id (03 T-3). */
 import { and, asc, desc, eq, isNull, max, ne, sql } from "@ncs/db/orm";
-import { arcs, goals, lengthProfiles, notificationPolicies, novelCounters, novels, seriesBibles, users } from "@ncs/db/schema";
+import { arcs, goals, lengthProfiles, notificationPolicies, novelCounters, novels, seriesBibles, storyParts, storyStructures, users } from "@ncs/db/schema";
+import type { StoryPartsRow, StoryStructuresRow } from "@ncs/db/schema";
 import type { NovelCounterKind } from "@ncs/shared";
 import type { Db, NovelScope } from "../../../../platform/index.js";
 import type { Arc, Goal, LengthProfile, NotificationPolicy, Novel, SeriesBible, User } from "../../index.js";
@@ -131,6 +132,39 @@ export const novelRepo = {
       .where(and(eq(arcs.novelId, scope.novelId), eq(arcs.id, id)))
       .returning();
     return a!;
+  },
+
+  // story structure (0008)
+  async getStructure(db: Db, scope: NovelScope, forUpdate = false): Promise<StoryStructuresRow | null> {
+    const q = db.select().from(storyStructures).where(eq(storyStructures.novelId, scope.novelId));
+    const [s] = forUpdate ? await q.for("update") : await q;
+    return s ?? null;
+  },
+  async insertStructure(db: Db, row: typeof storyStructures.$inferInsert): Promise<StoryStructuresRow> {
+    const [s] = await db.insert(storyStructures).values(row).returning();
+    return s!;
+  },
+  async updateStructure(db: Db, scope: NovelScope, id: string, patch: Partial<typeof storyStructures.$inferInsert>): Promise<StoryStructuresRow> {
+    const [s] = await db
+      .update(storyStructures)
+      .set({ ...patch, updatedAt: sql`now()` })
+      .where(and(eq(storyStructures.novelId, scope.novelId), eq(storyStructures.id, id)))
+      .returning();
+    return s!;
+  },
+  async listParts(db: Db, scope: NovelScope): Promise<StoryPartsRow[]> {
+    return db.select().from(storyParts).where(eq(storyParts.novelId, scope.novelId)).orderBy(asc(storyParts.ord));
+  },
+  async insertParts(db: Db, rows: Array<typeof storyParts.$inferInsert>): Promise<StoryPartsRow[]> {
+    return rows.length ? db.insert(storyParts).values(rows).returning() : [];
+  },
+  async updatePart(db: Db, scope: NovelScope, id: string, patch: Partial<typeof storyParts.$inferInsert>): Promise<StoryPartsRow> {
+    const [p] = await db
+      .update(storyParts)
+      .set({ ...patch, updatedAt: sql`now()` })
+      .where(and(eq(storyParts.novelId, scope.novelId), eq(storyParts.id, id)))
+      .returning();
+    return p!;
   },
 
   // length profiles

@@ -8,6 +8,7 @@ import type { BudgetService } from "../budget/index.js";
 import type { OrchestrationService } from "./index.js";
 import { createOrchestrationEngine, type EngineLlmPort, type EngineOptions } from "./application/engine.js";
 import { mountOrchestrationRoutes } from "./adapters/http/routes.js";
+import { mountAgentsOverviewRoute, type AgentsOverviewLlmPort } from "./adapters/http/agents-overview-route.js";
 import { taskRepo } from "./adapters/db/task-repository.js";
 
 export interface OrchestrationModuleDeps {
@@ -19,7 +20,7 @@ export interface OrchestrationModuleDeps {
   /** shared execution pool (runtime) */
   pool: WorkerPool;
   /** optional (composition request): provider-call recovery on reclaim + provider breaker bindings */
-  llm?: EngineLlmPort;
+  llm?: EngineLlmPort & AgentsOverviewLlmPort;
   options?: EngineOptions;
 }
 
@@ -46,7 +47,7 @@ export function createOrchestrationModule(deps: OrchestrationModuleDeps): Server
 
   // INV-GOL-02: a goal change wakes the planning tasks
   novel.onGoalSaved(async ({ tx, scope, goal }) => {
-    const planning = await taskRepo.activeByKinds(tx.db, scope, ["plan_arc", "outline_episode", "schedule_episodes"]);
+    const planning = await taskRepo.activeByKinds(tx.db, scope, ["plan_arc", "plan_structure", "outline_episode", "schedule_episodes"]);
     const stamp = goal.updatedAt instanceof Date ? goal.updatedAt.getTime() : platform.clock.now();
     for (const t of planning) {
       await engine.requestWake(tx, scope, { taskId: t.id, reason: "schedule", idempotencyKey: `goal:${goal.id}:${stamp}:${t.id}`, source: { refType: "goal", refId: goal.id } });
@@ -57,7 +58,10 @@ export function createOrchestrationModule(deps: OrchestrationModuleDeps): Server
     name: "orchestration",
     implemented: true,
     service: engine,
-    routes: (r) => mountOrchestrationRoutes(r, engine, platform.uow),
+    routes: (r) => {
+      mountOrchestrationRoutes(r, engine, platform.uow);
+      mountAgentsOverviewRoute(r, { uow: platform.uow, clock: platform.clock, novel, llm: deps.llm });
+    },
     loops: [
       {
         name: "orchestration.dispatcher",

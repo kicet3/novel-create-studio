@@ -35,6 +35,14 @@
    writing pipeline (`WRITING_SECTIONS`). `build_initial_ontology` reuses a cast character entity with the same name instead of opening
    a duplicate question.
 
+## 전체 구성 전 필수 항목 (설계 추가 0008)
+
+- 새 필드: `appearance`(외형 요약), `motivation`, `speech_sample`, `arc_start`/`arc_end`(변화 아크), `story_role`(조연·적대자 역할), `first_appearance_episode_no`, `introduced_arc_id`(플롯에서 새로 등장).
+- 완성도(`castCompleteness`, 순수): 주인공·서브 주인공 = 나이·외형·성격(장점·결점)·목표·동기·두려움·과거사·말투 예시·관계(서브는 주인공과의 관계, 양방향)·변화 아크 시작/끝, 조연·적대자 = 역할·목표·주인공과의 관계. 초기 인물은 확정(confirmed)된 값만, 플롯 신규 인물은 AI 제안을 수락(proposed=false)해야 인정합니다. `GET …/cast`의 `completeness`, 구성 생성·승인 게이트(422 `cast_incomplete`)에 쓰입니다.
+- `POST …/cast/draft {fillMissing:true, characterIds?}`: `draft_cast`가 지금 비어 있는 필수 항목만 채웁니다(값이 있는 항목·user 항목은 그대로). 확정 인물도 빈 항목이 채워지면 draft + proposed로 돌아갑니다.
+- `cast` 컨텍스트: 아웃라인 등장 인물(엔티티 seed)은 전체 프로필, 나머지는 한 줄. 첫 등장 화보다 앞선 화에서는 "(아직 등장 전 — N화 첫 등장 예정 …)" 표시.
+- `PlanningCastPort`(manuscript 등록부): 플롯 신규 인물 제안(`proposed`, `introduced_arc_id`), arc_plan 승인/AR4 때 그 인물들만 온톨로지 동기화·확정, 첫 등장 화(빈 값만) 기록.
+
 ## Design sheet
 - Spec (`designSheetSpecSchema`): face, hair, eyes, build, height, outfits[], colorPalette[{name, hex}], distinguishingMarks, artStyle, avoid;
   per-field origin like the profile. AI draft `draft_design_sheet` (role `world_keeper`, `world_keeper.draft_design_sheet@0.1.0`, target character).
@@ -62,3 +70,5 @@
 - Deleting a character keeps its ontology entity (merge/retire it in the ontology screen).
 - Facts synced before `ontology_sync.fieldFacts` existed are matched among the character's own `factIds` (same predicate / object) when they change.
 - Image generations are not reused as model references (text reference only); no image-to-image consistency.
+
+- 설계 추가 (world, 0012): the AI cast draft (`draft_cast`) prompt carries the world ontology (`world.renderWorldContext`: approved world items + candidates flagged `[미확정 후보]`).

@@ -27,6 +27,7 @@ import { GoalForm } from "./GoalForm.js";
 import { PausedCallout, PauseControl } from "./PauseControl.js";
 import { useHome, type HomeData } from "./api.js";
 import { NovelSetupFlow } from "./NovelSetupFlow.js";
+import { StructureStepCard } from "../structure/StructureStepCard.js";
 
 /** `/novels/:novelId` — 작품 홈 (08 §9.2, FR-UI-01). */
 export function NovelHomePage() {
@@ -45,7 +46,7 @@ function goalSummary(d: HomeData): string {
   const total = g.totalEpisodesMax ? `${g.totalEpisodesMin}~${g.totalEpisodesMax}화` : `${g.totalEpisodesMin}화`;
   const cadence = g.cadenceEpisodesPerWeek === 7 ? "하루 1화" : `주 ${g.cadenceEpisodesPerWeek}화`;
   const active = d.arcs.find((a) => a.status === "active");
-  const arc = active ? ` · 아크 ${active.ord}(${active.plannedEpisodeFrom}~${active.plannedEpisodeTo}화) 진행 중` : "";
+  const arc = active ? ` · 플롯 ${active.ord}(${active.plannedEpisodeFrom}~${active.plannedEpisodeTo}화) 진행 중` : "";
   return `목표 ${total} · ${cadence}${arc} · 결말 방향 “${g.endingDirection}”`;
 }
 
@@ -72,6 +73,7 @@ function HomeBody({ data }: { data: HomeData }) {
         <Kpis data={data} />
         <Split>
           <div className="flex min-w-0 flex-col gap-3">
+            {novel.status !== "concept" && novel.status !== "onboarding" && <StructureStepCard novelId={novel.id} />}
             <QuestionsCard data={data} />
             <RunningTasksCard novelId={novel.id} />
             <ArcsCard data={data} />
@@ -256,11 +258,11 @@ function RunningTasksCard({ novelId }: { novelId: string }) {
 function ArcsCard({ data }: { data: HomeData }) {
   if (data.arcs.length === 0) return null;
   return (
-    <Card title="아크">
+    <Card title="플롯">
       <List>
         {data.arcs.map((a) => (
           <ListItem key={a.id}>
-            <Chip>아크 {a.ord}</Chip>
+            <Chip>플롯 {a.ord}</Chip>
             <div className="min-w-0 flex-1">
               <b>{a.title}</b>
               <div className="text-xs text-muted">

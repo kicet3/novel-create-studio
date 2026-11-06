@@ -1,7 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { DEFAULTS } from "@ncs/shared";
 import { TaskFailure } from "../../src/modules/orchestration/index.js";
 import { conceptInternals } from "../../src/modules/concept/module.js";
 import { createTestCore, type TestCore } from "../support/test-core.js";
+import { notWorld } from "../support/world.js";
 import { conceptHarness, installConceptStubs, type ConceptHarness, type Scripted } from "./support.js";
 
 let t: TestCore;
@@ -205,19 +207,53 @@ describe("caps and lifecycle (3.8, 3.9, INV-CON-09)", () => {
     expect(actions).toEqual(expect.arrayContaining(["concept_session.paused", "concept_session.resumed", "concept_session.entry_mode_changed", "concept_session.limit_extended"]));
   });
 
-  it("turn cap → limit card without a task; [20턴 더] at most twice (CT-08)", async () => {
+  it("turn cap is a hidden safety ceiling → limit card with remaining fields and how to continue; extensions capped (CT-08, 설계 변경)", async () => {
+    const novel = await t.modules.novel.service.createNovel({}, t.owner);
+    const h = await conceptHarness(t, novel.id, script);
+    const s = await h.session();
+    const ceiling = DEFAULTS["concept.max_turns"];
+    const step = DEFAULTS["concept.turn_extension"];
+    expect(s.turnLimit).toBe(ceiling);
+    expect(ceiling).toBeGreaterThanOrEqual(200);
+    // the view exposes the ceiling for the hidden warning only (softWarning = ceiling − remaining)
+    const view = (await svc().getSessionView(h.scope, s.id))!;
+    expect(view.turns).toMatchObject({ limit: ceiling, softWarning: ceiling - DEFAULTS["concept.turn_soft_warning_remaining"], extension: step, extensionsLeft: DEFAULTS["concept.max_turn_extensions"] });
+    expect(view.progress.missing.length).toBeGreaterThan(0);
+    await t.testDb.exec(`UPDATE concept_sessions SET agent_turn_count = turn_limit WHERE id = '${s.id}'`);
+    expect((await h.say("안녕하세요")).taskId).toBeNull();
+    const card = (await h.messages()).at(-1)!;
+    expect(card.body).toContain(`안전 상한(${ceiling}턴)`);
+    expect(card.body).toContain("진행 방식 바꾸기");
+    expect(card.body).toContain(view.progress.missing[0]!.label);
+    expect((card.options as any[]).map((o) => o.value)).toEqual(expect.arrayContaining(["@delegate_all", "@form_mode", "@extend_turns", "@later"]));
+    const r = await h.pick("@extend_turns");
+    expect(r.taskId).toBeTruthy();
+    expect((await h.session()).turnLimit).toBe(ceiling + step);
+    for (let i = 1; i < DEFAULTS["concept.max_turn_extensions"]; i++) await svc().extendLimit(h.scope, s.id, { turns: 1 }, t.owner);
+    expect((await h.session()).turnLimit).toBe(ceiling + step * DEFAULTS["concept.max_turn_extensions"]);
+    await expect(svc().extendLimit(h.scope, s.id, { turns: 1 }, t.owner)).rejects.toMatchObject({ code: "turn_extension_exhausted" });
+  });
+
+  it("at the turn cap [전부 맡기기] runs one closing turn instead of repeating the cap notice (review fix)", async () => {
     const novel = await t.modules.novel.service.createNovel({}, t.owner);
     const h = await conceptHarness(t, novel.id, script);
     const s = await h.session();
     await t.testDb.exec(`UPDATE concept_sessions SET agent_turn_count = turn_limit WHERE id = '${s.id}'`);
     expect((await h.say("안녕하세요")).taskId).toBeNull();
-    const card = (await h.messages()).at(-1)!;
-    expect((card.options as any[]).map((o) => o.value)).toEqual(expect.arrayContaining(["@delegate_all", "@form_mode", "@extend_turns", "@later"]));
-    const r = await h.pick("@extend_turns");
+    const before = (await h.messages()).length;
+    // the escape the cap notice offers is not a dead end
+    const r = await h.pick("@delegate_all");
     expect(r.taskId).toBeTruthy();
-    expect((await h.session()).turnLimit).toBe(60);
-    await svc().extendLimit(h.scope, s.id, { turns: 1 }, t.owner);
-    await expect(svc().extendLimit(h.scope, s.id, { turns: 1 }, t.owner)).rejects.toMatchObject({ code: "turn_extension_exhausted" });
+    const after = await h.messages();
+    expect(after.slice(before).some((m) => m.authorKind !== "user" && /안전 상한/.test(m.body ?? ""))).toBe(false);
+    // past the one grace turn the notice stops offering it (no endless loop)
+    await t.testDb.exec(`UPDATE concept_sessions SET agent_turn_count = turn_limit + 1, in_flight_task_id = NULL WHERE id = '${s.id}'`);
+    await t.testDb.exec(`UPDATE tasks SET status = 'cancelled' WHERE id = '${r.taskId}'`);
+    expect((await h.say("계속")).taskId).toBeNull();
+    const card = (await h.messages()).at(-1)!;
+    expect(card.body).toContain("안전 상한");
+    expect((card.options as any[]).map((o) => o.value)).not.toContain("@delegate_all");
+    expect((card.options as any[]).map((o) => o.value)).toContain("@form_mode");
   });
 
   it("pause/resume/abandon/restart (CS6–CS8)", async () => {
@@ -281,6 +317,10 @@ describe("turn execution with a model (scripted port)", () => {
     expect(v.status).toBe(200);
     expect(v.body.workingBrief.content.opposition).toBe("기지를 봉쇄한 회사");
     expect((await h.session()).spentMicros).toBeGreaterThan(0);
+    // the decision goes to the partner as a turn (bug: the button only wrote a chat line)
+    expect(v.body.session.inFlightTaskId).toBeTruthy();
+    await h.run();
+    expect((await h.session()).inFlightTaskId).toBeNull();
   });
 
   it("CT-14: a failed attempt is retried without duplicate messages; last failure leaves a retry notice (X-8)", async () => {
@@ -337,8 +377,9 @@ describe("real llm module path (Claude adapter → scripted Messages API)", () =
       t.claude.reply({ when: { prompt: "회귀한 짐꾼 이야기", schemaHas: ["reply_text", "slot_updates"] }, json: { reply_text: "좋아요. 먼저 장르를 정해 볼까요?", slot_updates: [] } });
       await h.say("회귀한 짐꾼 이야기");
       await h.run();
-      expect(t.claude.unmatched).toHaveLength(0);
-      expect(t.claude.requests).toHaveLength(1);
+      // (earlier novels' concept approval queued build_world_ontology, unscripted here)
+      expect(notWorld(t.claude.unmatched)).toHaveLength(0);
+      expect(notWorld(t.claude.requests)).toHaveLength(1);
       const agent = await h.lastAgent();
       expect(agent).toBeTruthy();
       expect(agent.askedFieldPaths).toEqual(["category.genre_label"]);

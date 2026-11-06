@@ -57,6 +57,9 @@ export const novels = pgTable(
     publishPolicy: text("publish_policy", { enum: ENUMS.publish_policy }).notNull().default("manual"),
     multiTimelineEnabled: boolean("multi_timeline_enabled").notNull().default(false),
     possessionModeEnabled: boolean("possession_mode_enabled").notNull().default(false),
+    /** 설계 추가 0011: 인터넷 검색(기본 켬)과 LLM 호출 1회당 검색 상한(1~10) */
+    webSearchEnabled: boolean("web_search_enabled").notNull().default(true),
+    webSearchMaxUses: integer("web_search_max_uses").notNull().default(3),
     defaultNarrationMode: text("default_narration_mode", { enum: ENUMS.narration_mode }).notNull().default("third_limited"),
     timezone: text("timezone").notNull().default("Asia/Seoul"),
     lengthProfileId: text("length_profile_id").notNull(),
@@ -115,6 +118,11 @@ export const seriesBibles = pgTable(
 export type SeriesBiblesRow = typeof seriesBibles.$inferSelect;
 export type SeriesBiblesInsert = typeof seriesBibles.$inferInsert;
 
+export interface ArcSetupPlanJson {
+  plant?: string[];
+  payoff?: string[];
+}
+
 /** arcs */
 export const arcs = pgTable(
   "arcs",
@@ -132,6 +140,13 @@ export const arcs = pgTable(
     planApprovalId: text("plan_approval_id"),
     arcApprovalId: text("arc_approval_id"),
     pausedAt: timestamp("paused_at", { withTimezone: true, mode: "date" }),
+    /** 0008: plot = arc linked to a story part */
+    partId: text("part_id"),
+    coreEvent: text("core_event").notNull().default(""),
+    involvedCharacterIds: text("involved_character_ids").array().notNull().default(sql`'{}'`),
+    changeText: text("change_text").notNull().default(""),
+    setupPlan: jsonb("setup_plan").$type<ArcSetupPlanJson>().notNull().default({}),
+    planFlags: text("plan_flags", { enum: ENUMS.arc_plan_flag }).array().notNull().default(sql`'{}'`),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
@@ -179,3 +194,68 @@ export const novelCounters = pgTable(
 );
 export type NovelCountersRow = typeof novelCounters.$inferSelect;
 export type NovelCountersInsert = typeof novelCounters.$inferInsert;
+
+// ── 0008 전체 구성(1~4부 + 결말) ─────────────────────────────────────────
+export interface StoryEndingJson {
+  worldState: string;
+  conflictResolution: string;
+  characterFinalStates: Array<{ characterId: string; finalState: string }>;
+  protagonistChange: { from: string; to: string };
+  foreshadowPayoffs: Array<{ setup: string; payoff: string; setupId: string | null }>;
+}
+export interface StructurePendingChangesJson {
+  ending?: boolean;
+  partIds?: string[];
+  goalEndingChanged?: boolean;
+  regenerated?: boolean;
+}
+export interface StoryCharacterStateJson {
+  characterId: string;
+  state: string;
+}
+export interface StoryPlotOutlineJson {
+  title: string;
+  coreEvent: string;
+  episodeCount: number;
+}
+
+/** story_structures — one per novel (revision-based, like goals) */
+export const storyStructures = pgTable("story_structures", {
+  id: text("id").notNull().primaryKey(),
+  novelId: text("novel_id").notNull(),
+  status: text("status", { enum: ENUMS.story_structure_status }).notNull().default("draft"),
+  revision: integer("revision").notNull().default(1),
+  approvedRevision: integer("approved_revision"),
+  ending: jsonb("ending").$type<Partial<StoryEndingJson>>().notNull().default({}),
+  endingFieldOrigins: jsonb("ending_field_origins").$type<Record<string, "user" | "agent">>().notNull().default({}),
+  firstAppearances: jsonb("first_appearances").$type<Array<{ characterId: string; episodeNo: number }>>().notNull().default([]),
+  pendingChanges: jsonb("pending_changes").$type<StructurePendingChangesJson>().notNull().default({}),
+  approvalId: text("approval_id"),
+  approvedAt: timestamp("approved_at", { withTimezone: true, mode: "date" }),
+  sourceBibleId: text("source_bible_id"),
+  modelId: text("model_id"),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+});
+export type StoryStructuresRow = typeof storyStructures.$inferSelect;
+export type StoryStructuresInsert = typeof storyStructures.$inferInsert;
+
+/** story_parts — exactly 4 per structure (ord 1..4) */
+export const storyParts = pgTable("story_parts", {
+  id: text("id").notNull().primaryKey(),
+  novelId: text("novel_id").notNull(),
+  structureId: text("structure_id").notNull(),
+  ord: integer("ord").notNull(),
+  title: text("title").notNull().default(""),
+  goalText: text("goal_text").notNull().default(""),
+  turningPoints: jsonb("turning_points").$type<string[]>().notNull().default([]),
+  plannedEpisodeFrom: integer("planned_episode_from").notNull(),
+  plannedEpisodeTo: integer("planned_episode_to").notNull(),
+  characterStates: jsonb("character_states").$type<StoryCharacterStateJson[]>().notNull().default([]),
+  plotOutline: jsonb("plot_outline").$type<StoryPlotOutlineJson[]>().notNull().default([]),
+  fieldOrigins: jsonb("field_origins").$type<Record<string, "user" | "agent">>().notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+});
+export type StoryPartsRow = typeof storyParts.$inferSelect;
+export type StoryPartsInsert = typeof storyParts.$inferInsert;

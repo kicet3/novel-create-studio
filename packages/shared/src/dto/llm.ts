@@ -6,6 +6,23 @@ import { z } from "zod";
 import { ENUMS } from "../enum-registry.js";
 import { isoDateTime } from "./common.js";
 
+// ── web search (설계 추가 0011: 인터넷 검색) ─────────────────────────────────
+/** One source a model used through web search (provider_calls.response.webSearch.citations, concept message `sources`). */
+export const llmWebSourceSchema = z.object({
+  url: z.string(),
+  title: z.string().nullable(),
+  /** ISO time the call that found it returned */
+  retrievedAt: z.string(),
+});
+export type LlmWebSource = z.infer<typeof llmWebSourceSchema>;
+
+/** web search outcome of one call: used / allowed but not used / disabled for the novel / unsupported by the provider lane */
+export const llmWebSearchStatusSchema = z.enum(["used", "not_used", "disabled", "unsupported"]);
+export type LlmWebSearchStatus = z.infer<typeof llmWebSearchStatusSchema>;
+
+/** smallest / largest per-call search cap (novels.web_search_max_uses CHECK) */
+export const WEB_SEARCH_MAX_USES_RANGE = { min: 1, max: 10 } as const;
+
 // ── provider profile ─────────────────────────────────────────────────────
 /** One entry of `provider_profiles.models` (prices: micro-USD per 1M tokens; null = unpriced → budget `unpriced`). */
 export const llmProviderModelSchema = z.object({

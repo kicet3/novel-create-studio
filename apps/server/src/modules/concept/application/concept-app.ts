@@ -18,7 +18,7 @@ import {
 } from "../../../platform/index.js";
 import type { AuditService } from "../../audit/index.js";
 import type { ApprovalDecisionContext, HitlService } from "../../hitl/index.js";
-import type { LlmService, LlmStreamEvent, ModelCallPort } from "../../llm/index.js";
+import type { LlmCitation, LlmService, LlmStreamEvent, ModelCallPort } from "../../llm/index.js";
 import type { InboundAction, InboundContext, InboundResult, MessagingService } from "../../messaging/index.js";
 import type { NovelService } from "../../novel/index.js";
 import { ModelCallError } from "../../llm/index.js";
@@ -37,7 +37,7 @@ import {
   type WorkingBrief,
 } from "../domain/brief.js";
 import { DEFAULT_SAFETY_LISTS, groundedRealPersonName, runDeterministicChecks, submitBlockers, type InstallSafetyLists } from "../domain/checks.js";
-import { CONTROL, control, controlKeyOf, missingRequired, selectNext, summaryText } from "../domain/next-question.js";
+import { CONTROL, control, controlKeyOf, missingRequired, selectNext, summaryText, turnCapText } from "../domain/next-question.js";
 import {
   briefCheckProposalSchema,
   conceptTurnProposalSchema,
@@ -53,6 +53,17 @@ import { renderApprovalSummary, renderBriefMarkdown } from "../domain/render.js"
 import type { SlotDiff, StoredOption } from "../domain/slot-guard.js";
 import { assertSessionTransition, assertStageTransition } from "../domain/transitions.js";
 import { planFieldEdit, planImport, planTurn, resolveOption, type PlanTurnOutput, type TurnLimits, type TurnMessage } from "../domain/turn.js";
+import type { ProposalSettlement } from "../domain/change-proposals.js";
+import type { ProposalResolution } from "../domain/brief.js";
+import {
+  AUTO_APPROVE_DEFAULT_MAX_STEPS,
+  autoApproveState,
+  autoStopText,
+  decideAutoStep,
+  type AutoApproveState,
+  type AutoStopReason,
+} from "../domain/auto-approve.js";
+
 import { CHECK_TEMPLATE_ID, IMPORT_TEMPLATE_ID, TITLES_TEMPLATE_ID, TURN_TEMPLATE_ID, renderCheckPrompt, renderImportPrompt, renderTitlesPrompt, renderTurnPrompt } from "./prompts.js";
 import { createFieldStreamer } from "../domain/partial-json.js";
 import { createTurnStreamHub } from "./turn-stream.js";
@@ -77,6 +88,8 @@ export interface ConceptPorts {
 /** Turn reservation estimate (3.8 / INV-CON-09): 16k in × $5/M + 2.5k out × $25/M ≈ $0.14 (assumption). */
 export const TURN_RESERVE_MICROS = 150_000;
 const TURN_PRIORITY = 950; // X-4
+/** turns [전부 맡기기] may run past the hidden turn ceiling (the cap notice offers it as the way out) */
+const DELEGATE_CAP_GRACE = 1;
 const CHECK_PRIORITY = 950;
 const TERMINAL: readonly ConceptSessionStatus[] = ["approved", "abandoned"];
 
@@ -86,7 +99,7 @@ export interface SessionView {
   progress: { requiredTotal: number; requiredConfirmed: number; missing: Array<{ path: string; label: string }> };
   blockers: Array<{ code: string; message: string; fieldPaths: string[] }>;
   canSubmit: boolean;
-  turns: { used: number; limit: number; extensionsLeft: number; softWarning: number };
+  turns: { used: number; limit: number; extensionsLeft: number; softWarning: number; extension: number };
   budget: { spentMicros: number; limitMicros: number; checkReserveMicros: number };
   statusLabel: string;
   stageLabel: string;
@@ -94,6 +107,26 @@ export interface SessionView {
   nextStep: { kind: string; path: string | null; text: string };
   /** 설계 추가: 추천 제목 (고르기 전까지 작품 제목은 가제/임시) */
   titleSuggestions: { items: TitleSuggestion[]; generatedAt: string | null; refreshing: boolean; error: string | null; canRefresh: boolean };
+  /** 설계 추가: 자동 승인 모드 */
+  autoApprove: AutoApproveView;
+}
+
+export interface AutoApproveView {
+  enabled: boolean;
+  status: AutoApproveState["status"];
+  steps: number;
+  maxSteps: number;
+  acceptUserFieldProposals: boolean;
+  waitingReason: NonNullable<AutoApproveState["waiting"]>["reason"] | null;
+  stopReason: AutoStopReason | null;
+  canEnable: boolean;
+  updatedAt: string | null;
+}
+
+export interface SetAutoApproveInput {
+  enabled: boolean;
+  maxSteps?: number;
+  acceptUserFieldProposals?: boolean;
 }
 
 export interface GoalFormDefaults {
@@ -111,11 +144,36 @@ export type ConceptServiceExt = ConceptService;
 
 /** `titles: true` = "다른 추천 받기" (title suggestions only: no reply message, no turn count) */
 type TurnInput = { session_id: string; resume?: boolean; titles?: boolean };
-type TurnProposal = { proposal: ConceptTurnProposal | null; costMicros: number; observedMaxSeq: number; failed?: string; titles?: TitleSuggestion[] | null };
+type TurnProposal = {
+  proposal: ConceptTurnProposal | null;
+  costMicros: number;
+  observedMaxSeq: number;
+  failed?: string;
+  titles?: TitleSuggestion[] | null;
+  /** 설계 추가 0011: web sources the reply used (concept message footnote "출처") */
+  sources?: LlmCitation[] | null;
+};
+
+/** messenger copy of a reply's sources (the web shows them as a footnote) */
+export function sourcesFootnote(sources: readonly LlmCitation[] | null | undefined): string {
+  if (!sources?.length) return "";
+  return `\n\n출처\n${sources
+    .slice(0, 5)
+    .map((x, i) => `${i + 1}. ${x.title ? `${x.title} — ` : ""}${x.url}`)
+    .join("\n")}`;
+}
 type ImportInput = { session_id: string; message_id: string };
 type ImportOut = { proposal: ImportProposal | null; costMicros: number };
 type CheckInput = { session_id: string; working_brief_hash: string; requested_by_user_id: string };
 type CheckOut = { proposal: BriefCheckProposal | null; costMicros: number };
+
+function settledVia(r: ProposalResolution): "button" | "chat" | "form" | "auto" | "auto_approve" {
+  if (r === "button") return "button";
+  if (r === "auto_accepted") return "auto_approve";
+  if (r === "decided_in_chat" || r === "applied_in_chat") return "chat";
+  if (r === "form_edit") return "form";
+  return "auto";
+}
 
 export function createConceptApp(deps: ConceptAppDeps) {
   const { platform, audit, novel, orchestration, messaging } = deps;
@@ -127,9 +185,11 @@ export function createConceptApp(deps: ConceptAppDeps) {
   const target = (id: string) => ({ type: "concept_session" as const, id });
   const briefTarget = (id: string) => ({ type: "concept_brief" as const, id });
   const checkReserve = usdToMicros(DEFAULTS["concept.check_reserve_usd"]);
+  /** 설계 변경: 턴 상한은 숨은 안전 상한 — 남은 턴이 concept.turn_soft_warning_remaining 이하일 때만 경고 */
+  const softWarningAt = (s: ConceptSession) => Math.max(0, s.turnLimit - DEFAULTS["concept.turn_soft_warning_remaining"]);
   const limits = (s: ConceptSession, messenger = false): TurnLimits => ({
     flipLimit: DEFAULTS["concept.slot_flip_limit"],
-    softWarning: DEFAULTS["concept.turn_soft_warning"],
+    softWarning: softWarningAt(s),
     agentTurnCount: s.agentTurnCount,
     turnLimit: s.turnLimit,
     messenger,
@@ -156,6 +216,7 @@ export function createConceptApp(deps: ConceptAppDeps) {
     pickedIdx: m.pickedIdx,
     options: (m.options as StoredOption[] | null) ?? null,
     askedFieldPaths: m.askedFieldPaths ?? null,
+    autoApproved: m.autoApproved,
   });
 
   async function insertMessage(
@@ -176,6 +237,8 @@ export function createConceptApp(deps: ConceptAppDeps) {
       inboxId?: string | null;
       pickedIdx?: number | null;
       slotUpdates?: SlotDiff[];
+      autoApproved?: boolean;
+      sources?: LlmCitation[] | null;
     },
   ): Promise<ConceptMessage> {
     const seq = await repo.nextSeq(tx.db, scope, session.id);
@@ -197,6 +260,8 @@ export function createConceptApp(deps: ConceptAppDeps) {
       slotUpdates: v.slotUpdates ?? [],
       respondsToSeq: v.respondsToSeq ?? null,
       isSuperseded: v.isSuperseded ?? false,
+      autoApproved: v.autoApproved ?? false,
+      sources: v.sources && v.sources.length ? v.sources : null,
     });
   }
 
@@ -209,7 +274,7 @@ export function createConceptApp(deps: ConceptAppDeps) {
         channelId: session.activeChannelId,
         conceptMessageId: msg.id,
         conceptSessionId: session.id,
-        text: msg.body,
+        text: msg.body + sourcesFootnote(msg.sources as LlmCitation[] | null),
         options: opts.map((o) => ({ label: o.label, value: String(o.idx) })),
       });
       await repo.updateMessage(tx.db, scope, msg.id, { outboxId });
@@ -249,7 +314,30 @@ export function createConceptApp(deps: ConceptAppDeps) {
       reason: reason ?? null,
       approvalId: next.pendingApprovalId ?? s.pendingApprovalId ?? null,
     });
+    // 자동 승인 runs only in an active session: leaving `active` (paused / awaiting approval / closed) ends the run
+    if (to !== "active" && autoOf(next).enabled) {
+      return stopAuto(tx, scope, next, to === "paused" && next.pauseReason === "budget_limit" ? "budget" : "session_closed", actor.type === "user" ? actor : orchestrator, { notice: false });
+    }
     return next;
+  }
+
+  /**
+   * audit trail of change proposals that left `pending` in a commit (설계 추가: 대화로 해결된 제안 정리).
+   * The user's own decisions/values are attributed to the user; superseded ones to the committing actor.
+   */
+  async function recordSettled(tx: Tx, scope: NovelScope, s: ConceptSession, settled: readonly ProposalSettlement[], actor: ActorRef): Promise<void> {
+    for (const x of settled) {
+      // auto-approve acceptances stay with the committing actor (delegated, not the user's own decision; via=auto_approve)
+      const byUser = x.status !== "superseded" && !!x.message_id && x.resolution !== "auto_accepted";
+      await audit.record(tx, {
+        novelId: scope.novelId,
+        actor: byUser && actor.type !== "user" ? actors.user(s.createdByUserId) : actor,
+        action: "concept_brief.change_proposal_decided",
+        target: target(s.id),
+        before: { path: x.field_path, proposal_id: x.id, status: "pending" },
+        after: { path: x.field_path, proposal_id: x.id, decision: x.status, resolution: x.resolution, via: settledVia(x.resolution), value: valueToText(x.value).slice(0, 200), message_id: x.message_id },
+      });
+    }
   }
 
   async function changeStage(tx: Tx, scope: NovelScope, s: ConceptSession, to: ConceptStage, actor: ActorRef): Promise<ConceptSession> {
@@ -291,23 +379,30 @@ export function createConceptApp(deps: ConceptAppDeps) {
     ]);
   }
 
+  /** the hidden safety ceiling was hit (설계 변경: 대화는 브리프 완성까지 이어지고, 이 상한은 폭주 방지용) */
   async function limitNotice(tx: Tx, scope: NovelScope, s: ConceptSession) {
     const b = parseWorkingBrief(s.workingBrief);
     const ready = submitBlockers(b).length === 0;
+    const canExtend = s.turnExtensionCount < DEFAULTS["concept.max_turn_extensions"];
+    // [전부 맡기기] runs one closing turn past the ceiling (DELEGATE_CAP_GRACE); offered only while that turn is left
+    const canDelegate = missingRequired(b).length > 0 && s.agentTurnCount < s.turnLimit + DELEGATE_CAP_GRACE;
     const opts = [
       ...(ready ? [control("submit")] : []),
-      control("delegateAll"),
+      ...(canExtend ? [control("extendTurns")] : []),
+      ...(canDelegate ? [control("delegateAll")] : []),
       control("formMode"),
-      ...(s.turnExtensionCount < DEFAULTS["concept.max_turn_extensions"] ? [control("extendTurns")] : []),
       control("later"),
     ];
-    return notice(tx, scope, s, `대화 턴 상한(${s.turnLimit}턴)에 닿았습니다. ${summaryText(b)}`, opts);
+    return notice(tx, scope, s, turnCapText(s, b, ready, canExtend, canDelegate), opts);
   }
 
-  /** TC-3: create/coalesce the concept_turn task, honoring turn and budget caps (3.8, INV-CON-09) */
-  async function enqueueTurn(tx: Tx, scope: NovelScope, s: ConceptSession, cycleKey: string, actor: ActorRef, extra: Partial<TurnInput> = {}): Promise<string | null> {
+  /**
+   * TC-3: create/coalesce the concept_turn task, honoring turn and budget caps (3.8, INV-CON-09). `capGrace`: turns
+   * allowed past the safety ceiling — [전부 맡기기] (the escape the cap notice offers) gets one closing turn.
+   */
+  async function enqueueTurn(tx: Tx, scope: NovelScope, s: ConceptSession, cycleKey: string, actor: ActorRef, extra: Partial<TurnInput> = {}, o: { capGrace?: number } = {}): Promise<string | null> {
     if (s.status !== "active" || s.llmDisabled) return null;
-    if (s.agentTurnCount >= s.turnLimit) {
+    if (s.agentTurnCount >= s.turnLimit + (o.capGrace ?? 0)) {
       await limitNotice(tx, scope, s);
       return null;
     }
@@ -327,6 +422,243 @@ export function createConceptApp(deps: ConceptAppDeps) {
     });
     await repo.updateSession(tx.db, scope, s.id, { inFlightTaskId: taskId });
     return taskId;
+  }
+
+  // ── 자동 승인 모드 (설계 추가, domain/auto-approve.ts) ───────────────────
+  const autoOf = (s: ConceptSession): AutoApproveState => autoApproveState(parseWorkingBrief(s.workingBrief).meta.auto_approve);
+  const autoAvailable = (s: ConceptSession) => s.status === "active" && s.entryMode !== "direct_input" && !s.llmDisabled;
+
+  /** persist the auto-approve state (meta only — the brief hash is unaffected) and audit on/off/status changes */
+  async function saveAuto(tx: Tx, scope: NovelScope, s: ConceptSession, next: AutoApproveState, actor: ActorRef, reason?: string): Promise<ConceptSession> {
+    const b = parseWorkingBrief(s.workingBrief);
+    const prev = autoApproveState(b.meta.auto_approve);
+    b.meta.auto_approve = { ...next, updated_at: clock.date().toISOString() };
+    const out = await repo.updateSession(tx.db, scope, s.id, { workingBrief: b });
+    if (prev.enabled !== next.enabled || prev.status !== next.status || prev.max_steps !== next.max_steps || prev.accept_user_field_proposals !== next.accept_user_field_proposals) {
+      await audit.record(tx, {
+        novelId: scope.novelId,
+        actor,
+        action: "concept_session.auto_approve_changed",
+        target: target(s.id),
+        before: { enabled: prev.enabled, status: prev.status, steps: prev.steps },
+        after: {
+          enabled: next.enabled,
+          status: next.status,
+          run_no: next.run_no,
+          steps: next.steps,
+          max_steps: next.max_steps,
+          accept_user_field_proposals: next.accept_user_field_proposals,
+          stop_reason: next.stop_reason,
+          waiting: next.waiting?.reason ?? null,
+        },
+        reason: reason ?? null,
+      });
+    }
+    return out;
+  }
+
+  async function stopAuto(tx: Tx, scope: NovelScope, s: ConceptSession, reason: AutoStopReason, actor: ActorRef, o: { notice?: boolean } = {}): Promise<ConceptSession> {
+    const st = autoOf(s);
+    if (!st.enabled) return s;
+    const next = await saveAuto(tx, scope, s, { ...st, enabled: false, status: "off", stop_reason: reason, waiting: null }, actor, reason);
+    if (o.notice !== false) await notice(tx, scope, next, autoStopText(reason, st));
+    return next;
+  }
+
+  /**
+   * One auto step after the partner's prompt `prompt`: answer it with the partner's recommendation on the user's
+   * behalf (a user-side message, auto_approved, authored by the delegating user) and queue the next turn — all in
+   * the caller's transaction (the turn commit), so a crash/restart never leaves half a step: either the reply, the
+   * auto pick and the next task are committed together, or none is. One pick per prompt (last_prompt_id).
+   */
+  async function autoStep(tx: Tx, scope: NovelScope, s: ConceptSession, prompt: ConceptMessage, o: { allowRetry?: boolean } = {}): Promise<ConceptSession> {
+    const st = autoOf(s);
+    if (!st.enabled) return s;
+    if (!autoAvailable(s)) return stopAuto(tx, scope, s, "session_closed", orchestrator);
+    if (isMessenger(s)) return stopAuto(tx, scope, s, "messenger", orchestrator);
+    if (st.last_prompt_id === prompt.id) return s;
+    const b = parseWorkingBrief(s.workingBrief);
+    const d = decideAutoStep({ prompt: { id: prompt.id, options: (prompt.options as StoredOption[] | null) ?? null, askedFieldPaths: prompt.askedFieldPaths ?? null }, brief: b, state: st, allowRetry: o.allowRetry });
+    if (d.kind === "complete") {
+      const next = await saveAuto(tx, scope, s, { ...st, enabled: false, status: "off", stop_reason: "completed", waiting: null }, orchestrator, "completed");
+      await notice(tx, scope, next, d.text);
+      return next;
+    }
+    if (d.kind === "wait") {
+      if (st.status === "waiting_user" && st.waiting?.prompt_id === prompt.id) return s;
+      const next = await saveAuto(tx, scope, s, { ...st, status: "waiting_user", waiting: { reason: d.reason, prompt_id: prompt.id } }, orchestrator, d.reason);
+      await notice(tx, scope, next, d.text);
+      return next;
+    }
+    if (st.steps >= st.max_steps) return stopAuto(tx, scope, s, "step_cap", orchestrator);
+    if (s.agentTurnCount >= s.turnLimit) {
+      const next = await stopAuto(tx, scope, s, "turn_cap", orchestrator);
+      await limitNotice(tx, scope, next);
+      return next;
+    }
+    if (budgetExhausted(s)) {
+      // transition() ends the run (reason budget) when the session pauses
+      const paused = await transition(tx, scope, s, "paused", "CS6", { pauseReason: "budget_limit" }, actors.system("budget_guard"), "세션 비용 상한");
+      await budgetNotice(tx, scope, paused);
+      return paused;
+    }
+    const userId = st.enabled_by_user_id ?? s.createdByUserId;
+    const msg = await insertMessage(tx, scope, s, {
+      authorKind: "user",
+      kind: "option_pick",
+      body: d.body,
+      authorUserId: userId,
+      pickedIdx: d.option.idx >= 0 ? d.option.idx : null,
+      autoApproved: true,
+    });
+    let next = await saveAuto(
+      tx,
+      scope,
+      s,
+      { ...st, status: "running", waiting: null, steps: st.steps + 1, last_prompt_id: prompt.id, recommended_for: d.what === "recommend" ? (prompt.askedFieldPaths?.[0] ?? null) : st.recommended_for },
+      orchestrator,
+    );
+    // the next turn is queued by the auto-approve loop (system), on behalf of the delegating user (message author)
+    const taskId = await enqueueTurn(tx, scope, next, msg.id, orchestrator);
+    if (!taskId) next = await stopAuto(tx, scope, await mustSession(tx, scope, s.id), noTurnReason(next), orchestrator, { notice: false });
+    return next;
+  }
+
+  /** why enqueueTurn() returned null (it already left its own turn-cap / budget notice) */
+  const noTurnReason = (s: ConceptSession): AutoStopReason =>
+    s.status === "active" && !s.llmDisabled ? (s.agentTurnCount >= s.turnLimit ? "turn_cap" : budgetExhausted(s) ? "budget" : "session_closed") : s.pauseReason === "budget_limit" ? "budget" : "session_closed";
+
+  /** audit trail of values the auto-approve mode accepted in a commit (one row per commit) */
+  /**
+   * `diffs` per message id: every slot change an auto message caused (an auto pick, an auto [맞습니다] confirmation,
+   * an auto [추천해 줘] delegation) plus any agent_auto_accepted value, so the trail tells them from the user's own.
+   */
+  async function recordAutoAccepted(tx: Tx, scope: NovelScope, s: ConceptSession, diffs: ReadonlyMap<string, ReadonlyArray<SlotDiff>>, actor: ActorRef, messageIds: string[]) {
+    const autoIds = new Set(messageIds);
+    const auto = [...diffs.entries()].flatMap(([id, ds]) => ds.filter((d) => autoIds.has(id) || d.origin === "agent_auto_accepted"));
+    if (!auto.length) return;
+    const st = autoOf(s);
+    await audit.record(tx, {
+      novelId: scope.novelId,
+      actor,
+      action: "concept_brief.auto_accepted",
+      target: target(s.id),
+      after: { fields: auto.map((d) => ({ path: d.field_path, value: valueToText(d.after).slice(0, 200), origin: d.origin, slot_state: d.slot_state })), message_ids: messageIds, delegated_by: st.enabled_by_user_id ?? s.createdByUserId, run_no: st.run_no },
+      details: { ids: auto.map((d) => d.field_path), count: auto.length },
+    });
+  }
+
+  function autoView(s: ConceptSession): AutoApproveView {
+    const st = autoOf(s);
+    return {
+      enabled: st.enabled,
+      status: st.enabled ? st.status : "off",
+      steps: st.steps,
+      maxSteps: st.max_steps,
+      acceptUserFieldProposals: st.accept_user_field_proposals,
+      waitingReason: st.enabled ? (st.waiting?.reason ?? null) : null,
+      stopReason: st.enabled ? null : st.stop_reason,
+      canEnable: autoAvailable(s),
+      updatedAt: st.updated_at,
+    };
+  }
+
+  async function setAutoApproveTx(tx: Tx, scope: NovelScope, sessionId: string, input: SetAutoApproveInput, actor: ActorRef): Promise<ConceptSession> {
+    if (actor.type !== "user") throw new DomainValidationError("user_actor_required", "자동 승인은 사용자만 켜고 끌 수 있습니다.");
+    // switching off also cancels the turn the loop already queued for its last pick (before the session lock: task → session)
+    let pre: string | null = null;
+    if (!input.enabled) {
+      const peek = await mustSession(tx, scope, sessionId);
+      if (autoOf(peek).enabled) pre = await cancelAutoOnlyTurn(tx, scope, peek, actor, { anyStatus: true });
+    }
+    let s = await mustSession(tx, scope, sessionId, true);
+    const st = autoOf(s);
+    if (!input.enabled) {
+      if (st.enabled) s = await stopAuto(tx, scope, s, "toggled_off", actor, { notice: false });
+      let dropped = false;
+      if (pre && s.inFlightTaskId === pre) {
+        s = await settleCancelledAutoTurn(tx, scope, s, pre, { requeueUser: true });
+        dropped = true;
+      }
+      // a commit that won the race queued the next auto turn meanwhile (not running yet)
+      const extra = await cancelAutoOnlyTurn(tx, scope, s, actor, { anyStatus: false });
+      if (extra) {
+        s = await settleCancelledAutoTurn(tx, scope, s, extra, { requeueUser: true });
+        dropped = true;
+      }
+      if (st.enabled) await notice(tx, scope, s, `${autoStopText("toggled_off", st)}${dropped ? " 아직 답을 받지 않은 마지막 자동 선택은 반영하지 않았습니다." : ""}`);
+      return mustSession(tx, scope, s.id);
+    }
+    if (!autoAvailable(s)) {
+      throw new DomainValidationError("concept_auto_approve_unavailable", "자동 승인은 진행 중인 컨셉 대화에서만 켤 수 있습니다(폼 입력·LLM 없이 진행·일시정지·승인 대기 중에는 쓸 수 없습니다).");
+    }
+    const maxSteps = Math.max(1, Math.min(input.maxSteps ?? (st.enabled ? st.max_steps : AUTO_APPROVE_DEFAULT_MAX_STEPS), 60));
+    const accept = input.acceptUserFieldProposals ?? st.accept_user_field_proposals;
+    if (st.enabled) {
+      // already on: settings only (idempotent — a second tab pressing "켜기" does not start a second run)
+      return saveAuto(tx, scope, s, { ...st, max_steps: maxSteps, accept_user_field_proposals: accept }, actor);
+    }
+    // the replies of this run belong on the web (like a web chat message)
+    if (s.activeChannelId !== webChannelOf(s)) s = await repo.updateSession(tx.db, scope, s.id, { activeChannelId: webChannelOf(s) });
+    s = await saveAuto(
+      tx,
+      scope,
+      s,
+      {
+        ...st,
+        enabled: true,
+        status: "running",
+        run_no: st.run_no + 1,
+        steps: 0,
+        max_steps: maxSteps,
+        accept_user_field_proposals: accept,
+        enabled_by_user_id: actor.id,
+        waiting: null,
+        stop_reason: null,
+        recommended_for: null,
+        // a new run: which prompt is still open is decided by latestOpenPrompt() (not by the previous run's last pick)
+        last_prompt_id: null,
+        updated_at: null,
+      },
+      actor,
+    );
+    await notice(
+      tx,
+      scope,
+      s,
+      `자동 승인을 켰습니다. 컨셉 파트너의 추천안을 자동으로 고르며 대화를 이어 갑니다(최대 ${maxSteps}번). 직접 정한 항목은 바꾸지 않${accept ? "되, 변경 제안은 자동으로 수락합니다" : "고, 그 항목의 변경 제안은 직접 고르도록 기다립니다"}. 언제든 메시지를 보내거나 [멈추기]를 누를 수 있고, 컨셉 확정([승인 요청])은 직접 합니다.`,
+    );
+    // continue right away: a turn already in flight auto-steps at its commit; unanswered messages get a turn;
+    // otherwise answer the partner's latest question now
+    if (await liveInFlightTask(tx, scope, s)) return s;
+    if (await hasUnprocessed(tx, scope, s)) {
+      const last = (await repo.userMessagesAfter(tx.db, scope, s.id, parseWorkingBrief(s.workingBrief).meta.processed_seq ?? 0)).pop();
+      const taskId = await enqueueTurn(tx, scope, s, last?.id ?? `auto:${s.id}:${autoOf(s).run_no}`, actor);
+      // no turn could be queued (turn cap / budget): the run cannot go on — never leave it "running" with nothing in flight
+      if (!taskId) {
+        const now = await mustSession(tx, scope, s.id);
+        return stopAuto(tx, scope, now, noTurnReason(now), orchestrator, { notice: false });
+      }
+      return mustSession(tx, scope, s.id);
+    }
+    const prompt = await latestOpenPrompt(tx, scope, s);
+    if (prompt) s = await autoStep(tx, scope, s, prompt, { allowRetry: true });
+    return s;
+  }
+
+  /**
+   * The partner's latest prompt the user has NOT answered yet (for switching the mode on). latestPrompt() skips
+   * replies without options, so a newer plain reply / an already answered prompt must not be auto-answered again:
+   * then the newest partner reply stands as the question (no options → the run waits for the user).
+   */
+  async function latestOpenPrompt(tx: Tx, scope: NovelScope, s: ConceptSession): Promise<ConceptMessage | null> {
+    const prompt = await repo.latestPrompt(tx.db, scope, s.id);
+    const last = await repo.lastAgentMessage(tx.db, scope, s.id);
+    if (last && (!prompt || last.seq > prompt.seq)) return { ...last, options: null };
+    // answered by the user already (an auto pick after it either has a newer reply — above — or was dropped when the
+    // last run stopped before its turn: then the prompt is still open)
+    if (prompt && (await repo.userMessagesAfter(tx.db, scope, s.id, prompt.seq)).some((m) => !m.autoApproved)) return last ? { ...last, options: null } : null;
+    return prompt;
   }
 
   async function startCheck(tx: Tx, scope: NovelScope, s: ConceptSession, actor: ActorRef): Promise<{ taskId: string }> {
@@ -363,6 +695,7 @@ export function createConceptApp(deps: ConceptAppDeps) {
     schemaName: string,
     schema: z.ZodType<T>,
     onStream?: (ev: LlmStreamEvent) => void,
+    opts: { webSearch?: boolean } = {},
   ) {
     try {
       const port = ports.modelCalls();
@@ -375,9 +708,11 @@ export function createConceptApp(deps: ConceptAppDeps) {
         output: { kind: "object", schemaName, schema },
         maxOutputTokens: DEFAULTS["llm.max_output_tokens.concept_partner"],
         ...(onStream ? { onStream } : {}),
+        ...(opts.webSearch ? { webSearch: true } : {}),
       });
       const parsed = schema.safeParse(out.value);
-      return { value: parsed.success ? parsed.data : null, costMicros: out.costMicros };
+      const sources = out.webSearch?.status === "used" && out.webSearch.citations.length ? out.webSearch.citations : null;
+      return { value: parsed.success ? parsed.data : null, costMicros: out.costMicros, sources };
     } catch (err) {
       if (err instanceof NotImplementedError) {
         ctx.log.debug({ purpose }, "llm placeholder: deterministic concept fallback");
@@ -515,6 +850,10 @@ export function createConceptApp(deps: ConceptAppDeps) {
       ...(over && s.inFlightTaskId === ctx.task.id ? { inFlightTaskId: null } : {}),
     };
     if (Object.keys(patch).length) await repo.updateSession(tx.db, ctx.scope, s.id, patch);
+    // a run of the auto-approve loop that ended for good without its commit (cancelled / failed) stops the loop
+    if (over && s.inFlightTaskId === ctx.task.id && autoOf(s).enabled) {
+      await stopAuto(tx, ctx.scope, await mustSession(tx, ctx.scope, s.id), t?.status === "cancelled" ? "user_stopped" : "error", orchestrator);
+    }
     tx.afterCommit(() => (over ? streams.done(s.id, ctx.task.id, null) : streams.abandon(s.id, ctx.task.id)));
   }
 
@@ -557,6 +896,7 @@ export function createConceptApp(deps: ConceptAppDeps) {
         newMessages: newMsgs,
         ageCeiling: dry.brief.content.age_rating ?? "age_15",
         maxReplyChars: DEFAULTS["concept.reply_max_chars"],
+        autoApprove: autoOf(s).enabled,
       });
       // live reply: the model writes ConceptTurnProposal JSON; only `reply_text` is shown while it streams
       streams.begin(s.id, ctx.task.id);
@@ -571,8 +911,9 @@ export function createConceptApp(deps: ConceptAppDeps) {
         if (add) streams.delta(s.id, ctx.task.id, add);
       };
       try {
-        const res = await callModel(ctx as TaskContext<unknown>, "concept_turn", prompt, "ConceptTurnProposal", conceptTurnProposalSchema, onStream);
-        return { proposal: res?.value ?? null, costMicros: res?.costMicros ?? 0, observedMaxSeq };
+        // 설계 추가 0011: the partner may search the web for facts / genre conventions / terminology (novel setting)
+        const res = await callModel(ctx as TaskContext<unknown>, "concept_turn", prompt, "ConceptTurnProposal", conceptTurnProposalSchema, onStream, { webSearch: true });
+        return { proposal: res?.value ?? null, costMicros: res?.costMicros ?? 0, observedMaxSeq, sources: res?.sources ?? null };
       } catch (err) {
         streams.reset(s.id, ctx.task.id);
         // X-8: last attempt → keep the session active and leave a retry notice (no blocking question)
@@ -587,12 +928,14 @@ export function createConceptApp(deps: ConceptAppDeps) {
       let s = await mustSession(tx, scope, ctx.input.session_id, true);
       const clearInflight = s.inFlightTaskId === ctx.task.id ? { inFlightTaskId: null } : {};
       if (s.status !== "active") {
-        await repo.updateSession(tx.db, scope, s.id, { ...clearInflight, spentMicros: s.spentMicros + p.costMicros });
+        s = await repo.updateSession(tx.db, scope, s.id, { ...clearInflight, spentMicros: s.spentMicros + p.costMicros });
+        await stopAuto(tx, scope, s, "session_closed", orchestrator, { notice: false });
         tx.afterCommit(() => streams.done(s.id, ctx.task.id, null));
         return { kind: "done", outputRefs: [{ refType: "concept_session", refId: s.id }] };
       }
       if (p.failed) {
-        await repo.updateSession(tx.db, scope, s.id, { ...clearInflight, spentMicros: s.spentMicros + p.costMicros });
+        s = await repo.updateSession(tx.db, scope, s.id, { ...clearInflight, spentMicros: s.spentMicros + p.costMicros });
+        s = await stopAuto(tx, scope, s, "error", orchestrator, { notice: false });
         await notice(tx, scope, s, "응답을 만들지 못했습니다. [다시 시도]를 눌러 주세요.", [control("retry")]);
         tx.afterCommit(() => streams.error(s.id, ctx.task.id, "응답을 만들지 못했습니다."));
         return { kind: "failed", reason: p.failed };
@@ -630,6 +973,7 @@ export function createConceptApp(deps: ConceptAppDeps) {
         plan.brief.meta.title_suggestions = { items: suggested, generated_at: clock.date().toISOString(), run_id: ctx.run.runId, source: "turn" };
       }
       s = await persistPlan(tx, scope, s, plan, agentActor, { spent: p.costMicros, countTurn: !superseded, ...clearInflight });
+      await recordAutoAccepted(tx, scope, s, plan.diffs, agentActor, handled.filter((m) => m.autoApproved).map((m) => m.id));
       // the working title stays a preview (title_source=auto); without one the first suggestion previews
       const working = p.proposal?.working_title ?? (suggested ? { title: suggested[0]!.title, reason: suggested[0]!.reason } : null);
       const newTitle = await syncNovelTitle(tx, scope, plan.brief, [...plan.diffs.values()].flat(), working, agentActor);
@@ -649,6 +993,7 @@ export function createConceptApp(deps: ConceptAppDeps) {
         askedFieldPaths: plan.reply.askedFieldPaths,
         respondsToSeq: handled[handled.length - 1]?.seq ?? null,
         isSuperseded: superseded,
+        sources: p.proposal ? (p.sources ?? null) : null,
       });
       if (superseded) {
         const newest = fresh[fresh.length - 1]!;
@@ -665,7 +1010,11 @@ export function createConceptApp(deps: ConceptAppDeps) {
           // the engine coalesced into the running task: enqueue right after commit
           tx.afterCommit(() => uow.run(async (tx2) => void (await enqueueTurn(tx2, scope, await mustSession(tx2, scope, s.id, true), newest.id, orchestrator))));
         } else await repo.updateSession(tx.db, scope, s.id, { inFlightTaskId: res.taskId });
-      } else await deliver(tx, scope, s, msg);
+      } else {
+        await deliver(tx, scope, s, msg);
+        // 자동 승인: answer this reply with the partner's recommendation and queue the next turn (same transaction)
+        s = await autoStep(tx, scope, await mustSession(tx, scope, s.id), msg);
+      }
       tx.afterCommit(() => streams.done(s.id, ctx.task.id, msg.id));
       return { kind: "done", outputRefs: [{ refType: "concept_message", refId: msg.id }] };
     },
@@ -676,10 +1025,11 @@ export function createConceptApp(deps: ConceptAppDeps) {
     tx: Tx,
     scope: NovelScope,
     s: ConceptSession,
-    plan: Pick<PlanTurnOutput, "brief" | "stage" | "stageChange" | "diffs">,
+    plan: Pick<PlanTurnOutput, "brief" | "stage" | "stageChange" | "diffs"> & Partial<Pick<PlanTurnOutput, "settled">>,
     actor: ActorRef,
     o: { spent?: number; countTurn?: boolean; inFlightTaskId?: null } = {},
   ): Promise<ConceptSession> {
+    await recordSettled(tx, scope, s, plan.settled ?? [], actor);
     let next = await repo.updateSession(tx.db, scope, s.id, {
       workingBrief: plan.brief,
       fieldFlipCounts: (plan.brief.meta as { flips?: Record<string, number> }).flips ?? {},
@@ -737,6 +1087,17 @@ export function createConceptApp(deps: ConceptAppDeps) {
         respondsToSeq: m.seq,
       });
       await deliver(tx, scope, s, msg);
+      if (!(await hasUnprocessed(tx, scope, s))) s = await autoStep(tx, scope, await mustSession(tx, scope, s.id), msg);
+      // user events that arrived while the import ran (e.g. a change-proposal decision) get their own turn
+      // (a messenger message during the import already queued its own turn: never start a second one beside it)
+      if (await hasUnprocessed(tx, scope, s)) {
+        tx.afterCommit(() =>
+          uow.run(async (tx2) => {
+            const s2 = await mustSession(tx2, scope, s.id, true);
+            if (!(await liveInFlightTask(tx2, scope, s2))) await enqueueTurn(tx2, scope, s2, `import-followup:${ctx.task.id}`, orchestrator);
+          }),
+        );
+      }
       return { kind: "done", outputRefs: [{ refType: "concept_message", refId: msg.id }] };
     },
   };
@@ -1032,7 +1393,17 @@ export function createConceptApp(deps: ConceptAppDeps) {
       if (dup) return { message: dup, taskId: null };
     }
     if (TERMINAL.includes(s.status)) throw new InvalidStateError(s.status);
-    if (input.rejectWhileTurnInFlight && (await liveInFlightTask(tx, scope, s))) {
+    const liveTask = input.rejectWhileTurnInFlight ? await liveInFlightTask(tx, scope, s) : null;
+    /**
+     * 자동 승인 중에는 거절하지 않고 대기열에 넣습니다(변경 제안 결정과 같은 방식): the running turn's commit sees the newer
+     * message (X-7 superseded → a turn for it), a queued turn reads it when it starts. User input wins over the auto pick.
+     */
+    const queueBehindTurn = !!liveTask && autoOf(s).enabled && input.kind !== "import_text";
+    if (liveTask && !queueBehindTurn) {
+      // a paste starts its own import task (not a turn the running one could pick up) → still one at a time
+      if (input.kind === "import_text" && autoOf(s).enabled) {
+        throw new ConflictError("concept_turn_in_flight", "자동 승인 중에는 지금 답변이 끝난 뒤에 붙여 넣어 주세요. 먼저 [멈추기]를 눌러도 됩니다.", { inFlightTaskId: s.inFlightTaskId });
+      }
       // web chat: one agent turn at a time (a second tab / double send must not race the running turn)
       throw new ConflictError("concept_turn_in_flight", "컨셉 파트너가 답을 쓰는 중입니다. 답변이 끝난 뒤에 보내 주세요.", { inFlightTaskId: s.inFlightTaskId });
     }
@@ -1080,6 +1451,13 @@ export function createConceptApp(deps: ConceptAppDeps) {
     });
     // immediate controls (no model turn needed)
     const key = picked?.source === "control" ? controlKeyOf(picked.value) : null;
+    if (queueBehindTurn && liveTask && (key === "later" || key === "formMode")) {
+      // leaving the conversation while auto-approve runs: no further auto turn (a queued one is cancelled; a running
+      // one is left to finish — lock order task → session, the session is held here)
+      s = await stopAuto(tx, scope, s, key === "later" ? "user_stopped" : "toggled_off", actor, { notice: false });
+      const t = await orchestration.getTask(scope, liveTask, tx).catch(() => null);
+      if (t && t.status !== "running" && (await cancelQuietly(tx, scope, liveTask, actor))) s = await settleCancelledAutoTurn(tx, scope, s, liveTask, { requeueUser: false });
+    }
     if (key === "later") {
       await transition(tx, scope, s, "paused", "CS6", { pauseReason: "user" }, actor, "나중에");
       return { message, taskId: null };
@@ -1122,7 +1500,8 @@ export function createConceptApp(deps: ConceptAppDeps) {
       await repo.updateSession(tx.db, scope, s.id, { inFlightTaskId: taskId });
       return { message, taskId };
     }
-    const taskId = await enqueueTurn(tx, scope, s, message.id, actor);
+    if (queueBehindTurn && (await liveInFlightTask(tx, scope, s))) return { message, taskId: s.inFlightTaskId };
+    const taskId = await enqueueTurn(tx, scope, s, message.id, actor, {}, key === "delegateAll" ? { capGrace: DELEGATE_CAP_GRACE } : {});
     return { message, taskId };
   }
 
@@ -1130,7 +1509,10 @@ export function createConceptApp(deps: ConceptAppDeps) {
     const patch: Parameters<typeof repo.updateSession>[3] = {};
     if (input.turns) {
       if (s.turnExtensionCount >= DEFAULTS["concept.max_turn_extensions"]) {
-        throw new DomainValidationError("turn_extension_exhausted", "턴 연장은 세션당 2회까지입니다. 남은 항목은 [전부 맡기기]나 폼으로 정리해 주세요.");
+        throw new DomainValidationError(
+          "turn_extension_exhausted",
+          `대화 안전 상한은 세션당 ${DEFAULTS["concept.max_turn_extensions"]}회까지 올릴 수 있습니다. 남은 항목은 [전부 맡기기]나 [폼으로 마저 입력]으로 정리해 주세요.`,
+        );
       }
       patch.turnLimit = s.turnLimit + DEFAULTS["concept.turn_extension"];
       patch.turnExtensionCount = s.turnExtensionCount + 1;
@@ -1151,6 +1533,56 @@ export function createConceptApp(deps: ConceptAppDeps) {
     });
     if (next.status === "paused" && next.pauseReason === "budget_limit" && next.budgetLimitMicros > next.spentMicros + checkReserve + TURN_RESERVE_MICROS) {
       next = await transition(tx, scope, next, "active", "CS7", { pauseReason: null, llmDisabled: false }, actor, "비용 상한 상향");
+    }
+    return next;
+  }
+
+  // ── 자동 승인: cancelling the turn the loop queued (toggle off / [멈추기] / leaving) ─────────────
+  async function cancelQuietly(tx: Tx, scope: NovelScope, taskId: string, actor: ActorRef): Promise<boolean> {
+    try {
+      await orchestration.cancelTask(tx, scope, taskId, actor);
+      return true;
+    } catch (err) {
+      if (!(err instanceof ConflictError)) throw err;
+      return false; // finished meanwhile (its commit won the race)
+    }
+  }
+
+  /**
+   * Cancel the in-flight turn when it only exists to answer auto picks (no user input waiting for it).
+   * `anyStatus` — call it BEFORE locking the session (lock order task → session, like the engine's commit): then a
+   * running turn is cancelled too (cancel_requested). Under the session lock only a not-yet-running one is.
+   */
+  async function cancelAutoOnlyTurn(tx: Tx, scope: NovelScope, s: ConceptSession, actor: ActorRef, o: { anyStatus: boolean }): Promise<string | null> {
+    if (!s.inFlightTaskId) return null;
+    const t = await orchestration.getTask(scope, s.inFlightTaskId, tx).catch(() => null);
+    if (!t || t.kind !== "concept_turn" || ["done", "failed", "cancelled"].includes(t.status) || (!o.anyStatus && t.status === "running")) return null;
+    const pending = await repo.userMessagesAfter(tx.db, scope, s.id, parseWorkingBrief(s.workingBrief).meta.processed_seq ?? 0);
+    if (!pending.length || pending.some((m) => !m.autoApproved)) return null;
+    return (await cancelQuietly(tx, scope, t.id, actor)) ? t.id : null;
+  }
+
+  /**
+   * Under the session lock, once the in-flight `taskId` is cancelled: the session is no longer in flight and the auto
+   * picks that turn would have answered are dropped (processed, never applied — the run is off). A user message that
+   * was queued behind it meanwhile still gets its turn (`requeueUser`). Returns the session after the change.
+   */
+  async function settleCancelledAutoTurn(tx: Tx, scope: NovelScope, s: ConceptSession, taskId: string, o: { requeueUser: boolean }): Promise<ConceptSession> {
+    if (s.inFlightTaskId !== taskId) return s;
+    const b = parseWorkingBrief(s.workingBrief);
+    const pending = await repo.userMessagesAfter(tx.db, scope, s.id, b.meta.processed_seq ?? 0);
+    let upTo = b.meta.processed_seq ?? 0;
+    for (const m of pending) {
+      if (!m.autoApproved) break;
+      upTo = m.seq;
+    }
+    b.meta.processed_seq = upTo;
+    let next = await repo.updateSession(tx.db, scope, s.id, { workingBrief: b, inFlightTaskId: null });
+    tx.afterCommit(() => streams.done(s.id, taskId, null));
+    const user = pending.filter((m) => !m.autoApproved);
+    if (o.requeueUser && user.length) {
+      await enqueueTurn(tx, scope, next, user[user.length - 1]!.id, orchestrator);
+      next = await mustSession(tx, scope, s.id);
     }
     return next;
   }
@@ -1238,6 +1670,7 @@ export function createConceptApp(deps: ConceptAppDeps) {
         if (plan.stage !== s.stage) s = await changeStage(tx, scope, s, plan.stage, actor);
         const short = (v: unknown) => valueToText(v).slice(0, 200);
         await audit.record(tx, { novelId: scope.novelId, actor, action: "concept_brief.field_edited", target: target(s.id), before: { path, value: short(before) }, after: { path, value: short(getPath(plan.brief.content, path)) } });
+        await recordSettled(tx, scope, s, plan.settled, actor);
         if (plan.notices.length) await notice(tx, scope, s, [...new Set(plan.notices)].join("\n"));
         return s;
       });
@@ -1279,7 +1712,10 @@ export function createConceptApp(deps: ConceptAppDeps) {
       return uow.run(async (tx) => {
         // lock order task → session, like the engine's commit (task fenced FOR UPDATE, then the handler locks the session)
         const peek = await mustSession(tx, scope, sessionId);
-        if (!peek.inFlightTaskId) return peek;
+        if (!peek.inFlightTaskId) {
+          // [멈추기] also ends the auto-approve run (e.g. while it waits between steps)
+          return autoOf(peek).enabled ? stopAuto(tx, scope, await mustSession(tx, scope, sessionId, true), "user_stopped", actor) : peek;
+        }
         let taskId = await liveInFlightTask(tx, scope, peek);
         // running → cancel_requested; the engine drops the turn at its next safe point or at the commit (never both a
         // stop notice and a reply); queued → cancelled now
@@ -1291,10 +1727,23 @@ export function createConceptApp(deps: ConceptAppDeps) {
             taskId = null; // finished meanwhile (its commit won the race)
           }
         }
-        const s = await mustSession(tx, scope, sessionId, true);
-        if (s.inFlightTaskId !== peek.inFlightTaskId) return s; // a commit or a new turn changed it meanwhile
-        await repo.updateSession(tx.db, scope, s.id, { inFlightTaskId: null });
-        if (taskId) await notice(tx, scope, s, "답변을 멈췄습니다. 메시지를 보내면 앞의 메시지까지 함께 보고 다시 답합니다.");
+        let s = await mustSession(tx, scope, sessionId, true);
+        const wasAuto = autoOf(s).enabled;
+        if (wasAuto) s = await stopAuto(tx, scope, s, "user_stopped", actor, { notice: false });
+        if (s.inFlightTaskId !== peek.inFlightTaskId) {
+          // a commit or a new turn changed it meanwhile — when that commit was an auto step, the turn it queued for
+          // its pick (not running yet) is cancelled too: [멈추기] means no further paid turn
+          if (wasAuto) {
+            const extra = await cancelAutoOnlyTurn(tx, scope, s, actor, { anyStatus: false });
+            if (extra) s = await settleCancelledAutoTurn(tx, scope, s, extra, { requeueUser: false });
+            await notice(tx, scope, s, autoStopText("user_stopped", autoOf(s)));
+          }
+          return mustSession(tx, scope, s.id);
+        }
+        if (wasAuto && taskId) s = await settleCancelledAutoTurn(tx, scope, s, taskId, { requeueUser: false });
+        else await repo.updateSession(tx.db, scope, s.id, { inFlightTaskId: null });
+        if (taskId) await notice(tx, scope, s, `${wasAuto ? "답변을 멈추고 자동 승인을 껐습니다." : "답변을 멈췄습니다."} 메시지를 보내면 앞의 메시지까지 함께 보고 다시 답합니다.`);
+        else if (wasAuto) await notice(tx, scope, s, autoStopText("user_stopped", autoOf(s)));
         tx.afterCommit(() => streams.done(s.id, taskId, null));
         return mustSession(tx, scope, s.id);
       });
@@ -1399,7 +1848,13 @@ export function createConceptApp(deps: ConceptAppDeps) {
         progress: { requiredTotal: req.length, requiredConfirmed: req.length - missing.length, missing: missing.map((p) => ({ path: p, label: slotLabel(p) })) },
         blockers,
         canSubmit: s.status === "active" && blockers.length === 0,
-        turns: { used: s.agentTurnCount, limit: s.turnLimit, extensionsLeft: Math.max(0, DEFAULTS["concept.max_turn_extensions"] - s.turnExtensionCount), softWarning: DEFAULTS["concept.turn_soft_warning"] },
+        turns: {
+          used: s.agentTurnCount,
+          limit: s.turnLimit,
+          extensionsLeft: Math.max(0, DEFAULTS["concept.max_turn_extensions"] - s.turnExtensionCount),
+          softWarning: softWarningAt(s),
+          extension: DEFAULTS["concept.turn_extension"],
+        },
         budget: { spentMicros: s.spentMicros, limitMicros: s.budgetLimitMicros, checkReserveMicros: checkReserve },
         statusLabel: labelKo("concept_session_status", s.status),
         stageLabel: labelKo("concept_stage", s.stage),
@@ -1407,7 +1862,12 @@ export function createConceptApp(deps: ConceptAppDeps) {
         // a closed / waiting session has no "next question" (review3 visual #3)
         nextStep: s.status === "active" ? { kind: step.kind, path: "path" in step ? step.path : null, text: step.text } : { kind: s.status === "awaiting_approval" ? "awaiting_approval" : "closed", path: null, text: "" },
         titleSuggestions: await titleSuggestionsView(scope, s, b),
+        autoApprove: autoView(s),
       };
+    },
+
+    setAutoApprove(scope, sessionId, input, actor) {
+      return uow.run((tx) => setAutoApproveTx(tx, scope, sessionId, input, actor));
     },
 
     async getGoalFormDefaults(scope) {
@@ -1434,15 +1894,23 @@ export function createConceptApp(deps: ConceptAppDeps) {
         const b = parseWorkingBrief(s.workingBrief);
         const cp = b.change_proposals.find((p) => p.id === proposalId && p.status === "pending");
         if (!cp) throw new NotFoundError("변경 제안", proposalId);
-        const msg = await insertMessage(tx, scope, s, { authorKind: "user", kind: "form_edit", body: decision === "accepted" ? `'${slotLabel(cp.field_path)}' 변경 제안 수락` : `'${slotLabel(cp.field_path)}' 변경 제안 거절`, authorUserId: actor.id });
         const before = getPath(b.content, cp.field_path);
+        // the decision is a user event the partner answers (bug: the button only wrote the chat line):
+        // the body says what was decided so the next turn's prompt can acknowledge it
+        const clip = (v: unknown) => valueToText(v).slice(0, 80);
+        const body =
+          decision === "accepted"
+            ? `'${slotLabel(cp.field_path)}' 변경 제안 수락: "${clip(cp.new_value)}"(으)로 바꿈`
+            : `'${slotLabel(cp.field_path)}' 변경 제안 거절: 지금 값 "${clip(before)}" 유지`;
+        const msg = await insertMessage(tx, scope, s, { authorKind: "user", kind: "form_edit", body, authorUserId: actor.id });
         let diffs: SlotDiff[] = [];
         if (decision === "accepted") {
           const plan = planTurn({
             brief: b,
             stage: s.stage,
             entryMode: s.entryMode,
-            messages: [{ id: msg.id, seq: msg.seq, authorKind: "user", kind: "option_pick", body: msg.body, channelId: msg.channelId, pickedIdx: null, options: null, askedFieldPaths: null }],
+            // pickedIdx names the synthetic prompt's [제안 수락] option (without it the pick resolved to nothing and the value was never applied)
+            messages: [{ id: msg.id, seq: msg.seq, authorKind: "user", kind: "option_pick", body: msg.body, channelId: msg.channelId, pickedIdx: 1, options: null, askedFieldPaths: null }],
             prompt: { id: "_", seq: 0, authorKind: "system", kind: "question", body: "", channelId: "", pickedIdx: null, options: [{ idx: 1, label: msg.body, value: `@accept_proposal:${cp.id}`, source: "control" }], askedFieldPaths: null },
             proposal: null,
             runId: null,
@@ -1454,8 +1922,12 @@ export function createConceptApp(deps: ConceptAppDeps) {
           plan.brief.meta.processed_seq = b.meta.processed_seq;
           diffs = plan.diffs.get(msg.id) ?? [];
           s = await repo.updateSession(tx.db, scope, s.id, { workingBrief: plan.brief });
+          // other proposals this acceptance made moot (the decided one is audited below)
+          await recordSettled(tx, scope, s, plan.settled.filter((x) => x.id !== cp.id), actor);
         } else {
           cp.status = "rejected";
+          cp.resolution = "button";
+          cp.resolved_message_id = msg.id;
           s = await repo.updateSession(tx.db, scope, s.id, { workingBrief: b });
         }
         await repo.updateMessage(tx.db, scope, msg.id, { slotUpdates: diffs });
@@ -1465,8 +1937,14 @@ export function createConceptApp(deps: ConceptAppDeps) {
           action: "concept_brief.change_proposal_decided",
           target: target(s.id),
           before: { path: cp.field_path, value: valueToText(before).slice(0, 200) },
-          after: { path: cp.field_path, decision, value: valueToText(cp.new_value).slice(0, 200) },
+          after: { path: cp.field_path, proposal_id: cp.id, decision, resolution: "button", via: "button", value: valueToText(cp.new_value).slice(0, 200), message_id: msg.id },
         });
+        // a web panel event like a web chat message: the reply belongs on the web (not the last messenger chat)
+        s = await repo.updateSession(tx.db, scope, s.id, { userMessageCount: s.userMessageCount + 1, lastUserMessageAt: clock.date(), remindedAt: null, activeChannelId: webChannelOf(s) });
+        // deliver the decision to the partner: a turn now, or — while one is in flight — the running
+        // turn's commit sees the newer message (X-7 superseded) / the import commit follows up, so the
+        // decision is queued, never refused (no concept_turn_in_flight here) and never run twice at once
+        if (!(await liveInFlightTask(tx, scope, s))) await enqueueTurn(tx, scope, s, msg.id, actor);
         return s;
       });
     },

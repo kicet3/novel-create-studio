@@ -9,7 +9,7 @@ import type { NextStep } from "../domain/next-question.js";
 import type { TurnMessage } from "../domain/turn.js";
 import type { LlmMessage } from "../../llm/index.js";
 
-export const TURN_TEMPLATE_ID = "concept_partner.concept_turn@0.1.1";
+export const TURN_TEMPLATE_ID = "concept_partner.concept_turn@0.1.5";
 export const IMPORT_TEMPLATE_ID = "concept_partner.import_concept@0.1.0";
 export const CHECK_TEMPLATE_ID = "continuity_editor.check_concept_brief@0.1.0";
 /** "다른 추천 받기" (concept_turn with input.titles=true) */
@@ -21,12 +21,16 @@ const ROLE_RULES = [
   "당신은 한국 웹소설 작가의 컨셉 파트너(concept_partner)입니다. 사용자의 씨앗 아이디어를 존중하고, 결정은 사용자가 합니다.",
   "규칙: 한 턴에 질문 1개(같은 슬롯 묶음이면 최대 2개). 질문은 120자 이내 존댓말 평서문/의문문.",
   "사용자가 말하지 않은 슬롯은 채우지 않습니다(비추측). 사용자 발화로 채운 값에는 evidence_message_id, 원문 그대로의 evidence_quote, 새 값의 핵심 명사구 key_phrase를 붙입니다.",
-  "사용자가 정한 값(user_stated, user_edited)은 바꾸지 말고 change_proposals로 제안만 합니다.",
+  "사용자가 정한 값(user_stated, user_edited)은 바꾸지 말고 change_proposals로 제안만 합니다. 같은 항목에 이미 대기 중인 제안이 있으면 같은 제안을 다시 내지 않습니다.",
+  "'대기 중인 변경 제안'에 사용자가 이번 메시지로 답했으면(동의·거절) proposal_decisions에 {proposal_id, decision: accepted|rejected, evidence_message_id, evidence_quote(사용자 원문 그대로)}를 냅니다. 답하지 않았으면 비웁니다. 사용자가 다른 값을 직접 말했으면 decision 대신 slot_updates로 그 값을 냅니다.",
+  "(form_edit) 메시지는 사용자가 브리프 패널에서 직접 한 조작(변경 제안 수락·거절, 항목 수정·확정)이며 브리프에 이미 반영됐습니다. slot_updates·proposal_decisions로 다시 내지 말고, 그 결정을 짧게 받아 준 뒤 다음 질문으로 넘어갑니다. 거절된 제안은 다시 내지 않습니다.",
   "후보는 최대 3개, 서로 다른 축으로 내고, 각 후보에 한 줄 근거와 위험 1개를 붙입니다. 흔한 선택이면 is_common_choice=true.",
+  "질문(questions[0])에는 고를 수 있는 후보(options)를 2~3개 내고, 그중 이 작품에 가장 맞는 후보 정확히 1개에 is_recommended=true를 붙입니다(자유 서술 질문이어도 예시 답안을 후보로 냅니다).",
   "수렴 단계에서는 weakness_notes(연재 지속성·훅·대립 강도 약점)를 먼저 1~2개 냅니다. 칭찬만 하지 않습니다.",
   "기존 작품의 인물명·고유 기술명·고유 지명·고유 조직명과 고유 설정을 제안하지 않습니다. 사용자가 특정 작품을 그대로 따라 하자고 하면 copy_request_detected를 채우고 트로프 수준 대안을 냅니다.",
   "연령 등급 상한(미정이면 15세)을 넘는 소재, 미성년 인물의 성적 맥락, 실존 인물의 지어낸 행동은 safety_flags로 표시합니다.",
   "묻는 슬롯은 코드가 정한 '다음 질문 대상'을 그대로 따릅니다(questions[0].slot_key).",
+  "'다음 질문 대상'이 ready(필수 항목 모두 확정)이면 대화를 마무리합니다: 새 질문을 하지 말고(questions는 빈 배열) reply_text에 확정된 컨셉을 2~3문장으로 요약한 뒤 [승인 요청]을 눌러 컨셉을 확정하도록 안내합니다. 사용자가 이번 메시지로 값을 바꿨으면 slot_updates는 평소대로 냅니다.",
   `working_title: 지금까지 대화에 나온 장르·주인공·핵심 훅을 반영한 작품 가제 1개를 냅니다. ${TITLE_STYLE}. 대화가 진행되면 더 나은 가제로 바꿔도 됩니다. 판단할 내용이 거의 없거나 '작품 제목' 줄이 '확정'이면 null.`,
   `title_suggestions: 장르·주인공·핵심 훅 중 하나라도 정해졌으면 사용자가 고를 추천 제목 3~5개를 서로 다른 느낌(직설형·문장형·키워드형 등)으로 내고, 각 제목에 한 줄 이유(reason)를 붙입니다. ${TITLE_STYLE}. 내용이 거의 없거나, '현재 추천 제목'이 지금 대화와 여전히 맞거나, '작품 제목' 줄이 '확정'이면 빈 배열.`,
 ].join("\n");
@@ -38,6 +42,14 @@ function briefSection(b: WorkingBrief): string {
     return `- ${d.path} (${d.label}, ${requiredLevel(d, b.content)}): ${v || "(비어 있음)"} [${p?.slot_state ?? "empty"}${p ? `/${p.origin}` : ""}]`;
   });
   return rows.join("\n");
+}
+
+/** pending change proposals the user can still answer in the chat (proposal_decisions) */
+function pendingProposalsSection(b: WorkingBrief): string {
+  const pending = b.change_proposals.filter((p) => p.status === "pending");
+  if (!pending.length) return "";
+  const rows = pending.map((p) => `- id=${p.id} ${p.field_path}: 지금 "${valueToText(getPath(b.content, p.field_path)).slice(0, 200)}" → 제안 "${valueToText(p.new_value).slice(0, 200)}" (${p.reason})`);
+  return ["## 대기 중인 변경 제안", ...rows].join("\n");
 }
 
 export interface TurnPromptInput {
@@ -52,6 +64,8 @@ export interface TurnPromptInput {
   newMessages: TurnMessage[];
   ageCeiling: string;
   maxReplyChars: number;
+  /** 설계 추가: 자동 승인 모드가 켜져 있음 (사용자가 파트너 추천안 자동 선택을 위임) */
+  autoApprove?: boolean;
 }
 
 export function renderTurnPrompt(i: TurnPromptInput): { system: string; messages: LlmMessage[] } {
@@ -74,6 +88,12 @@ export function renderTurnPrompt(i: TurnPromptInput): { system: string; messages
       ? `- 작품 제목: ${i.novelTitle.title} [${i.novelTitle.source === "user" ? "확정(사용자)" : i.novelTitle.source === "auto" ? "가제(자동)" : "임시"}]`
       : "",
     i.titleSuggestions?.length ? `- 현재 추천 제목: ${i.titleSuggestions.map((x) => x.title).join(" / ")}` : "",
+    pendingProposalsSection(i.brief),
+    i.autoApprove
+      ? "## 자동 승인 모드\n사용자가 자동 승인을 켰습니다. '자동 승인:'으로 시작하는 (자동 승인) 메시지는 당신의 추천안을 사용자 대신 코드가 고른 것이며 사용자 본인의 말이 아닙니다. 그 메시지를 evidence_message_id·evidence_quote·proposal_decisions의 근거로 쓰지 마세요(선택 값은 코드가 이미 반영합니다). 다음 질문에도 반드시 후보 2~3개와 추천(is_recommended) 1개를 내세요."
+      : [...i.recent, ...i.newMessages].some((m) => m.autoApproved)
+        ? "## 자동 승인 메시지\n자동 승인은 지금 꺼져 있습니다. 대화에 남은 (자동 승인) 메시지는 사용자 대신 코드가 고른 것이라 사용자 본인의 말이 아닙니다. 그 메시지를 evidence_message_id·evidence_quote·proposal_decisions의 근거로 쓰지 마세요."
+        : "",
     "## S2 다음 질문 대상(코드 결정)",
     nextPath ? `${nextPath}${def ? ` — 씨앗 질문: ${def.ask_ko}` : ""}` : `${i.next.kind}: ${i.next.text}`,
     def?.option_seeds.length ? `## S5 선택지 씨앗\n${def.option_seeds.map((o) => `- ${o.label} (${o.value})`).join("\n")}` : "",
@@ -86,9 +106,9 @@ export function renderTurnPrompt(i: TurnPromptInput): { system: string; messages
     .filter(Boolean)
     .join("\n\n");
   const transcript = i.recent
-    .map((m) => `[${m.authorKind}${m.authorKind === "user" ? ` id=${m.id}` : ""}] ${m.body}`)
+    .map((m) => `[${m.authorKind}${m.autoApproved ? "(자동 승인)" : ""}${m.authorKind === "user" ? ` id=${m.id}` : ""}] ${m.body}`)
     .join("\n");
-  const fresh = i.newMessages.map((m) => `- id=${m.id} (${m.kind}): ${m.body}`).join("\n");
+  const fresh = i.newMessages.map((m) => `- id=${m.id} (${m.kind}${m.autoApproved ? ", 자동 승인" : ""}): ${m.body}`).join("\n");
   return {
     system,
     messages: [{ role: "user", content: `## S3 최근 대화\n${transcript || "(없음)"}\n\n## 이번에 처리할 사용자 메시지\n${fresh || "(없음)"}` }],

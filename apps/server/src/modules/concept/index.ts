@@ -11,7 +11,7 @@
 import type { ConceptEntryMode, ConceptMessageKind, ConceptPauseReason, ConceptSessionStatus, ConceptStage } from "@ncs/shared";
 import type { ConceptBriefsRow, ConceptMessagesRow, ConceptSessionsRow } from "@ncs/db/schema";
 import type { ActorRef, NovelScope, Tx } from "../../platform/index.js";
-import type { GoalFormDefaults, SessionView } from "./application/concept-app.js";
+import type { GoalFormDefaults, SessionView, SetAutoApproveInput } from "./application/concept-app.js";
 
 export type ConceptSession = ConceptSessionsRow;
 export type ConceptMessage = ConceptMessagesRow;
@@ -89,11 +89,17 @@ export interface ConceptService {
    * commit), clears `inFlightTaskId` and leaves a notice. Unprocessed user messages stay for the next turn. Idempotent.
    */
   stopTurn(scope: NovelScope, sessionId: string, actor: ActorRef): Promise<ConceptSession>;
+  /**
+   * 설계 추가: 자동 승인 모드 on/off (+ settings). While on, every partner turn's commit answers the partner's latest
+   * question with its recommendation on the user's behalf and queues the next turn (server-side, tab may be closed),
+   * until the brief is ready for the manual [승인 요청] or a stop condition (step/turn cap, budget, error, 멈추기, off).
+   */
+  setAutoApprove(scope: NovelScope, sessionId: string, input: SetAutoApproveInput, actor: ActorRef): Promise<ConceptSession>;
   /** 3.9 idle reminder (48h) / paused(idle) after 14 days — run by the `concept.idle_sweeper` loop */
   sweepIdle(now?: Date): Promise<{ reminded: number; paused: number }>;
 }
 
-export type { SessionView, GoalFormDefaults } from "./application/concept-app.js";
+export type { SessionView, GoalFormDefaults, SetAutoApproveInput, AutoApproveView } from "./application/concept-app.js";
 
 export type { ConceptModuleDeps } from "./module.js";
 export { createConceptModule } from "./module.js";

@@ -24,6 +24,7 @@ import { createConceptModule, type ConceptService } from "../modules/concept/ind
 import { createExportModule, type ExportService } from "../modules/export/index.js";
 import { createImagingModule, type ImagingService } from "../modules/imaging/index.js";
 import { createCastModule, type CastService } from "../modules/cast/index.js";
+import { createWorldModule, type WorldService } from "../modules/world/index.js";
 
 export interface Modules {
   audit: ServerModule<AuditService>;
@@ -44,6 +45,7 @@ export interface Modules {
   export: ServerModule<ExportService>;
   imaging: ServerModule<ImagingService>;
   cast: ServerModule<CastService>;
+  world: ServerModule<WorldService>;
 }
 
 export interface BuildModulesOptions {
@@ -101,6 +103,7 @@ export function buildModules({ platform, runtime, databaseMode, database, llmAda
     orchestration: o,
     agents: agents.service,
     hitl: hitl.service,
+    messaging: messaging.service,
   });
   const foreshadow = createForeshadowModule({
     platform,
@@ -136,6 +139,8 @@ export function buildModules({ platform, runtime, databaseMode, database, llmAda
   });
   const exportModule = createExportModule({ platform, audit: a, novel: n, manuscript: manuscript.service });
   const imaging = createImagingModule({ platform, audit: a, novel: n, budget: budget.service, llm: llm.service });
+  // 설계 추가: 세계관 온톨로지 (N2 → build_world_ontology); before cast so the cast draft can read it
+  const world = createWorldModule({ platform, audit: a, novel: n, ontology: ontology.service, orchestration: o, agents: agents.service, llm: llm.service, concept: concept.service });
   const cast = createCastModule({
     platform,
     audit: a,
@@ -146,6 +151,8 @@ export function buildModules({ platform, runtime, databaseMode, database, llmAda
     llm: llm.service,
     concept: concept.service,
     imaging: imaging.service,
+    manuscript: manuscript.service,
+    world: world.service,
   });
   return {
     audit,
@@ -166,6 +173,7 @@ export function buildModules({ platform, runtime, databaseMode, database, llmAda
     export: exportModule,
     imaging,
     cast,
+    world,
   };
 }
 

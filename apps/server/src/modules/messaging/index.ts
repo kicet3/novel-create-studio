@@ -5,6 +5,8 @@
  * Fixed implementation decision: Telegram via the Bot API directly with `fetch` (long polling
  * `getUpdates`), NOT Chat SDK. Bot tokens live in system.secrets (`telegram.bot.<botId>`); only
  * `modules/messaging/adapters/**` may talk to Telegram.
+ * Discord (DM only): REST v10 via `fetch` + an own minimal Gateway websocket client (outbound only — no
+ * interactions HTTP endpoint); tokens in `discord.bot.<botId>`; adapters live in `adapters/discord/**`.
  *
  * Durability: every inbound event is INSERTed into messenger_inbox (dedupe_key unique) before ACK;
  * every outbound message is a messenger_outbox row (idempotency_key unique) sent by the outbox loop.
@@ -131,7 +133,25 @@ export interface TelegramTransport {
 }
 export type TelegramTransportFactory = (token: string) => TelegramTransport;
 
-export { TelegramApiError } from "./application/ports.js";
+/** Raw Discord REST transport (`https://discord.com/api/v10` + `Authorization: Bot <token>`). */
+export interface DiscordTransport {
+  /** resolves the JSON body (null on 204), rejects with DiscordApiError */
+  request<T = unknown>(method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE", path: string, body?: unknown, opts?: { signal?: AbortSignal; timeoutMs?: number }): Promise<T>;
+}
+/** Minimal websocket used by the Discord Gateway client (tests inject an in-memory one). */
+export interface DiscordSocket {
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
+}
+export type DiscordSocketFactory = (url: string, handlers: { onOpen(): void; onMessage(data: string): void; onClose(code: number, reason: string): void }) => DiscordSocket;
+export interface DiscordTransportFactory {
+  rest: (token: string) => DiscordTransport;
+  socket: DiscordSocketFactory;
+  /** test seam: Gateway reconnect / invalid-session delays (default 1 s base, 60 s max, 1–5 s) */
+  gatewayTiming?: { reconnectBaseMs?: number; reconnectMaxMs?: number; invalidSessionMs?: () => number; random?: () => number };
+}
+
+export { TelegramApiError, DiscordApiError } from "./application/ports.js";
 
 export interface MessagingService {
   /** N1 participant body: active `web` channel "웹 인박스" (INV-CH-01) — already implemented */
@@ -142,9 +162,11 @@ export interface MessagingService {
   preferredChannels(scope: NovelScope, tx?: Tx): Promise<Channel[]>;
 
   // bots (install level) and binding (05 §9.1)
-  registerBot(input: { kind: Extract<ChannelKind, "telegram">; label: string; token: string; receiveMode?: TelegramReceiveMode }, actor: ActorRef): Promise<MessengerBot>;
+  registerBot(input: { kind: Extract<ChannelKind, "telegram" | "discord">; label: string; token: string; receiveMode?: TelegramReceiveMode }, actor: ActorRef): Promise<MessengerBot>;
   listBots(): Promise<MessengerBot[]>;
-  /** plaintext token returned once (stored hashed); user sends `/start <token>` to the bot */
+  /** non-secret links of a bot: Discord OAuth2 invite URL (scopes bot + applications.commands), bot username */
+  botLinks(bot: MessengerBot): Promise<{ username: string | null; inviteUrl: string | null }>;
+  /** plaintext token returned once (stored hashed); user sends `/start <token>` to the bot (Telegram deep link / Discord DM) */
   issueBindingToken(scope: NovelScope, input: { kind: ChannelKind; botId: string }, actor: ActorRef): Promise<{ token: string; expiresAt: Date; deepLink: string | null }>;
   unbindChannel(scope: NovelScope, channelId: string, actor: ActorRef): Promise<Channel>;
 
@@ -186,6 +208,10 @@ export interface MessagingService {
   processOutboxOnce(): Promise<number>;
   /** test / ops seam: replace the Telegram transport (default: fetch to api.telegram.org) */
   setTelegramTransportFactory(factory: TelegramTransportFactory): void;
+  /** start/stop one Discord Gateway connection per active Discord bot; returns number of running gateways */
+  syncDiscordGateways(): Promise<number>;
+  /** test / ops seam: replace Discord REST + Gateway socket (default: fetch to discord.com + global WebSocket) */
+  setDiscordTransportFactory(factory: DiscordTransportFactory): void;
 }
 
 export type { MessagingModuleDeps } from "./module.js";

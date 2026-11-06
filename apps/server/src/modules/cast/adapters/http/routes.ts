@@ -23,7 +23,7 @@ type P = { params: z.output<typeof castParamsSchema> };
 
 const assetUrl = (assetId: string) => `/api/images/assets/${assetId}/file`;
 
-export function characterView(c: Character, sheet?: { hasSheet: boolean; frontAssetId: string | null }): CharacterDto {
+export function characterView(c: Character, sheet?: { hasSheet: boolean; frontAssetId: string | null }, arcTitle?: string | null): CharacterDto {
   return {
     id: c.id,
     novelId: c.novelId,
@@ -40,6 +40,15 @@ export function characterView(c: Character, sheet?: { hasSheet: boolean; frontAs
     weakness: c.weakness,
     relationships: c.relationships ?? [],
     notes: c.notes,
+    appearance: c.appearance,
+    motivation: c.motivation,
+    speechSample: c.speechSample,
+    arcStart: c.arcStart,
+    arcEnd: c.arcEnd,
+    storyRole: c.storyRole,
+    firstAppearanceEpisodeNo: c.firstAppearanceEpisodeNo,
+    introducedArcId: c.introducedArcId,
+    firstAppearanceArcTitle: arcTitle ?? null,
     fieldOrigins: c.fieldOrigins ?? {},
     proposed: c.proposed,
     conceptCharacterKey: c.conceptCharacterKey,
@@ -54,7 +63,7 @@ export function characterView(c: Character, sheet?: { hasSheet: boolean; frontAs
 
 export function castView(s: CastState): CastView {
   return {
-    items: s.items.map((c) => characterView(c, s.sheets.get(c.id))),
+    items: s.items.map((c) => characterView(c, s.sheets.get(c.id), c.introducedArcId ? (s.arcTitles.get(c.introducedArcId) ?? null) : null)),
     confirmed: s.confirmed,
     blockers: s.blockers,
     counts: s.counts,
@@ -64,6 +73,8 @@ export function castView(s: CastState): CastView {
     canImportBrief: s.canImportBrief,
     draftTask: s.draftTask,
     lastDraftError: s.lastDraftError,
+    completeness: s.completeness,
+    plotCompleteness: s.plotCompleteness,
   };
 }
 

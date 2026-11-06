@@ -10,6 +10,10 @@
 - dispatcher, wake coalescing (§4.2), concurrency caps (`run.max_concurrent_*`), budget gating via budget.reserve (T8)
 - orphan reclaim on boot (§11), pause/resume (§12), reassign (§2.2), provider circuit breaker (§7.3)
 - retry/backoff per error_family (§7.2)
+- interruptions (server stop / crash / lease loss): run R7 `interrupted`, task T10 → ready + `reclaim` wake, no attempt
+  used (audit `details.cause` = shutdown | lease_lost | orphan); a proposal finished during the shutdown grace is still
+  committed; crash-loop guard `task.max_interruptions` (10 consecutive, counter `task.input.interrupted_runs`, reset by
+  T5/T12) → T6 failed
 
 ## Owned tables (`@ncs/db/schema/orchestration.ts`)
 - tasks

@@ -32,6 +32,10 @@ export const episodes = pgTable(
     publishedByActorType: text("published_by_actor_type", { enum: ENUMS.actor_type }),
     publishedByActorId: text("published_by_actor_id"),
     scheduledPublishAt: timestamp("scheduled_publish_at", { withTimezone: true, mode: "date" }),
+    /** 0008: episode plan (plan_arc) */
+    planSummary: text("plan_summary").notNull().default(""),
+    plannedSceneCount: integer("planned_scene_count"),
+    targetChars: integer("target_chars"),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },

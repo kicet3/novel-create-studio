@@ -1,7 +1,8 @@
 /**
  * End-to-end manuscript pipeline on the in-process core (PGlite; the real Claude adapter against the scripted
  * Messages API mock, responses in support/pipeline-script.ts):
- * goal saved (N3) → plan_series_bible → bible approved → schedule_episodes → plan_arc → arc plan approved →
+ * goal saved (N3) → plan_series_bible → bible approved → plan_structure (4 parts + ending, 설계 추가) → structure
+ * approved (user, HTTP) → plots (arcs) per part → schedule_episodes → plan_arc → arc plan approved →
  * outline → draft → split_scenes → check_text_safety → gate → polish → awaiting_approval → approved (E9)
  * → publish (E13) / unpublish (E14), human edit (E16), rejection (E10 → plan_rework → E12), export.
  *
@@ -16,7 +17,7 @@ import type { ApprovalType } from "@ncs/shared";
 import { manuscriptTestHooks } from "../../src/modules/manuscript/module.js";
 import { stripTxtHeading } from "../../src/modules/export/domain/render.js";
 import { createTestCore, type TestCore } from "../support/test-core.js";
-import { confirmTestCast } from "../support/cast.js";
+import { completeTestCast } from "../support/cast.js";
 import { POLISHED_SCENE_1, POLISHED_SCENE_2, SCRIPTED_BIBLE, SCRIPTED_DRAFT, scriptPipeline } from "../support/pipeline-script.js";
 
 let t: TestCore;
@@ -100,6 +101,16 @@ async function decide(scope: { novelId: string }, type: "series_bible" | "arc_pl
   return approval;
 }
 
+/** bible approved → plan_structure → story_structure approval through the web decision endpoint (user) */
+async function approveStructure(scope: { novelId: string }) {
+  await drain(scope, async () => (await t.modules.novel.service.getStructure(scope))?.status === "awaiting_approval");
+  const s = (await t.modules.novel.service.getStructure(scope))!;
+  const r = await t.http("POST", `/api/novels/${scope.novelId}/structure/decision`, { decision: "approved", expectedRevision: s.revision });
+  expect(r.status, JSON.stringify(r.body)).toBe(200);
+  expect(r.body.structure.status).toBe("approved");
+  return r.body;
+}
+
 async function planningNovel() {
   const nv = t.modules.novel.service;
   const novel = await nv.createNovel({ title: "회귀자의 흉터" }, t.owner);
@@ -119,7 +130,7 @@ async function planningNovel() {
     contentMd: "# 브리프",
   } as typeof conceptBriefs.$inferInsert);
   await t.platform.uow.run((tx) => nv.applyConceptApproval(tx, scope, { conceptBriefId: briefId, purpose: "initial", genre: "회귀 판타지", ageRating: "age_15", category: {} }, t.owner));
-  await confirmTestCast(t, novel.id, "한결");
+  await completeTestCast(t, novel.id, "한결");
   await nv.saveGoal(scope, { totalEpisodesMin: 12, totalEpisodesMax: 12, cadenceEpisodesPerWeek: 5, reserveTargetEpisodes: 2, endingDirection: "흉터의 비밀을 밝히고 회귀를 끝낸다", notes: null }, t.owner);
   return { novel, scope };
 }
@@ -141,17 +152,24 @@ describe("manuscript pipeline (MVP-α)", () => {
     expect(bible!.contentMd).toContain(SCRIPTED_BIBLE.synopsis);
   });
 
-  it("bible approval → schedule_episodes → plan_arc → planned episodes → arc plan approval", async () => {
+  it("bible approval → plan_structure → structure approval → plots → plan_arc → planned episodes → arc plan approval", async () => {
     const bible = (await t.modules.novel.service.listBibles(scope)).find((b) => b.status === "awaiting_approval")!;
     await decide(scope, "series_bible", bible.id, "approved");
     expect((await t.modules.novel.service.getApprovedBible(scope))?.id).toBe(bible.id);
+    expect((await t.modules.orchestration.service.listTasks(scope, { kinds: ["schedule_episodes"] })).length).toBe(0); // no plots before the structure
+    const view = await approveStructure(scope);
+    expect(view.plots.map((p: { plannedEpisodeFrom: number; plannedEpisodeTo: number }) => [p.plannedEpisodeFrom, p.plannedEpisodeTo])).toEqual([[1, 3], [4, 6], [7, 9], [10, 12]]);
     await drain(scope, () => arcPlanAwaiting(scope));
     const [arc] = await t.modules.novel.service.listArcs(scope);
     const eps = await ms().listEpisodes(scope, { arcId: arc!.id });
-    expect([arc!.plannedEpisodeFrom, arc!.plannedEpisodeTo]).toEqual([1, 3]); // the scripted bible's first arc has 3 episodes
+    expect([arc!.plannedEpisodeFrom, arc!.plannedEpisodeTo]).toEqual([1, 3]); // the scripted structure's first plot has 3 episodes
+    expect(arc!.partId).toBeTruthy();
+    expect(arc!.coreEvent).toContain("흉터");
     expect(eps.length).toBe(3);
     expect(eps.map((e) => e.title)).toEqual(["다시 뜬 눈", "기록관", "첫 단서"]);
     expect(eps.every((e) => e.status === "planned")).toBe(true);
+    expect(eps.map((e) => [e.plannedSceneCount, e.targetChars])).toEqual([[2, 5200], [2, 5200], [2, 5200]]);
+    expect(eps[0]!.planSummary).toBe("한결이 십 년 전 새벽에 눈을 뜬다.");
     const setupsBefore = await t.testDb.query<{ canon_status: string }>(`SELECT canon_status FROM setups WHERE novel_id = '${scope.novelId}' AND planned_arc_id = '${arc!.id}'`);
     expect(setupsBefore.length).toBeGreaterThan(0);
     expect(setupsBefore.every((x) => x.canon_status === "candidate")).toBe(true);
@@ -282,6 +300,7 @@ describe("manuscript direct edit (E16) and rejection (E10)", () => {
     const { scope } = await planningNovel();
     await drain(scope, async () => (await t.modules.novel.service.listBibles(scope)).some((b) => b.status === "awaiting_approval"));
     await decide(scope, "series_bible", (await t.modules.novel.service.listBibles(scope))[0]!.id, "approved");
+    await approveStructure(scope);
     await drain(scope, () => arcPlanAwaiting(scope));
     await decide(scope, "arc_plan", (await t.modules.novel.service.listArcs(scope))[0]!.id, "approved");
     await drain(scope, async () => (await ms().getEpisodeByNo(scope, 1)).status === "awaiting_approval", 80);

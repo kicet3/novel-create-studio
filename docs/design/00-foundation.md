@@ -854,10 +854,10 @@ PRD 4절 정의를 그대로 따릅니다. 아래 "설계 대응" 열은 이 용
 
 | 키 | 기본값 | 범위 | 근거 | 조정 경로 |
 |---|---|---|---|---|
-| `concept.max_turns` | 40 | novel | 11 3.8, 조사 `research-concept-agent.md` 6.2. 가정 | MVP-α K-C2 실측 |
-| `concept.turn_soft_warning` | 30 | system | 11 3.8. 가정 | 같음 |
-| `concept.turn_extension` | 20 | system | 11 3.8. 연장 시 감사 `concept_session.limit_extended`. 가정 | 같음 |
-| `concept.max_turn_extensions` | 2 | system | 11 3.8. 세션당 연장 횟수 상한(연장만 반복하는 출구 없는 루프 방지). 가정 | 같음 |
+| `concept.max_turns` | 200 (40에서 변경) | novel | 11 3.8. 2026-11-06 설계 변경: 대화는 브리프 필수 항목이 모두 확정될 때까지 이어지고 이 값은 숨은 안전 상한. 조사 `research-concept-agent.md` 6.2 | MVP-α K-C2 실측 |
+| `concept.turn_soft_warning_remaining` | 20 | system | 11 3.8. 안전 상한까지 남은 턴이 이 값 이하이고 필수 항목이 남았을 때만 경고(`concept.turn_soft_warning` 30 대체). 가정 | 같음 |
+| `concept.turn_extension` | 50 | system | 11 3.8. 연장 시 감사 `concept_session.limit_extended`. 가정 | 같음 |
+| `concept.max_turn_extensions` | 4 | system | 11 3.8. 세션당 연장 횟수 상한(연장만 반복하는 출구 없는 루프 방지). 가정 | 같음 |
 | `concept.check_reserve_usd` | 0.3 | novel | 11 3.8. 세션 비용 상한 안에 따로 두는 `check_concept_brief` 예약분. 턴·추출은 (상한 − 이 값)까지만. 가정 | MVP-α 실측 |
 | `concept.slot_flip_limit` | 3 | system | 11 3.7 반복 변경 비교 카드. 가정 | 시뮬레이션(11 7.3) |
 | `concept.idle_reminder_hours` | 48 | novel | 11 3.9. 가정 | 실사용 후 |

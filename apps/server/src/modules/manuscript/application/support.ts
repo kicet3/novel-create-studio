@@ -11,6 +11,7 @@ import type {
   CheckGateContributor,
   EpisodeTransitionContext,
   ManuscriptIssueSink,
+  PlanningCastPort,
   SafetyIssueDraft,
   VersionAnnotator,
 } from "../index.js";
@@ -27,6 +28,7 @@ export const MANUSCRIPT_TASK_KINDS = [
   "revise_episode",
   "plan_rework",
   "check_text_safety",
+  "plan_structure",
 ] as const satisfies readonly TaskKind[];
 
 /** tasks that write the episode manuscript (04 §3.3 동시 실행 제약) */
@@ -55,6 +57,10 @@ export interface ManuscriptSettings {
   polishRecheckOnFactDiff: boolean;
   maxEpisodesInFlight: number;
   reserveTarget: number;
+  /** 설계 추가: draft continuation when the draft is under the profile minimum */
+  draftContinueMaxAttempts: number;
+  /** stop continuing when one continuation added fewer chars than this */
+  draftContinueMinGrowth: number;
 }
 
 export function settings(): ManuscriptSettings {
@@ -66,6 +72,8 @@ export function settings(): ManuscriptSettings {
     polishRecheckOnFactDiff: defaultValue("polish.recheck_on_fact_diff"),
     maxEpisodesInFlight: defaultValue("schedule.max_episodes_in_flight"), // 04 §3.4
     reserveTarget: defaultValue("reserve.target_episodes"),
+    draftContinueMaxAttempts: 2,
+    draftContinueMinGrowth: 200,
   };
 }
 
@@ -76,11 +84,24 @@ export interface Registries {
   issueSinks: ManuscriptIssueSink[];
   annotators: { issues: VersionAnnotator[]; beats: VersionAnnotator[] };
   beatSources: Array<(scope: NovelScope, episodeNo: number) => Promise<string[]>>;
+  /** 설계 추가: cast completeness / roster (registered by cast) */
+  castPort: PlanningCastPort | null;
 }
 
 export function createRegistries(): Registries {
-  return { contributors: [], transitionHooks: [], arcPlanHooks: [], issueSinks: [], annotators: { issues: [], beats: [] }, beatSources: [] };
+  return { contributors: [], transitionHooks: [], arcPlanHooks: [], issueSinks: [], annotators: { issues: [], beats: [] }, beatSources: [], castPort: null };
 }
+
+/** port used when cast never registered (unit tests): everything complete, nothing to write */
+export const NO_CAST_PORT: PlanningCastPort = {
+  completeness: async () => ({ complete: true, items: [], message: "" }),
+  roster: async () => [],
+  applyFirstAppearances: async () => undefined,
+  proposePlotCharacters: async () => ({ characterIds: [] }),
+  confirmPlotCharacters: async () => undefined,
+  requestFill: async () => null,
+};
+export const castPortOf = (reg: Registries): PlanningCastPort => reg.castPort ?? NO_CAST_PORT;
 
 export interface Ports {
   readonly deps: ManuscriptModuleDeps;

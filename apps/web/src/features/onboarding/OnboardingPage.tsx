@@ -9,7 +9,7 @@ import { ProviderConnectionsCard } from "../settings/sections/ProviderConnection
 
 const STEPS = [
   { key: "env", title: "환경 점검", sub: "AI 계정 연결 · 외부 전송 안내" },
-  { key: "bot", title: "메신저 봇", sub: "Telegram (선택)" },
+  { key: "bot", title: "메신저 봇", sub: "Telegram · Discord (선택)" },
   { key: "novel", title: "작품 만들기", sub: "컨셉 대화로 시작" },
 ] as const;
 
@@ -105,7 +105,7 @@ export function OnboardingPage() {
       {step === 1 && (
         <div className="flex flex-col gap-3">
           <Callout tone="info">
-            Telegram 봇을 등록해 두면 질문과 승인 요청을 휴대폰으로 받을 수 있습니다. 건너뛰어도 웹 인박스로 모든 질문에 답할 수 있습니다.
+            Telegram 또는 Discord 봇을 등록해 두면 질문과 승인 요청을 휴대폰으로 받을 수 있습니다. 건너뛰어도 웹 인박스로 모든 질문에 답할 수 있습니다.
           </Callout>
           <BotsCard />
           <StepNav onPrev={() => go(0)} onNext={() => go(2)} nextLabel="다음 (건너뛰기 가능)" />

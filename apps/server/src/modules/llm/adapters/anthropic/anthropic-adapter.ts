@@ -12,10 +12,16 @@
  * - prompt caching: the system prompt is a cache breakpoint, plus any message marked `cacheBoundary`;
  * - server-side refusal fallback (`fallbacks: "default"`, beta `server-side-fallback-2026-07-01`) on
  *   Opus 5.5 / Sonnet 5.5: a safety decline is retried on the fallback model inside the same call.
+ * - web search (설계 추가 0011, `req.webSearch`): server tool `web_search_20260209` (dynamic filtering; Opus 5.5/5/4.8/
+ *   4.7/4.6, Sonnet 5.5/5/4.6, Fable) or `web_search_20250305` (other models) with `max_uses`. A searching call with an
+ *   object output uses prompt-described JSON (citations and strict `output_config.format` are not combined), and the
+ *   JSON is read from the text after the last search result. `pause_turn` (server loop limit) is resumed by sending
+ *   the paused assistant content back (at most PAUSE_RESUMES times). Sources = cited `web_search_result_location`s,
+ *   else the result list; searches = `usage.server_tool_use.web_search_requests` (billed per search by the gateway).
  */
 import Anthropic from "@anthropic-ai/sdk";
 import { transformJSONSchema } from "@anthropic-ai/sdk/lib/transform-json-schema";
-import type { LlmAdapter, LlmCapabilities, LlmEnvironmentCheck, LlmInvokeOptions, LlmRequest, LlmResult, LlmUsage } from "../../index.js";
+import type { LlmAdapter, LlmCapabilities, LlmCitation, LlmCredential, LlmEnvironmentCheck, LlmInvokeOptions, LlmRequest, LlmResult, LlmUsage, LlmWebSearchResult } from "../../index.js";
 import { classifyHttpError } from "../../domain/errors.js";
 import { MODEL_LIMITS } from "../../domain/pricing.js";
 import { createStreamRelay } from "../shared/stream-relay.js";
@@ -25,6 +31,53 @@ const FALLBACK_MODELS = new Set(["claude-opus-5-5", "claude-sonnet-5-5", "claude
 const FALLBACK_BETA = "server-side-fallback-2026-07-01";
 
 type JsonSchema = Record<string, unknown>;
+
+/** models with the dynamic-filtering web search tool version (claude-api reference, cached 2026-10-06) */
+const DYNAMIC_SEARCH_MODEL = /^claude-(opus-(5|4-[678])|sonnet-(5|4-6)|fable)(-|$)/;
+/** `pause_turn` continuations of one searching call */
+const PAUSE_RESUMES = 3;
+
+export function webSearchToolFor(modelId: string, maxUses: number): Anthropic.Beta.BetaToolUnion {
+  return DYNAMIC_SEARCH_MODEL.test(modelId)
+    ? { type: "web_search_20260209", name: "web_search", max_uses: maxUses }
+    : { type: "web_search_20250305", name: "web_search", max_uses: maxUses };
+}
+
+/** sources, query list and search count of a (possibly resumed) searching call */
+export function webSearchOf(blocks: readonly Anthropic.Beta.BetaContentBlock[], searches: number, retrievedAt: string): LlmWebSearchResult {
+  const cited: LlmCitation[] = [];
+  const listed: LlmCitation[] = [];
+  const queries: string[] = [];
+  for (const b of blocks) {
+    if (b.type === "text") {
+      for (const c of (b as Anthropic.Beta.BetaTextBlock).citations ?? []) {
+        if (c.type === "web_search_result_location") cited.push({ url: c.url, title: c.title ?? null, retrievedAt });
+      }
+    } else if (b.type === "server_tool_use" && b.name === "web_search") {
+      const q = (b.input as { query?: unknown }).query;
+      if (typeof q === "string") queries.push(q.slice(0, 200));
+    } else if (b.type === "web_search_tool_result" && Array.isArray(b.content)) {
+      for (const r of b.content) if (r.type === "web_search_result") listed.push({ url: r.url, title: r.title ?? null, retrievedAt });
+    }
+  }
+  const seen = new Set<string>();
+  const citations = (cited.length ? cited : listed.slice(0, 8)).filter((c) => (seen.has(c.url) ? false : (seen.add(c.url), true)));
+  const requests = Math.max(searches, queries.length);
+  return { status: requests > 0 ? "used" : "not_used", requests, citations, citationsKind: cited.length ? "cited" : "results", ...(queries.length ? { queries } : {}) };
+}
+
+/** text written after the last search result (the answer; earlier text is preamble like "검색해 보겠습니다") */
+function textAfterLastSearch(blocks: readonly Anthropic.Beta.BetaContentBlock[]): string {
+  let start = 0;
+  blocks.forEach((b, i) => {
+    if (b.type === "web_search_tool_result" || b.type === "server_tool_use") start = i + 1;
+  });
+  return blocks
+    .slice(start)
+    .filter((b): b is Anthropic.Beta.BetaTextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join("");
+}
 
 /**
  * Strict structured outputs need every object closed (`additionalProperties:false`) and every node typed.
@@ -195,8 +248,17 @@ export class AnthropicLlmAdapter implements LlmAdapter {
     }
   }
 
+  webSearchSupport(_modelId: string, _method?: LlmCredential["method"]): true {
+    return true;
+  }
+
   private buildParams(req: LlmRequest): { params: Anthropic.Beta.MessageCreateParamsNonStreaming; strict: boolean } {
-    const out = req.output.kind === "object" ? buildOutputFormat(req.output.jsonSchema) : null;
+    const out0 = req.output.kind === "object" ? buildOutputFormat(req.output.jsonSchema) : null;
+    // searching + object output → prompt-described JSON (no strict output_config.format next to web citations)
+    const out =
+      out0?.strict && req.webSearch && req.output.kind === "object"
+        ? { strict: false as const, instruction: `\n\n## 출력 형식\n설명이나 코드 블록 없이 아래 JSON Schema를 따르는 JSON 객체 하나만 출력하세요.\n${JSON.stringify(req.output.jsonSchema)}` }
+        : out0;
     const systemText = req.system + (out && !out.strict ? out.instruction : "");
     const messages: Anthropic.Beta.BetaMessageParam[] = req.messages.map((m) =>
       m.cacheBoundary
@@ -210,6 +272,7 @@ export class AnthropicLlmAdapter implements LlmAdapter {
       system: [{ type: "text", text: systemText, cache_control: { type: "ephemeral" } }],
       messages,
       ...(out?.strict ? { output_config: { format: out.format } } : {}),
+      ...(req.webSearch ? { tools: [webSearchToolFor(req.modelId, req.webSearch.maxUses)] } : {}),
       ...(fallback ? { betas: [FALLBACK_BETA], fallbacks: "default" as const } : {}),
     };
     return { params, strict: !!out?.strict };
@@ -223,6 +286,7 @@ export class AnthropicLlmAdapter implements LlmAdapter {
         system: params.system as Anthropic.TextBlockParam[],
         messages: params.messages as Anthropic.MessageParam[],
         ...(params.output_config ? { output_config: params.output_config as Anthropic.OutputConfig } : {}),
+        ...(params.tools ? { tools: params.tools as Anthropic.MessageCountTokensTool[] } : {}),
       },
       { signal: opts.signal },
     );
@@ -241,20 +305,40 @@ export class AnthropicLlmAdapter implements LlmAdapter {
     }, opts.timeoutMs);
     try {
       const { params } = this.buildParams(req);
-      const stream = this.client(opts.apiKey, opts.timeoutMs).beta.messages.stream(params, {
-        signal: ac.signal,
-        headers: opts.idempotencyKey ? { "x-ncs-idempotency-key": opts.idempotencyKey } : undefined,
-      });
-      if (opts.onStream) {
-        // live display only: text deltas (JSON text for object outputs); the result below is still finalMessage()
-        const relay = createStreamRelay("text", opts.onStream);
-        stream.on("streamEvent", (ev) => relay.push(ev));
+      const client = this.client(opts.apiKey, opts.timeoutMs);
+      // live display only: text deltas (JSON text for object outputs); the result below is still finalMessage()
+      const relay = opts.onStream ? createStreamRelay("text", opts.onStream) : null;
+      const once = async (p: Anthropic.Beta.MessageCreateParamsNonStreaming) => {
+        const stream = client.beta.messages.stream(p, {
+          signal: ac.signal,
+          headers: opts.idempotencyKey ? { "x-ncs-idempotency-key": opts.idempotencyKey } : undefined,
+        });
+        if (relay) stream.on("streamEvent", (ev) => relay.push(ev));
+        if (opts.onProgress) stream.on("streamEvent", () => opts.onProgress!()); // idle-timeout liveness (gateway)
+        return stream.finalMessage();
+      };
+      let msg = await once(params);
+      // web search: the server loop can pause (`pause_turn`) — send the paused content back so it continues
+      const blocks: Anthropic.Beta.BetaContentBlock[] = [...msg.content];
+      let usage = mapUsage(msg.usage);
+      let searches = msg.usage?.server_tool_use?.web_search_requests ?? 0;
+      for (let i = 0; req.webSearch && msg.stop_reason === "pause_turn" && i < PAUSE_RESUMES; i++) {
+        msg = await once({ ...params, messages: [...params.messages, { role: "assistant", content: blocks as unknown as Anthropic.Beta.BetaContentBlockParam[] }] });
+        blocks.push(...msg.content);
+        const u = mapUsage(msg.usage);
+        usage = {
+          inputTokens: usage.inputTokens + u.inputTokens,
+          outputTokens: usage.outputTokens + u.outputTokens,
+          cachedInputTokens: (usage.cachedInputTokens ?? 0) + (u.cachedInputTokens ?? 0) || undefined,
+          reasoningTokens: usage.reasoningTokens !== undefined || u.reasoningTokens !== undefined ? (usage.reasoningTokens ?? 0) + (u.reasoningTokens ?? 0) : undefined,
+        };
+        searches += msg.usage?.server_tool_use?.web_search_requests ?? 0;
       }
-      const msg = await stream.finalMessage();
-      const text = messageText(msg);
-      const finishReason = mapStop(msg.stop_reason);
-      const usage = mapUsage(msg.usage);
-      const common = { finishReason, usage, modelVersion: msg.model, providerRequestId: msg.id, raw: { stop_reason: msg.stop_reason, model: msg.model } };
+      const webSearch = req.webSearch ? webSearchOf(blocks, searches, new Date().toISOString()) : undefined;
+      if (webSearch) usage = { ...usage, webSearchRequests: webSearch.requests };
+      const text = req.webSearch ? (req.output.kind === "object" ? textAfterLastSearch(blocks) : blocks.filter((b): b is Anthropic.Beta.BetaTextBlock => b.type === "text").map((b) => b.text).join("")) : messageText(msg);
+      const finishReason = msg.stop_reason === "pause_turn" ? "length" : mapStop(msg.stop_reason);
+      const common = { finishReason, usage, modelVersion: msg.model, providerRequestId: msg.id, ...(webSearch ? { webSearch } : {}), raw: { stop_reason: msg.stop_reason, model: msg.model } };
       if (finishReason === "content_filter") {
         // the whole fallback chain declined (stop_details carries the category)
         const cat = (msg as { stop_details?: { category?: string | null } }).stop_details?.category;

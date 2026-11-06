@@ -93,6 +93,10 @@ export const installConfigSchema = z
         telegram_receive_mode: z.enum(ENUMS.telegram_receive_mode).optional(),
         /** Telegram Bot API base URL (default https://api.telegram.org); a local Bot API server or a test mock */
         telegram_api_base_url: z.url().optional(),
+        /** Discord REST base URL (default https://discord.com/api/v10); a test mock */
+        discord_api_base_url: z.url().optional(),
+        /** also request the privileged MESSAGE_CONTENT intent (DM content arrives without it; enable the portal toggle first) */
+        discord_message_content_intent: z.boolean().optional(),
       })
       .prefault({}),
     llm: z
@@ -109,7 +113,12 @@ export const installConfigSchema = z
             provider: z.enum(LLM_CALL_PROVIDER_IDS).optional().catch(undefined),
             /** set by the parser: `provider` was given explicitly (false = default, boot-time detection allowed) */
             provider_explicit: z.boolean().optional(),
+            /** hard cap of one provider call (API lanes); `provider_call_timeout_seconds` overrides it per provider */
             call_timeout_seconds: z.number().int().positive().default(DEFAULTS["llm.call_timeout_seconds"]),
+            /** per-provider hard cap, e.g. `{ openai: 900 }` (claude_code: `claude_code.call_timeout_seconds`) */
+            provider_call_timeout_seconds: z.record(z.string(), z.number().int().positive()).default({}),
+            /** streaming calls: abort after this many seconds without any received bytes (armed at the first byte; 0 = off) */
+            idle_timeout_seconds: z.number().int().min(0).default(DEFAULTS["llm.idle_timeout_seconds"]),
             /** Claude subscription lane (`claude -p`, provider "claude_code") */
             claude_code: z
               .object({
@@ -351,9 +360,13 @@ export function installConfigFromEnv(env: Record<string, string | undefined>): I
   if (env.NCS_PG_PORT) set("database", "embedded_port", Number(env.NCS_PG_PORT));
   if (env.NCS_PG_DATA_DIR) set("database", "embedded_data_dir", env.NCS_PG_DATA_DIR);
   if (env.NCS_TELEGRAM_API_BASE_URL) set("messaging", "telegram_api_base_url", env.NCS_TELEGRAM_API_BASE_URL);
+  if (env.NCS_DISCORD_API_BASE_URL) set("messaging", "discord_api_base_url", env.NCS_DISCORD_API_BASE_URL);
+  if (env.NCS_DISCORD_MESSAGE_CONTENT_INTENT !== undefined && env.NCS_DISCORD_MESSAGE_CONTENT_INTENT !== "")
+    set("messaging", "discord_message_content_intent", /^(1|true|yes|on)$/i.test(env.NCS_DISCORD_MESSAGE_CONTENT_INTENT.trim()));
   if (env.NCS_LLM_PROVIDER) set("llm", "provider", env.NCS_LLM_PROVIDER);
   if (env.NCS_ANTHROPIC_BASE_URL) set("llm", "endpoints", { anthropic_api_base_url: env.NCS_ANTHROPIC_BASE_URL });
   if (env.NCS_CLAUDE_MAX_CONCURRENT) set("llm", "claude_code", { max_concurrent: Number(env.NCS_CLAUDE_MAX_CONCURRENT) });
+  if (env.NCS_LLM_CALL_TIMEOUT_SECONDS) set("llm", "call_timeout_seconds", Number(env.NCS_LLM_CALL_TIMEOUT_SECONDS));
   if (env.NCS_LOG_LEVEL) set("logging", "level", env.NCS_LOG_LEVEL);
   if (env.NCS_SECRETS_MASTER_KEY_FILE) set("secrets", "master_key_file", env.NCS_SECRETS_MASTER_KEY_FILE);
   return out as InstallConfigInput;

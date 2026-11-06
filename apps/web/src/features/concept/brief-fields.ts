@@ -125,3 +125,44 @@ export function editText(type: FieldValueType, v: unknown): string {
   if (type === "list" && Array.isArray(v)) return v.map(briefValueText).join("\n");
   return briefValueText(v);
 }
+
+export interface ProposalLike {
+  status: "pending" | "accepted" | "rejected" | "superseded";
+  resolution?: string;
+}
+
+/** pending proposals first need an answer; settled ones go to the collapsed "처리된 제안" history (newest first) */
+export function splitProposals<T extends ProposalLike>(all: readonly T[]): { pending: T[]; settled: T[] } {
+  return { pending: all.filter((p) => p.status === "pending"), settled: all.filter((p) => p.status !== "pending").reverse() };
+}
+
+/**
+ * Hint under the pending change proposals: a [수락]/[거절] click is sent to the concept partner as a
+ * user event (the server starts a turn, or queues it behind the reply being written).
+ */
+export function proposalDecisionNote(turnInFlight: boolean): string {
+  return turnInFlight ? "컨셉 파트너가 답을 쓰는 중이에요. 지금 고르면 이 답 다음에 결정을 받아 이어 갑니다." : "수락·거절하면 브리프에 반영하고 컨셉 파트너가 이어서 답합니다.";
+}
+
+/** how a settled change proposal ended (server ChangeProposal.resolution) */
+export function proposalOutcomeText(p: ProposalLike): string {
+  const r = p.resolution;
+  if (p.status === "accepted") {
+    if (r === "decided_in_chat") return "대화에서 수락";
+    if (r === "applied_in_chat") return "대화에서 같은 값으로 정함";
+    if (r === "form_edit") return "직접 고쳐 반영";
+    if (r === "auto_accepted") return "자동 승인으로 수락";
+    return "수락";
+  }
+  if (p.status === "rejected") {
+    if (r === "decided_in_chat") return "대화에서 지금 값 유지";
+    if (r === "form_edit") return "직접 고쳐 정리";
+    return "거절";
+  }
+  if (p.status === "superseded") {
+    if (r === "replaced") return "새 제안으로 대체";
+    if (r === "already_applied") return "이미 같은 값";
+    return "다른 값으로 정해져 정리";
+  }
+  return "대기 중";
+}

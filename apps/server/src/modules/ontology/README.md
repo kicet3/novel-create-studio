@@ -61,3 +61,7 @@ See /CONVENTIONS.md for layering, transactions, audit, tests and copy rules.
 - `domain/`: `base-schema.ts` (`base@1` data + zod defs), `normalize.ts` (normalized/jamo/translit keys, edit distance), `facts.ts` (slot keys, classification), `schema-validator.ts` (CR-05/09/10/11), `transitions.ts`.
 - Reads accept an optional trailing `tx` — always pass it inside a transaction (PGlite has one connection).
 - Status/promotion changes create a FactVersion with `change_reason=canon_change` (no dedicated enum value yet).
+- 설계 추가 (world, 0012): `updateEntity` (summary / disambiguator, audit `entity.updated`), `reviseCandidateFact` (value edit of a
+  candidate → new version, `user_edit`), `approveCandidateFacts` (F3 for explicit fact ids — `PromotionTarget.factIds`, same
+  06 §6.4 gate), `getFactsByIds`. World candidates carry `equivalence_check = {status: "review", source: "world_ontology"}` so
+  EN3(b) never activates them before the author's review; the bible's `build_initial_ontology` reuses them by type + name.

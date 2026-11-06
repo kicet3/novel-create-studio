@@ -49,6 +49,22 @@ export const conceptTurnProposalSchema = z.object({
   user_intent: z.enum(ENUMS.concept_user_intent).default("other"),
   slot_updates: z.array(slotUpdateClaimSchema).max(40).default([]),
   change_proposals: z.array(z.object({ field_path: z.string(), new_value: z.unknown(), reason: z.string().default("") })).max(10).default([]),
+  /**
+   * 설계 추가: the user's answer in the chat to a pending change proposal (S1 '대기 중인 변경 제안').
+   * Applied only when evidence_quote is the user's own words from a handled message (INV-CON-03).
+   */
+  proposal_decisions: z
+    .array(
+      z.object({
+        proposal_id: z.string(),
+        decision: z.enum(["accepted", "rejected"]),
+        evidence_message_id: z.string().nullable().default(null),
+        evidence_quote: z.string().default(""),
+      }),
+    )
+    .max(10)
+    .default([])
+    .catch([]),
   weakness_notes: z.array(z.string().max(400)).max(4).default([]),
   safety_flags: z
     .array(

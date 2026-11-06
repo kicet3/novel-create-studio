@@ -59,6 +59,10 @@ describe("InstallConfig", () => {
   it("remembers whether llm.provider was chosen (boot-time Claude subscription detection only when not)", () => {
     const d = parseInstallConfig({});
     expect(d.llm).toMatchObject({ provider: "anthropic", provider_explicit: false, claude_code: { max_concurrent: 2, call_timeout_seconds: 1200 } });
+    // call timeouts: hard cap per call (API lanes; per-provider override), idle timeout for streaming calls
+    expect(d.llm).toMatchObject({ call_timeout_seconds: 600, idle_timeout_seconds: 300, provider_call_timeout_seconds: {} });
+    expect(parseInstallConfig({ llm: { provider_call_timeout_seconds: { openai: 900 } } }).llm.provider_call_timeout_seconds).toEqual({ openai: 900 });
+    expect(parseInstallConfig(installConfigFromEnv({ NCS_LLM_CALL_TIMEOUT_SECONDS: "1200" })).llm.call_timeout_seconds).toBe(1200);
     expect(parseInstallConfig({ llm: { provider: "anthropic" } }).llm.provider_explicit).toBe(true);
     expect(parseInstallConfig({ llm: { provider: "claude_code" } }).llm).toMatchObject({ provider: "claude_code", provider_explicit: true });
     expect(parseInstallConfig(installConfigFromEnv({ NCS_LLM_PROVIDER: "claude_code", NCS_CLAUDE_MAX_CONCURRENT: "1" })).llm).toMatchObject({ provider: "claude_code", claude_code: { max_concurrent: 1 } });

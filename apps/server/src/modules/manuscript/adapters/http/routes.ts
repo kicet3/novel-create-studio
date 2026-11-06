@@ -9,6 +9,9 @@ import {
   unpublishRequestSchema,
   versionDetailQuerySchema,
   versionIdParamsSchema,
+  structureGenerateRequestSchema,
+  structureDecisionRequestSchema,
+  arcReplanRequestSchema,
 } from "@ncs/shared";
 import type { ApiRouters } from "../../../../platform/index.js";
 import { actorOf, created, scopeOf, valid, validate } from "../../../../http/kit.js";
@@ -17,6 +20,7 @@ import type { ManuscriptService, ManuscriptVersion } from "../../index.js";
 import type { NovelService } from "../../../novel/index.js";
 
 type P = { params: z.output<typeof episodeNoParamsSchema> };
+const arcParams = z.object({ arcId: z.string().regex(/^arc_/) });
 
 export function summarizeVersion(v: ManuscriptVersion) {
   const { content, outlineData: _o, writerAnnotations: _w, attributionSpans: _a, ...rest } = v;
@@ -26,7 +30,8 @@ export function summarizeVersion(v: ManuscriptVersion) {
 export function mountManuscriptRoutes({ novel }: ApiRouters, svc: ManuscriptService, novels: NovelService): void {
   novel.get("/episodes", validate({ query: episodeListQuerySchema }), async (_req, res) => {
     const { query } = valid<{ query: z.output<typeof episodeListQuerySchema> }>(res);
-    res.json({ items: await svc.listEpisodes(scopeOf(res), { arcId: query.arcId, statuses: query.status }) });
+    const scope = scopeOf(res);
+    res.json({ items: await svc.withLengthFlags(scope, await svc.listEpisodes(scope, { arcId: query.arcId, statuses: query.status })) });
   });
   novel.get("/reserve", async (_req, res) => {
     res.json(await svc.reserveSummary(scopeOf(res)));
@@ -37,8 +42,9 @@ export function mountManuscriptRoutes({ novel }: ApiRouters, svc: ManuscriptServ
     const ep = await svc.getEpisodeByNo(scope, params.episodeNo);
     const current = ep.currentVersionId ? await svc.getVersion(scope, ep.currentVersionId) : null;
     const profile = current ? await novels.getLengthProfile(scope) : null;
+    const [flagged] = await svc.withLengthFlags(scope, [ep]);
     res.json({
-      ...ep,
+      ...flagged,
       currentVersion: current ? summarizeVersion(current) : null,
       length: current && profile ? checkLength(current.content, profile) : null,
     });
@@ -95,5 +101,22 @@ export function mountManuscriptRoutes({ novel }: ApiRouters, svc: ManuscriptServ
   }
   novel.post("/planning/schedule", async (_req, res) => {
     res.json(await svc.schedule(scopeOf(res)));
+  });
+
+  // 설계 추가: 전체 구성(1~4부 + 결말) → 플롯 → 화 (편집은 novel: PATCH …/structure/ending|parts/:partId)
+  novel.get("/structure", async (_req, res) => {
+    res.json(await svc.getStructureView(scopeOf(res)));
+  });
+  novel.post("/structure/generate", validate({ body: structureGenerateRequestSchema }), async (_req, res) => {
+    const { body } = valid<{ body: z.output<typeof structureGenerateRequestSchema> }>(res);
+    res.status(202).json(await svc.requestStructure(scopeOf(res), body, actorOf(res)));
+  });
+  novel.post("/structure/decision", validate({ body: structureDecisionRequestSchema }), async (_req, res) => {
+    const { body } = valid<{ body: z.output<typeof structureDecisionRequestSchema> }>(res);
+    res.json(await svc.decideStructure(scopeOf(res), body, actorOf(res)));
+  });
+  novel.post("/arcs/:arcId/replan", validate({ params: arcParams, body: arcReplanRequestSchema }), async (_req, res) => {
+    const { params, body } = valid<{ params: z.output<typeof arcParams>; body: z.output<typeof arcReplanRequestSchema> }>(res);
+    res.status(202).json(await svc.replanArc(scopeOf(res), params.arcId, body.note, actorOf(res)));
   });
 }

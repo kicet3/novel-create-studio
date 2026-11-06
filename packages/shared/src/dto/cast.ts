@@ -29,7 +29,11 @@ export const characterFieldOriginDtoSchema = z.enum(ENUMS.character_field_origin
 export const characterSheetViewDtoSchema = z.enum(ENUMS.character_sheet_view);
 
 /** profile fields guarded by provenance (agent never overwrites a `user` field) */
-export const CHARACTER_PROFILE_FIELDS = ["name", "aliases", "age", "gender", "personality", "background", "desire", "weakness", "relationships", "notes"] as const;
+export const CHARACTER_PROFILE_FIELDS = [
+  "name", "aliases", "age", "gender", "personality", "background", "desire", "weakness", "relationships", "notes",
+  // 0008: 구성 전 필수 항목·첫 등장
+  "appearance", "motivation", "speechSample", "arcStart", "arcEnd", "storyRole", "firstAppearanceEpisodeNo",
+] as const;
 export type CharacterProfileField = (typeof CHARACTER_PROFILE_FIELDS)[number];
 
 const shortText = (max: number) => z.string().trim().max(max);
@@ -58,6 +62,23 @@ export const characterDtoSchema = z.object({
   weakness: z.string(),
   relationships: z.array(characterRelationshipSchema),
   notes: z.string(),
+  /** 외형 요약 */
+  appearance: z.string(),
+  /** 동기(왜 그 목표를 원하는가) */
+  motivation: z.string(),
+  /** 말투 예시(1~2줄) */
+  speechSample: z.string(),
+  /** 변화 아크 시작 → 끝 */
+  arcStart: z.string(),
+  arcEnd: z.string(),
+  /** 이야기 속 역할(조연·적대자) */
+  storyRole: z.string(),
+  /** 첫 등장 화(없으면 미정) */
+  firstAppearanceEpisodeNo: z.number().int().nullable(),
+  /** 플롯 계획(plan_arc)에서 새로 등장한 인물이면 그 플롯(arc) id */
+  introducedArcId: z.string().nullable(),
+  /** introducedArcId 플롯의 제목(조회 시 계산) */
+  firstAppearanceArcTitle: z.string().nullable(),
   /** per-field provenance; a missing key = empty field */
   fieldOrigins: z.record(z.string(), characterFieldOriginDtoSchema),
   /** created by the AI draft and not yet accepted by the user */
@@ -74,6 +95,49 @@ export const characterDtoSchema = z.object({
   updatedAt: isoDateTime,
 });
 export type CharacterDto = z.infer<typeof characterDtoSchema>;
+
+/** 구성 전 캐릭터 필수 항목(판정 기준). relationToProtagonist = 주인공과의 관계(어느 쪽 행에 적혀 있든) */
+export const CHARACTER_REQUIREMENT_FIELDS = [
+  "age", "appearance", "personality", "desire", "motivation", "weakness", "background", "speechSample",
+  "relationships", "arcStart", "arcEnd", "storyRole", "relationToProtagonist",
+] as const;
+export type CharacterRequirementField = (typeof CHARACTER_REQUIREMENT_FIELDS)[number];
+export const CHARACTER_REQUIREMENT_LABELS_KO: Record<CharacterRequirementField, string> = {
+  age: "나이",
+  appearance: "외형 요약",
+  personality: "성격(장점·결점)",
+  desire: "목표·욕망",
+  motivation: "동기",
+  weakness: "두려움·약점",
+  background: "핵심 과거사",
+  speechSample: "말투 예시",
+  relationships: "주요 인물과의 관계",
+  arcStart: "변화 아크(시작)",
+  arcEnd: "변화 아크(끝)",
+  storyRole: "이야기 속 역할",
+  relationToProtagonist: "주인공과의 관계",
+};
+/** 역할별 필수 항목 */
+export const CHARACTER_REQUIRED_FIELDS_BY_ROLE: Record<(typeof ENUMS.character_role)[number], readonly CharacterRequirementField[]> = {
+  protagonist: ["age", "appearance", "personality", "desire", "motivation", "weakness", "background", "speechSample", "relationships", "arcStart", "arcEnd"],
+  sub_protagonist: ["age", "appearance", "personality", "desire", "motivation", "weakness", "background", "speechSample", "relationToProtagonist", "arcStart", "arcEnd"],
+  antagonist: ["storyRole", "desire", "relationToProtagonist"],
+  supporting: ["storyRole", "desire", "relationToProtagonist"],
+};
+
+export const castCompletenessItemSchema = z.object({
+  characterId: z.string(),
+  name: z.string(),
+  role: characterRoleDtoSchema,
+  missing: z.array(z.object({ field: z.enum(CHARACTER_REQUIREMENT_FIELDS), label: z.string() })),
+  /** 확정되지 않은 변경이 있음(확정해야 완성도에 들어감) */
+  unconfirmed: z.boolean(),
+  introducedArcId: z.string().nullable(),
+});
+export type CastCompletenessItem = z.infer<typeof castCompletenessItemSchema>;
+/** items는 미완성 인물만 담습니다(완성이면 빈 배열). */
+export const castCompletenessSchema = z.object({ complete: z.boolean(), items: z.array(castCompletenessItemSchema), message: z.string() });
+export type CastCompleteness = z.infer<typeof castCompletenessSchema>;
 
 export const castViewSchema = z.object({
   items: z.array(characterDtoSchema),
@@ -93,6 +157,10 @@ export const castViewSchema = z.object({
   /** running/pending draft_cast task, null when none */
   draftTask: z.object({ id: z.string(), status: z.string() }).nullable(),
   lastDraftError: z.string().nullable(),
+  /** 전체 구성을 만들기 전 초기 캐릭터 완성도(플롯 신규 인물은 제외) */
+  completeness: castCompletenessSchema,
+  /** 플롯에서 새로 등장한 인물 중 빈 항목이 있거나 AI 제안을 수락하지 않은 인물(그 플롯 승인을 막음) */
+  plotCompleteness: castCompletenessSchema.default({ complete: true, items: [], message: "" }),
 });
 export type CastView = z.infer<typeof castViewSchema>;
 
@@ -107,6 +175,13 @@ const profileInput = {
   weakness: shortText(2000),
   relationships: z.array(characterRelationshipSchema).max(40),
   notes: shortText(4000),
+  appearance: shortText(1000),
+  motivation: shortText(2000),
+  speechSample: shortText(500),
+  arcStart: shortText(1000),
+  arcEnd: shortText(1000),
+  storyRole: shortText(200),
+  firstAppearanceEpisodeNo: z.number().int().min(1).nullable(),
 };
 
 export const characterCreateRequestSchema = z.object({
@@ -121,6 +196,13 @@ export const characterCreateRequestSchema = z.object({
   weakness: profileInput.weakness.optional(),
   relationships: profileInput.relationships.optional(),
   notes: profileInput.notes.optional(),
+  appearance: profileInput.appearance.optional(),
+  motivation: profileInput.motivation.optional(),
+  speechSample: profileInput.speechSample.optional(),
+  arcStart: profileInput.arcStart.optional(),
+  arcEnd: profileInput.arcEnd.optional(),
+  storyRole: profileInput.storyRole.optional(),
+  firstAppearanceEpisodeNo: profileInput.firstAppearanceEpisodeNo.optional(),
 });
 export type CharacterCreateRequest = z.input<typeof characterCreateRequestSchema>;
 
@@ -137,6 +219,13 @@ export const characterPatchRequestSchema = z
     weakness: profileInput.weakness.optional(),
     relationships: profileInput.relationships.optional(),
     notes: profileInput.notes.optional(),
+    appearance: profileInput.appearance.optional(),
+    motivation: profileInput.motivation.optional(),
+    speechSample: profileInput.speechSample.optional(),
+    arcStart: profileInput.arcStart.optional(),
+    arcEnd: profileInput.arcEnd.optional(),
+    storyRole: profileInput.storyRole.optional(),
+    firstAppearanceEpisodeNo: profileInput.firstAppearanceEpisodeNo.optional(),
   })
   .refine((v) => Object.keys(v).length > 0, "바꿀 항목이 없습니다.");
 export type CharacterPatchRequest = z.input<typeof characterPatchRequestSchema>;
@@ -152,6 +241,10 @@ export const castDraftRequestSchema = z.object({
   includeAntagonist: z.boolean().default(true),
   /** 추가 요청(자유 입력) */
   instructions: shortText(1000).optional(),
+  /** 빈 필수 항목만 AI로 채우기(기존 값·사용자 입력은 바꾸지 않음) */
+  fillMissing: z.boolean().default(false),
+  /** fillMissing 대상 인물(없으면 빈 항목이 있는 모든 인물) */
+  characterIds: z.array(z.string().regex(/^chr_[0-9A-HJKMNP-TV-Z]{26}$/)).max(40).optional(),
 });
 export type CastDraftRequest = z.input<typeof castDraftRequestSchema>;
 

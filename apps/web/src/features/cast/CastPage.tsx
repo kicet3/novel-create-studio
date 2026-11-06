@@ -8,6 +8,7 @@ import { novelPath } from "../../components/layout/nav.js";
 import { Badge, Button, Callout, Card, ConfirmDialog, Dialog, EmptyState, Field, Input, QueryView, Select, StatusBadge, Tabs, Textarea, Checkbox } from "../../components/ui/index.js";
 import { cx } from "../../lib/cx.js";
 import { useCast, useConfirmCast, useCreateCharacter, useImportBrief, useReorderCast, useRequestCastDraft } from "./api.js";
+import { CastCompleteness } from "./CastCompleteness.js";
 import { CharacterProfileForm } from "./CharacterProfileForm.js";
 import { DesignSheetTab } from "./DesignSheetTab.js";
 
@@ -44,6 +45,7 @@ function CastScreen({ novelId, view, selectedId }: { novelId: string; view: Cast
   return (
     <div className="flex flex-col gap-4">
       <StepCallout novelId={novelId} view={view} />
+      <CastCompleteness novelId={novelId} view={view} />
       <Toolbar novelId={novelId} view={view} />
       <div className="grid gap-4 min-[1000px]:grid-cols-[minmax(280px,360px)_1fr]">
         <div className={cx(selected && "max-[999px]:hidden")}>
@@ -51,7 +53,7 @@ function CastScreen({ novelId, view, selectedId }: { novelId: string; view: Cast
         </div>
         <div className={cx(!selected && "max-[999px]:hidden")}>
           {selected ? (
-            <CharacterDetail key={selected.id} novelId={novelId} character={selected} cast={view.items} />
+            <CharacterDetail key={selected.id} novelId={novelId} character={selected} cast={view.items} completeness={{ ...view.completeness, items: [...view.completeness.items, ...view.plotCompleteness.items] }} />
           ) : (
             <Card>
               <EmptyState title="캐릭터를 고르세요" description="왼쪽 목록에서 캐릭터를 고르면 프로필과 디자인 시트를 편집할 수 있습니다." />
@@ -272,6 +274,7 @@ function CastList({ novelId, view, selectedId }: { novelId: string; view: CastVi
                           {g.key === "other" && <Badge tone="neutral">{labelKo("character_role", c.role)}</Badge>}
                           <StatusBadge enum="character_status" value={c.status} tone={c.status === "confirmed" ? "ok" : "neutral"} />
                           {c.proposed && <Badge tone="violet">AI 제안</Badge>}
+                          {c.introducedArcId && <Badge tone="info">{c.firstAppearanceArcTitle ? `${c.firstAppearanceArcTitle} 플롯에서 등장` : "플롯에서 등장"}</Badge>}
                         </span>
                       </span>
                     </Link>
@@ -306,7 +309,7 @@ function Thumb({ character }: { character: CharacterDto }) {
   );
 }
 
-function CharacterDetail({ novelId, character, cast }: { novelId: string; character: CharacterDto; cast: CharacterDto[] }) {
+function CharacterDetail({ novelId, character, cast, completeness }: { novelId: string; character: CharacterDto; cast: CharacterDto[]; completeness: CastView["completeness"] }) {
   const [tab, setTab] = useState<"profile" | "sheet">("profile");
   return (
     <Card
@@ -315,6 +318,7 @@ function CharacterDetail({ novelId, character, cast }: { novelId: string; charac
           {character.name}
           <Badge tone={character.role === "protagonist" ? "accent" : "neutral"}>{labelKo("character_role", character.role)}</Badge>
           <StatusBadge enum="character_status" value={character.status} tone={character.status === "confirmed" ? "ok" : "neutral"} />
+          {character.introducedArcId && <Badge tone="info">{character.firstAppearanceArcTitle ? `${character.firstAppearanceArcTitle} 플롯에서 등장` : "플롯에서 등장"}</Badge>}
         </span>
       }
       actions={
@@ -328,7 +332,7 @@ function CharacterDetail({ novelId, character, cast }: { novelId: string; charac
         value={tab}
         onChange={setTab}
         items={[
-          { value: "profile", label: "프로필", panel: <CharacterProfileForm key={character.updatedAt} novelId={novelId} character={character} cast={cast} /> },
+          { value: "profile", label: "프로필", panel: <CharacterProfileForm key={character.updatedAt} novelId={novelId} character={character} cast={cast} completeness={completeness} /> },
           { value: "sheet", label: "디자인 시트", adornment: character.hasDesignSheet ? <span className="sr-only">(작성됨)</span> : undefined, panel: <DesignSheetTab novelId={novelId} character={character} /> },
         ]}
       />

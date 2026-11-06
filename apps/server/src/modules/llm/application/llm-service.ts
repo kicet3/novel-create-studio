@@ -59,6 +59,8 @@ export interface LlmServiceDeps {
   oauth?: Partial<Pick<OauthLoginDeps, "xaiPollFloorMs" | "chatgptPollFloorMs">>;
   /** novel titles for "who uses this model" answers (module novel; llm never reads the novels table) */
   novelTitles?: () => Promise<Array<{ id: string; title: string }>>;
+  /** 설계 추가 0011: the novel's web search setting (enabled + per-call cap) */
+  webSearchPolicy?: GatewayDeps["webSearchPolicy"];
 }
 
 const CALL_PROVIDER_LABEL: Record<string, string> = {
@@ -132,6 +134,7 @@ export function createLlmService(deps: LlmServiceDeps): LlmService {
     getProfile,
     getAdapter: (p) => adapters.get(p),
     resolveCredential: (p) => credentials.resolve(p),
+    ...(deps.webSearchPolicy ? { webSearchPolicy: deps.webSearchPolicy } : {}),
     ...deps.gateway,
   });
 

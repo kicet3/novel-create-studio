@@ -55,7 +55,7 @@ apps/server/src/
   modules/<m>/       index.ts(공개 계약) · module.ts(팩토리) · domain/ · application/ · adapters/{db,http,<ext>}/ · README.md
 ```
 
-모듈 생성 순서(의존은 위쪽으로만): `audit → system → novel → budget → llm → ontology → orchestration → agents → messaging → hitl → linking → manuscript → foreshadow → continuity → concept → export → imaging → cast`.
+모듈 생성 순서(의존은 위쪽으로만): `audit → system → novel → budget → llm → ontology → orchestration → agents → messaging → hitl → linking → manuscript → foreshadow → continuity → concept → export → imaging → world → cast` (world = 설계 추가 0012 세계관 온톨로지; cast가 캐릭터 초안에 world 컨텍스트를 씀).
 순환이 필요해 보이면 **등록부(registry)** 로 뒤집습니다(아래 §6).
 
 ## 3. 계층 규칙 (ADR-008, 08 §3.2)
@@ -128,7 +128,7 @@ orchestration.registerTaskKind({
 ```
 
 - `TASK_KIND_ROLE`·`TASK_KIND_TARGET`(orchestration/index.ts)이 역할·대상의 기준입니다.
-- 작업 생성: `orchestration.createTask(tx, scope, { kind, targetType, targetId, input, createdBy, dependsOn?, episodeId?, arcId? })` — 컨셉 3종과 캐릭터 설정 2종(`draft_cast`, `draft_design_sheet`, `GOAL_OPTIONAL_TASK_KINDS`) 외에는 `Goal`이 있어야 합니다(INV-GOL-01).
+- 작업 생성: `orchestration.createTask(tx, scope, { kind, targetType, targetId, input, createdBy, dependsOn?, episodeId?, arcId? })` — 컨셉 3종과 캐릭터 설정 2종(`draft_cast`, `draft_design_sheet`), 세계관 온톨로지(`build_world_ontology`, 0012) — `GOAL_OPTIONAL_TASK_KINDS` — 외에는 `Goal`이 있어야 합니다(INV-GOL-01).
 - 실패 분류는 `TaskFailure(errorFamily, message, retryable)` 또는 llm의 `ModelCallError`를 던집니다. 안전 지점은 `await ctx.run.checkpoint()`.
 - 현재 엔진은 **placeholder**(`orchestration/application/placeholder-runner.ts`)입니다. 계약(`TaskKindHandler`, `OrchestrationService`)은 그대로 두고 orchestration 담당이 교체합니다. 테스트에서는 `orchestration.runOnce()`로 한 번 돌립니다.
 
@@ -213,13 +213,14 @@ orchestration.registerTaskKind({
 - ⏳ system(MA-6): `GET|POST /api/system/backups`
 
 **작품 (novel, 감사, 홈)**
-- ✅ `GET …` · `PATCH …` `{title?, targetAudience?, questionThreshold?, defaultNarrationMode?, timezone?, possessionModeEnabled?}`
+- ✅ `GET …` · `PATCH …` `{title?, targetAudience?, questionThreshold?, defaultNarrationMode?, timezone?, possessionModeEnabled?, webSearchEnabled?, webSearchMaxUses?(1~10)}` (인터넷 검색, 설계 추가 0011 — `modules/llm/README.md` Web search)
 - ✅ `PUT …/autonomy` `{autonomyLevel, publishPolicy?, acknowledgedFullAutoWarning, reason?}`
 - ✅ `POST …/pause` `{reason?}` · `POST …/resume` · `POST …/status` `{to: "completed"|"archived", reason?}`
 - ✅ `GET …/goal` (없으면 `null`) · `PUT …/goal` `{totalEpisodesMin, totalEpisodesMax, cadenceEpisodesPerWeek, reserveTargetEpisodes, endingDirection, notes, expectedRevision?}` (concept 상태면 422 `concept_not_approved`, 처음 저장이면 N3)
 - ✅ `GET …/bibles` · `GET …/bibles/approved` · `GET …/bibles/:bibleId`
 - ✅ `GET …/arcs` · `POST …/arcs` · `GET|PATCH …/arcs/:arcId` · `POST …/arcs/:arcId/pause|resume`
-- ✅ `GET|PATCH …/length-profile` · `GET|PATCH …/notification-policy`
+- ✅ `GET|PATCH …/length-profile` (`minChars`·`maxChars` ≥ 3,000: zod 400 / 서버 422 `length_min_too_low`, 기본 5000/5500) · `GET|PATCH …/notification-policy`
+- ✅ 전체 구성 편집(설계 추가 0008): `PATCH …/structure/ending` `{expectedRevision, ending: {worldState?, conflictResolution?, characterFinalStates?, protagonistChange?, foreshadowPayoffs?}}` · `PATCH …/structure/parts/:partId` `{expectedRevision, title?, goalText?, turningPoints?, plannedEpisodeFrom?, plannedEpisodeTo?, characterStates?, plotOutline?}` → `storyStructureDtoSchema` (409 `revision_conflict`, 422 `part_range_invalid`·`part_range_locked`; 승인된 구성은 draft로 돌아가 재승인 필요) · `POST …/arcs/:arcId/acknowledge-flags` → Arc (플롯 확인 표시 해제 = 지금 계획 유지)
 - ✅ `GET …/activity?actorType&actorId&targetType&targetId=a,b&actionPrefix=episode.&afterSeq&beforeSeq&limit` → `{items, nextCursor, latestSeq}` (seq 내림차순, 다음 페이지는 `beforeSeq=nextCursor`, 새 이벤트 폴링은 `afterSeq=latestSeq`)
 - ✅ `GET …/health-checks`
 - ✅ `GET …/home` → `{novel, goal, arcs, episodes, reserve, questions, continuityIssues, setupsDueSoon, budget, health, modules}` (placeholder 모듈 영역은 `null`)
@@ -233,7 +234,7 @@ orchestration.registerTaskKind({
 
 **모델 (llm)** ⏳ `GET …/model-bindings` · `PATCH …/model-bindings/:role` · `GET …/runs/:runId/provider-calls`
 
-**캐릭터 (cast, 설계 추가)** ✅ `GET …/cast` · `POST …/cast/characters` · `PATCH|DELETE …/cast/characters/:characterId` · `POST …/cast/characters/:characterId/accept` · `PUT …/cast/order` `{ids}` · `POST …/cast/import-brief` · `POST …/cast/draft` `{subProtagonistCount?, includeAntagonist, instructions?}` → 202 · `POST …/cast/confirm` · `GET|PATCH …/cast/characters/:characterId/design-sheet` · `POST …/design-sheet/draft` → 202 · `GET …/design-sheet/prompt?view&outfitIndex` · `POST …/design-sheet/images` `{view, provider, modelId, aspectRatio?, resolution, quality?, count, outfitIndex}` → 202 · `PUT …/design-sheet/primary` `{view, assetId|null}` (상세는 `modules/cast/README.md`). 첫 목표 저장(`PUT …/goal`)은 캐스트 확정 전이면 422 `cast_not_confirmed`.
+**캐릭터 (cast, 설계 추가)** ✅ `GET …/cast` · `POST …/cast/characters` · `PATCH|DELETE …/cast/characters/:characterId` · `POST …/cast/characters/:characterId/accept` · `PUT …/cast/order` `{ids}` · `POST …/cast/import-brief` · `POST …/cast/draft` `{subProtagonistCount?, includeAntagonist, instructions?, fillMissing?, characterIds?}` → 202 (fillMissing: 빈 필수 항목만 AI로 채움, 없으면 422 `nothing_to_fill`) · `POST …/cast/confirm` · `GET|PATCH …/cast/characters/:characterId/design-sheet` · `POST …/design-sheet/draft` → 202 · `GET …/design-sheet/prompt?view&outfitIndex` · `POST …/design-sheet/images` `{view, provider, modelId, aspectRatio?, resolution, quality?, count, outfitIndex}` → 202 · `PUT …/design-sheet/primary` `{view, assetId|null}` (상세는 `modules/cast/README.md`). 첫 목표 저장(`PUT …/goal`)은 캐스트 확정 전이면 422 `cast_not_confirmed`. `GET …/cast`의 `completeness`는 전체 구성 전 필수 항목 체크리스트입니다(주인공·서브 주인공: 나이·외형·성격·목표·동기·약점·과거사·말투 예시·관계·변화 아크, 조연·적대자: 역할·목표·주인공과의 관계; 확정된 값만 인정).
 
 **컨셉 (concept)** ⏳ `GET …/concept/session` · `GET …/concept/sessions/:sessionId` · `GET|POST …/concept/sessions/:sessionId/messages` (`?afterSeq`) · `PATCH …/concept/sessions/:sessionId/brief` `{path, value}` · `POST …/concept/sessions/:sessionId/{pause,resume,abandon,submit,extend,entry-mode}` · `POST …/concept/revisions` · `GET …/concept/briefs` · `GET …/concept/briefs/:briefId` · `POST …/concept/sessions/:sessionId/title-suggestions` → 202 · `POST …/concept/sessions/:sessionId/title` `{title}` · `GET …/concept/sessions/:sessionId/stream` (SSE: `delta {text}` / `reset` / `done {messageId}` / `error {message}`, 실시간 답변) · `POST …/concept/sessions/:sessionId/stop-turn` (답변 멈추기) · 웹 `POST …/messages`는 답변 작성 중이면 409 `concept_turn_in_flight`
 
@@ -241,7 +242,11 @@ orchestration.registerTaskKind({
 
 **채널 (messaging)** ⏳ `GET …/channels` · `POST …/channels/bindings` `{kind, botId}` → `{token, expiresAt, deepLink}` · `POST …/channels/:channelId/unbind`
 
+**전체 구성 (manuscript, 설계 추가 0008)** ✅ `GET …/structure` → `structureViewSchema` (구성·게이트·플롯·화 계획·진행 중 작업) · `POST …/structure/generate` `{scope: all|ending|parts, instructions?}` → 202 `{taskId}` (422 `goal_required`·`bible_not_approved`·`cast_incomplete`(details.items)·`structure_too_short`) · `POST …/structure/decision` `{decision, note?, expectedRevision}` → structureView (사용자만, 자율 단계와 무관; 409 `revision_conflict`·`structure_not_pending`, 422 `structure_incomplete`·`cast_incomplete`·`structure_user_only`) · `POST …/arcs/:arcId/replan` `{note?}` → 202 (409 `arc_not_replannable`, 422 `structure_not_approved`). 인박스 `POST …/approvals/:id/decision`(story_structure·arc_plan)도 같은 처리기로 갑니다(arc_plan: 플롯 신규 인물 미완성이면 422 `plot_cast_incomplete`).
+
 **원고 (manuscript)** ⏳ `GET …/episodes?arcId&status` · `GET …/episodes/:episodeNo` · `GET …/episodes/:episodeNo/versions` · `GET …/versions/:versionId?with=spans,scenes,issues,beats` · `POST …/episodes/:episodeNo/versions` `{content, baseVersionId}` (E16) · `POST …/episodes/:episodeNo/revision-request` `{decisionNote, reworkFrom}` (E11) · `POST …/episodes/:episodeNo/publish` · `POST …/episodes/:episodeNo/unpublish` `{reason, confirmedNotPublishedExternally: true}` · `POST …/episodes/:episodeNo/pause|resume` · `GET …/episodes/:episodeNo/scenes` · `POST …/planning/schedule`
+
+**세계관 온톨로지 (world, 설계 추가 0012)** ✅ `GET …/world-ontology` → `worldOntologyViewSchema` (생성 상태·웹 검색·분류별 후보) · `POST …/world-ontology/generate` `{instructions?}` → 202 `{taskId, created}` (422 `concept_not_approved`; 진행 중이면 같은 작업) · `POST …/world-ontology/approve-all` · `POST …/world-ontology/items/:itemId/approve|reject` `{reason?}` → `worldReviewResultSchema` · `PATCH …/world-ontology/items/:itemId` `{name?, summary?, statement?, predicate?}` (검토 대기 항목만, 409 `world_item_not_pending`). 컨셉 승인(N2)이 `build_world_ontology`(world_keeper, 목표 없이 가능)를 자동으로 만들고, 후보는 온톨로지에 candidate로 들어갑니다(`modules/world/README.md`).
 
 **온톨로지 (ontology)** ⏳ `GET …/entities?type&status&q&limit` · `GET …/entities/:entityId` (병합된 ID면 `{redirectTo}`) · `GET …/entities/:entityId/mentions?linkStatus` · `GET …/entities/:entityId/facts?storyPoint&timelineId&include` · `POST …/entities` · `POST …/entities/:entityId/names` · `GET …/timelines` · `GET …/schema` · `GET …/identity-decisions?entityId` · `GET …/identity-decisions/:id/impact` · `POST …/identity-decisions/:id/revert`
 

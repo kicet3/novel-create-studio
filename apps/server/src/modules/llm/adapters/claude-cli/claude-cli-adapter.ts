@@ -10,18 +10,28 @@
  * - removes ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN from the child env so the CLI uses the subscription
  *   login instead of an API key (CLI auth precedence), and runs in an empty working directory with no
  *   settings sources, tools, MCP servers, slash commands or session persistence (a plain model call).
+ * - 설계 추가 0011 (인터넷 검색): a call with `req.webSearch` enables ONLY the CLI's built-in WebSearch tool
+ *   (`--tools WebSearch --allowedTools WebSearch --permission-mode dontAsk`: every other tool stays unavailable and
+ *   nothing else can be approved) and reads stream-json to collect the queries and the "Links:" list of each
+ *   WebSearch result as sources. WebFetch stays off: it would fetch any URL (a link planted in a search result, a
+ *   localhost / private address) from the user's PC, with prompt text in the query string — WebSearch runs on
+ *   Anthropic's side and returns result lists only. The CLI has no per-call search cap flag: the cap is stated in the
+ *   system prompt (gateway) and the searches made are recorded.
  * Usage limits of Pro/Max assume ordinary individual use (the UI says so).
  */
 import { spawn } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { LlmAdapter, LlmCapabilities, LlmCliStatus, LlmEnvironmentCheck, LlmInvokeOptions, LlmRequest, LlmResult, LlmUsage } from "../../index.js";
+import type { LlmAdapter, LlmCapabilities, LlmCitation, LlmCliStatus, LlmCredential, LlmEnvironmentCheck, LlmInvokeOptions, LlmRequest, LlmResult, LlmUsage, LlmWebSearchResult } from "../../index.js";
 import { MODEL_LIMITS } from "../../domain/pricing.js";
 import { buildOutputFormat, parseJsonText } from "../anthropic/anthropic-adapter.js";
 import { createStreamRelay } from "../shared/stream-relay.js";
 
 export const CLAUDE_CLI_PROVIDER = "claude_code";
+
+/** the only CLI tools a call may ever enable (web search calls); every other built-in tool stays off */
+export const CLI_WEB_TOOLS = ["WebSearch"] as const;
 
 export interface ClaudeCliOptions {
   /** executable; default `claude` on PATH (or NCS_CLAUDE_PATH) */
@@ -66,17 +76,21 @@ export function renderTranscript(messages: LlmRequest["messages"]): string {
 export function cliArgs(req: LlmRequest, opts: { stream?: boolean } = {}): { args: string[]; strict: boolean } {
   const out = req.output.kind === "object" ? buildOutputFormat(req.output.jsonSchema) : null;
   const system = req.system + (out && !out.strict ? out.instruction : "");
+  // web search reads the tool results from stream-json, so it always streams
+  const stream = opts.stream || !!req.webSearch;
+  const web = CLI_WEB_TOOLS.join(",");
   const args = [
     "-p",
     "--output-format",
-    opts.stream ? "stream-json" : "json",
-    ...(opts.stream ? ["--include-partial-messages", "--verbose"] : []),
+    stream ? "stream-json" : "json",
+    ...(stream ? ["--include-partial-messages", "--verbose"] : []),
     "--model",
     req.modelId,
     "--system-prompt",
     system,
     "--tools",
-    "",
+    req.webSearch ? web : "",
+    ...(req.webSearch ? ["--allowedTools", web, "--permission-mode", "dontAsk"] : []),
     "--no-session-persistence",
     "--strict-mcp-config",
     "--disable-slash-commands",
@@ -106,6 +120,60 @@ export function resultOfStream(stdout: string): Record<string, unknown> {
     if (v?.type === "result") return v as Record<string, unknown>;
   }
   throw new SyntaxError("no result event in Claude Code stream-json output");
+}
+
+/** "Links: [{title,url},…]" of a WebSearch tool result */
+function linksOf(content: unknown): Array<{ title?: unknown; url?: unknown }> {
+  const text = typeof content === "string" ? content : Array.isArray(content) ? content.map((c) => (c && typeof c === "object" && typeof (c as { text?: unknown }).text === "string" ? (c as { text: string }).text : "")).join("\n") : "";
+  const m = /Links:\s*(\[[\s\S]*?\])\s*(?:\n|$)/.exec(text);
+  if (!m) return [];
+  try {
+    const v = JSON.parse(m[1]!) as unknown;
+    return Array.isArray(v) ? (v as Array<{ title?: unknown; url?: unknown }>) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * stream-json stdout → web search outcome: top-level WebSearch / WebFetch tool uses (queries, fetched URLs) and the
+ * links each WebSearch result lists. Sources = fetched pages first (none while WebFetch stays off), then search links
+ * (deduped, at most 20 — the gateway keeps the ones the model names in its "출처:" trailer).
+ */
+export function webSearchOfStream(stdout: string, retrievedAt: string): LlmWebSearchResult {
+  const queries: string[] = [];
+  const fetched: LlmCitation[] = [];
+  const listed: LlmCitation[] = [];
+  const searchIds = new Set<string>();
+  let requests = 0;
+  for (const line of stdout.split("\n")) {
+    const t = line.trim();
+    if (!t.startsWith("{")) continue;
+    const v = parseLine(t) as { type?: unknown; parent_tool_use_id?: unknown; message?: { content?: unknown } } | null;
+    if (!v || v.parent_tool_use_id != null || (v.type !== "assistant" && v.type !== "user")) continue;
+    const content = Array.isArray(v.message?.content) ? (v.message!.content as Array<Record<string, unknown>>) : [];
+    for (const b of content) {
+      if (v.type === "assistant" && b.type === "tool_use") {
+        const input = (b.input ?? {}) as { query?: unknown; url?: unknown };
+        if (b.name === "WebSearch") {
+          requests++;
+          if (typeof b.id === "string") searchIds.add(b.id);
+          if (typeof input.query === "string") queries.push(input.query.slice(0, 200));
+        } else if (b.name === "WebFetch") {
+          requests++;
+          if (typeof input.url === "string" && /^https?:\/\//.test(input.url)) fetched.push({ url: input.url, title: null, retrievedAt });
+        }
+      } else if (v.type === "user" && b.type === "tool_result" && typeof b.tool_use_id === "string" && searchIds.has(b.tool_use_id)) {
+        for (const l of linksOf(b.content)) {
+          if (typeof l.url === "string" && /^https?:\/\//.test(l.url)) listed.push({ url: l.url, title: typeof l.title === "string" ? l.title : null, retrievedAt });
+        }
+      }
+    }
+  }
+  const seen = new Set<string>();
+  const citations = [...fetched, ...listed].filter((c) => (seen.has(c.url) ? false : (seen.add(c.url), true))).slice(0, 20);
+  // search result lists only: the gateway keeps the ones the model names in its "출처:" trailer
+  return { status: requests > 0 ? "used" : "not_used", requests, citations, citationsKind: "results", ...(queries.length ? { queries } : {}) };
 }
 
 function mapUsage(u: Record<string, unknown> | undefined, costUsd: unknown): LlmUsage {
@@ -195,6 +263,10 @@ export class ClaudeCliLlmAdapter implements LlmAdapter {
     };
   }
 
+  webSearchSupport(_modelId: string, _method?: LlmCredential["method"]): true {
+    return true;
+  }
+
   /** `claude auth status` → logged in with a Claude subscription? (no credential is read) */
   async status(signal: AbortSignal = new AbortController().signal): Promise<LlmCliStatus> {
     const r = await this.run(["auth", "status"], null, signal, 15_000);
@@ -221,16 +293,19 @@ export class ClaudeCliLlmAdapter implements LlmAdapter {
   }
 
   async invoke(req: LlmRequest, opts: LlmInvokeOptions): Promise<LlmResult> {
-    const stream = !!opts.onStream;
-    const { args, strict } = cliArgs(req, { stream });
-    const relay = stream ? createStreamRelay(strict ? "structured_output_tool" : "text", opts.onStream) : null;
+    const stream = !!opts.onStream || !!req.webSearch;
+    const { args, strict } = cliArgs(req, { stream: !!opts.onStream });
+    const relay = opts.onStream ? createStreamRelay(strict ? "structured_output_tool" : "text", opts.onStream) : null;
     const onLine = relay
       ? (line: string) => {
           const ev = parseLine(line);
           if (ev?.type === "stream_event" && ev.parent_tool_use_id == null) relay.push(ev.event);
         }
       : undefined;
-    const r = await this.run(args, renderTranscript(req.messages), opts.signal, opts.timeoutMs, onLine);
+    // idle-timeout liveness (gateway): stream-json lines count as progress
+    const progress = opts.onProgress;
+    const lineHook = progress ? (line: string) => (progress(), onLine?.(line)) : onLine;
+    const r = await this.run(args, renderTranscript(req.messages), opts.signal, opts.timeoutMs, lineHook);
     if (r.aborted) return { ok: false, errorFamily: "timeout", message: "Claude Code 응답 시간이 초과되었거나 호출이 중단되었습니다.", billed: "unknown" };
     if (r.code === -1) return { ok: false, errorFamily: "auth_failed", message: "Claude Code CLI(`claude`)를 찾을 수 없습니다.", billed: "no" };
     let o: Record<string, unknown>;
@@ -248,7 +323,8 @@ export class ClaudeCliLlmAdapter implements LlmAdapter {
         billed: "unknown",
       };
     }
-    const usage = mapUsage(o.usage as Record<string, unknown> | undefined, o.total_cost_usd);
+    const webSearch = req.webSearch ? webSearchOfStream(r.stdout, new Date().toISOString()) : undefined;
+    const usage = { ...mapUsage(o.usage as Record<string, unknown> | undefined, o.total_cost_usd), ...(webSearch ? { webSearchRequests: webSearch.requests } : {}) };
     const providerRequestId = typeof o.session_id === "string" ? o.session_id : undefined;
     if (o.is_error === true) {
       const status = typeof o.api_error_status === "number" ? o.api_error_status : undefined;
@@ -275,7 +351,7 @@ export class ClaudeCliLlmAdapter implements LlmAdapter {
     const finishReason = stop === "max_tokens" ? "length" : stop === "refusal" ? "content_filter" : "stop";
     if (finishReason === "content_filter") return { ok: false, errorFamily: "content_filtered", message: "Claude가 안전 정책으로 응답을 거절했습니다.", billed: "yes", usage, providerRequestId };
     const text = typeof o.result === "string" ? o.result : "";
-    const common = { finishReason, usage, modelVersion: req.modelId, providerRequestId, raw: { subtype: o.subtype, stop_reason: stop, num_turns: o.num_turns } } as const;
+    const common = { finishReason, usage, modelVersion: req.modelId, providerRequestId, ...(webSearch ? { webSearch } : {}), raw: { subtype: o.subtype, stop_reason: stop, num_turns: o.num_turns } } as const;
     if (req.output.kind === "object") {
       const object = o.structured_output !== undefined && o.structured_output !== null ? o.structured_output : parseJsonText(text);
       return { ok: true, object, text: object === undefined ? text : undefined, ...common };

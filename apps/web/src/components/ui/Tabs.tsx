@@ -22,6 +22,14 @@ export interface TabsProps<V extends string> {
 }
 
 /**
+ * Tab strip: scrolls sideways when the tabs don't fit. `overflow-x: auto` makes overflow-y `auto` too, so nothing
+ * may stick out below the strip: the baseline is an inset shadow inside the padding box (not a border the tabs
+ * overlap with `-mb-px`), and the selected tab's 2px underline paints over it. A 1px overflow here showed as a
+ * vertical (and then horizontal) scrollbar in every tab strip wherever scrollbars are always visible.
+ */
+export const TABLIST_CLASS = "mb-3 flex gap-0.5 overflow-x-auto overflow-y-hidden shadow-[inset_0_-1px_0_var(--color-border)]";
+
+/**
  * `.tabs`: WAI-ARIA tabs with roving tabindex. ←/→/Home/End move focus and select (automatic activation).
  * Panels render from `items[].panel`; when no panel is given, use `onChange` to drive your own content.
  */
@@ -61,7 +69,7 @@ export function Tabs<V extends string>({ items, value, defaultValue, onChange, l
         role="tablist"
         aria-label={label}
         onKeyDown={onKeyDown}
-        className="mb-3 flex gap-0.5 overflow-x-auto border-b border-border"
+        className={TABLIST_CLASS}
       >
         {items.map((it, i) => {
           const selected = it.value === current;
@@ -80,7 +88,7 @@ export function Tabs<V extends string>({ items, value, defaultValue, onChange, l
               disabled={it.disabled}
               onClick={() => select(it.value)}
               className={cx(
-                "-mb-px inline-flex items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-[7px] text-[13px] disabled:opacity-50",
+                "inline-flex items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-[7px] text-[13px] disabled:opacity-50",
                 selected ? "border-accent font-semibold text-accent" : "border-transparent text-muted hover:text-text",
               )}
             >

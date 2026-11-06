@@ -6,7 +6,7 @@
  *   system   = ContextPack.system + "## 이번 작업" + instruction (+ output notes)
  *   messages = ContextPack.messages + one user message with the task variables
  * Special vars: `manuscript` (string → wrapped in <manuscript>…</manuscript>), `targetChars`
- * ({min,max} → "목표 분량: min~max자(공백 포함)"), `userMessage` (quoted as the author's words).
+ * ({min,max} → "목표 분량: min~max자(공백 포함|공백 제외 — `countBasis` var)"), `userMessage` (quoted as the author's words).
  * `{{name}}` placeholders in the instruction are replaced by the var value when present.
  */
 import { LABELS_KO, type AgentRole, type TaskKind } from "@ncs/shared";
@@ -29,7 +29,7 @@ const HANDLE_NOTE = "엔티티는 이름 대신 컨텍스트의 핸들(E1, E2 �
 const T = (role: AgentRole, kind: TaskKind, instruction: string, output: string = JSON_NOTE): PromptTemplateData => ({ role, kind, version: TEMPLATE_VERSION, instruction, output });
 
 const DRAFT_RULES = [
-  "- 분량은 아래 목표 분량(공백 포함)을 지킵니다. 모자라거나 넘치지 않게 합니다.",
+  "- 분량은 아래 목표 분량 이상으로 씁니다. 최소 분량 미만으로 끝내지 않습니다(한 화 절대 하한 3,000자).",
   "- 모바일 가독성: 1~3문장 문단, 대사는 따로 줄을 바꿉니다.",
   "- 아웃라인의 비트와 씬 순서를 지키고, 배정된 떡밥 비트를 자연스럽게 넣습니다.",
   "- 마지막 문단은 다음 화가 궁금해지는 훅으로 끝냅니다.",
@@ -65,6 +65,11 @@ export const PROMPT_TEMPLATE_DATA: readonly PromptTemplateData[] = [
     "planner",
     "plan_series_bible",
     "승인된 컨셉 브리프와 목표(총 화수, 연재 주기, 결말 방향)를 바탕으로 연재 기획서를 씁니다. 로그라인, 세계관 규칙, 주요 인물(목표·비밀·관계), 아크 구성(화 범위), 결말 방향, 셀링 포인트를 포함합니다. 브리프에 없는 고유 설정은 제안으로 표시합니다.",
+  ),
+  T(
+    "planner",
+    "plan_structure",
+    "승인된 기획서와 확정 캐스트를 바탕으로 전체 구성(1~4부와 결말)을 설계합니다. 결말을 먼저 정하고 각 부가 결말로 가는 단계가 되게 합니다. 부마다 제목·목표·전환점·화 범위·부 끝 인물 상태·플롯(큰 사건) 목록을 정하고, 인물은 캐스트 id로만 가리킵니다.",
   ),
   T(
     "planner",
@@ -127,6 +132,11 @@ export const PROMPT_TEMPLATE_DATA: readonly PromptTemplateData[] = [
     "world_keeper",
     "build_initial_ontology",
     `승인된 기획서에서 초기 엔티티(인물·장소·조직·물건·규칙)와 사실(관계·속성·규칙)을 추출합니다. 기획서에 적힌 내용만 씁니다. ${HANDLE_NOTE}`,
+  ),
+  T(
+    "world_keeper",
+    "build_world_ontology",
+    "승인된 컨셉 브리프(있으면 캐스트·기존 세계관 항목 포함)를 바탕으로 세계관 전체 온톨로지 후보를 만듭니다. 세력·조직, 장소·지리, 체계·능력 규칙(등급·대가·한계), 핵심 물건·개념, 역사·과거 사건, 항목 사이의 관계, 반드시 지켜야 할 규칙을 냅니다. 브리프와 모순되는 설정을 만들지 않고, 브리프에 없는 설정은 브리프와 어울리는 제안으로만 냅니다. 이미 있는 항목(승인·사용자 작성)은 다시 만들지 않고 key로만 가리킵니다.",
   ),
   T(
     "world_keeper",
@@ -199,11 +209,12 @@ function stringify(v: unknown): string {
 export function renderVars(vars: Record<string, unknown>): string {
   const parts: string[] = [];
   for (const [k, v] of Object.entries(vars)) {
-    if (v === undefined || v === null || k === "episodeLabel") continue;
+    if (v === undefined || v === null || k === "episodeLabel" || k === "countBasis") continue;
     if (k === "manuscript") parts.push(`<manuscript>\n${String(v)}\n</manuscript>`);
     else if (k === "targetChars" && typeof v === "object") {
       const t = v as { min?: number; max?: number };
-      parts.push(`목표 분량: ${t.min ?? "?"}~${t.max ?? "?"}자(공백 포함)`);
+      const basis = vars.countBasis === "without_spaces" ? "공백 제외" : "공백 포함";
+      parts.push(`목표 분량: ${t.min ?? "?"}~${t.max ?? "?"}자(${basis})`);
     } else if (k === "userMessage") parts.push(`### 작가의 메시지\n"""\n${String(v)}\n"""`);
     else parts.push(`### ${k}\n${stringify(v)}`);
   }

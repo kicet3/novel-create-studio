@@ -129,7 +129,7 @@ function SetupsOverview({ novelId }: { novelId: string }) {
       key: "no",
       header: "번호",
       rowHeader: true,
-      className: "tabular w-16",
+      className: "tabular w-16 whitespace-nowrap",
       cell: (s) => (
         <Link to={`/novels/${novelId}/setups/${s.displayNo}`} onClick={(e) => e.stopPropagation()} className="font-semibold">
           {s.displayLabel}
@@ -217,7 +217,7 @@ function SetupsOverview({ novelId }: { novelId: string }) {
                   rows={[...items].sort((a, b) => a.displayNo - b.displayNo)}
                   rowKey={(s) => s.id}
                   onRowClick={(s) => navigate(`/novels/${novelId}/setups/${s.displayNo}`)}
-                  empty={quick === "all" && !narrative.length && !canon.length && !importance.length ? "아직 떡밥이 없습니다. 아크 계획 때 함께 설계됩니다." : "조건에 맞는 떡밥이 없습니다."}
+                  empty={quick === "all" && !narrative.length && !canon.length && !importance.length ? "아직 떡밥이 없습니다. 플롯 계획 때 함께 설계됩니다." : "조건에 맞는 떡밥이 없습니다."}
                 />
               )}
             </QueryView>
@@ -316,7 +316,7 @@ function SetupDetailBody({ novelId, setup }: { novelId: string; setup: SetupDeta
         <div className="grid content-start gap-3">
           <Card title="기한">
             <div className="text-[13px]">
-              {setup.dueKind === "arc" ? "아크 끝" : "화"} 기준 · {setup.effectiveDueEpisodeNo != null ? `${setup.effectiveDueEpisodeNo}화까지` : "미정"}
+              {setup.dueKind === "arc" ? "플롯 끝" : "화"} 기준 · {setup.effectiveDueEpisodeNo != null ? `${setup.effectiveDueEpisodeNo}화까지` : "미정"}
             </div>
             <div className="mt-1">
               <DueBadge state={state} remaining={setup.remainingEpisodes} />

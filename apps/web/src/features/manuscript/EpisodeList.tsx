@@ -38,7 +38,7 @@ export function EpisodeList({ novelId }: { novelId: string }) {
     <>
       <PageHeader
         title="원고"
-        subtitle="아크별 화 목록 · 상태 필터 · 화를 고르면 버전·diff·직접 수정 화면으로 이동합니다."
+        subtitle="플롯별 화 목록 · 상태 필터 · 화를 고르면 버전·diff·직접 수정 화면으로 이동합니다."
         actions={
           <Button onClick={() => setExportTarget({ scopeKind: "novel", label: "작품 전체" })}>TXT · Markdown 내보내기</Button>
         }
@@ -62,12 +62,12 @@ export function EpisodeList({ novelId }: { novelId: string }) {
           </Button>
         )}
         <label className="ml-auto flex items-center gap-2 whitespace-nowrap text-xs text-muted">
-          아크
+          플롯
           <Select controlSize="sm" value={arcId} onChange={(e) => setArcId(e.target.value)} className="w-auto max-w-56">
             <option value="">전체</option>
             {(arcs.data ?? []).map((a) => (
               <option key={a.id} value={a.id}>
-                아크 {a.ord} · {a.title}
+                플롯 {a.ord} · {a.title}
               </option>
             ))}
           </Select>
@@ -81,7 +81,7 @@ export function EpisodeList({ novelId }: { novelId: string }) {
             episodes={items.filter((e) => (statuses.length === 0 || statuses.includes(e.status)) && (!arcId || e.arcId === arcId))}
             total={items.length}
             tz={tz}
-            onExportArc={(a) => setExportTarget({ scopeKind: "arc", targetId: a.id, label: `아크 ${a.ord} · ${a.title}` })}
+            onExportArc={(a) => setExportTarget({ scopeKind: "arc", targetId: a.id, label: `플롯 ${a.ord} · ${a.title}` })}
           />
         )}
       </QueryView>
@@ -123,7 +123,7 @@ function Grouped({
   }, [arcs, episodes]);
 
   if (total === 0) {
-    return <EmptyState title="아직 화가 없습니다" description="기획서와 아크 계획이 승인되면 화가 예약되고 아웃라인부터 작성됩니다." />;
+    return <EmptyState title="아직 화가 없습니다" description="기획서와 플롯 계획이 승인되면 화가 예약되고 아웃라인부터 작성됩니다." />;
   }
   if (groups.length === 0) return <EmptyState title="조건에 맞는 화가 없습니다" description="필터를 바꿔 보세요." />;
 
@@ -132,19 +132,19 @@ function Grouped({
       {groups.map((g) => (
         <Card
           key={g.key}
-          title={g.arc ? `아크 ${g.arc.ord} · ${g.arc.title} (${g.arc.plannedEpisodeFrom}~${g.arc.plannedEpisodeTo}화)` : "아크 미상"}
+          title={g.arc ? `플롯 ${g.arc.ord} · ${g.arc.title} (${g.arc.plannedEpisodeFrom}~${g.arc.plannedEpisodeTo}화)` : "플롯 미상"}
           actions={
             g.arc && (
               <>
                 <StatusBadge enum="arc_status" value={g.arc.status} />
                 <Button size="sm" onClick={() => onExportArc(g.arc as ArcDto)}>
-                  아크 내보내기
+                  플롯 내보내기
                 </Button>
               </>
             )
           }
         >
-          <TableWrap label={`화 목록${g.arc ? ` · 아크 ${g.arc.ord}` : ""}`}>
+          <TableWrap label={`화 목록${g.arc ? ` · 플롯 ${g.arc.ord}` : ""}`}>
             <Table>
               <thead>
                 <tr>
@@ -176,12 +176,17 @@ function Grouped({
                     <Td>
                       <div className="flex flex-wrap gap-1">
                         {e.pausedAt && <Badge tone="warn">일시정지</Badge>}
+                        {e.lengthBelowFloor && (
+                          <Badge tone="danger" glyph>
+                            분량 미달
+                          </Badge>
+                        )}
                         {e.blockReasons.map((r) => (
                           <Badge key={r} tone="danger" glyph>
                             {labelKo("episode_block_reason", r)}
                           </Badge>
                         ))}
-                        {!e.pausedAt && e.blockReasons.length === 0 && <span className="text-faint">—</span>}
+                        {!e.pausedAt && !e.lengthBelowFloor && e.blockReasons.length === 0 && <span className="text-faint">—</span>}
                       </div>
                     </Td>
                     <Td className="tabular">{e.rejectionCount > 0 ? `${e.rejectionCount}회` : "—"}</Td>

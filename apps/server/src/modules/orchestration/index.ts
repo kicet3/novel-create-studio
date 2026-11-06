@@ -173,11 +173,11 @@ export interface TaskWithLatestRun extends Task {
 export interface OrchestrationService extends TaskKindRegistry {
   createTask(tx: Tx, scope: NovelScope, input: CreateTaskInput): Promise<{ taskId: string; created: boolean }>;
   requestWake(tx: Tx, scope: NovelScope, w: RequestWakeInput): Promise<{ wakeId: string; status: "pending" | "coalesced" | "duplicate" }>;
-  /** T9: unblock tasks blocked on a question/approval/budget policy, add wakes; returns task ids */
+  /** T9: unblock tasks blocked on a question/approval/budget policy (or a novel-wide gate such as the story structure), add wakes; returns task ids */
   unblockByRef(
     tx: Tx,
     scope: NovelScope,
-    ref: { refType: "question" | "approval" | "budget_policy"; refId: string },
+    ref: { refType: "question" | "approval" | "budget_policy" | "novel"; refId: string },
     wake: { reason: WakeReason; keyPrefix: string },
     addAnswerId?: string,
   ): Promise<string[]>;

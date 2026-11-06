@@ -27,12 +27,12 @@ const CLONE_AFTER_STOP = new Set(["lease_lost", "paused", "superseded", "budget_
 export const DEFAULT_SECTIONS: Readonly<Record<AgentRole, ContextSectionKind[]>> = {
   concept_partner: ["instruction", "constraints", "recent_text"],
   showrunner: ["instruction", "constraints", "outline", "entity_cards", "recent_text"],
-  planner: ["instruction", "constraints", "assigned_beats", "outline", "cast", "entity_cards", "canon_1hop", "glossary", "candidates", "recent_text"],
+  planner: ["instruction", "constraints", "story_plan", "assigned_beats", "outline", "cast", "entity_cards", "canon_1hop", "glossary", "candidates", "recent_text"],
   world_keeper: ["instruction", "constraints", "entity_cards", "canon_1hop", "candidates", "unresolved_surfaces", "recent_text"],
-  writer: ["instruction", "constraints", "assigned_beats", "outline", "cast", "entity_cards", "pov_names", "knowledge", "canon_1hop", "glossary", "canon_2hop", "recent_text"],
-  continuity_editor: ["instruction", "constraints", "outline", "entity_cards", "knowledge", "canon_1hop", "canon_2hop", "candidates", "recent_text"],
+  writer: ["instruction", "constraints", "story_plan", "assigned_beats", "outline", "cast", "entity_cards", "pov_names", "knowledge", "canon_1hop", "glossary", "canon_2hop", "recent_text"],
+  continuity_editor: ["instruction", "constraints", "story_plan", "outline", "entity_cards", "knowledge", "canon_1hop", "canon_2hop", "candidates", "recent_text"],
   foreshadow_manager: ["instruction", "constraints", "assigned_beats", "outline", "entity_cards", "canon_1hop", "recent_text"],
-  line_editor: ["instruction", "constraints", "outline", "entity_cards", "pov_names", "knowledge", "recent_text"],
+  line_editor: ["instruction", "constraints", "story_plan", "outline", "entity_cards", "pov_names", "knowledge", "recent_text"],
   scene_director: ["instruction", "constraints", "entity_cards", "pov_names", "recent_text"],
   visual_producer: ["instruction", "constraints"],
 };

@@ -1,7 +1,8 @@
 /**
  * Review regressions (02 §7.3, 04 §5.2/§8.3, 03 cost_events.is_rerun):
  *  - graceful stop / outside block lets the in-flight provider call finish and be saved (no unknown cost,
- *    no attempt used, run not failed); only the hard deadline (abortAll) aborts the call
+ *    no attempt used, run not failed — a server stop ends it as interrupted and re-queues the task);
+ *    only the hard deadline (abortAll) aborts the call
  *  - is_rerun marks the reclaimed rerun's cost, not an ordinary retry
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -58,16 +59,16 @@ async function stateOf(novelId: string, taskId: string) {
 }
 
 describe("graceful stop keeps the in-flight call", () => {
-  it("shutdown signal: call responded and settled measured, run stops (paused), no attempt used", async () => {
+  it("shutdown signal: call responded and settled measured, run interrupted + task re-queued, no attempt used", async () => {
     const { e, scope, taskId, outer } = await startInFlight();
     outer.abort();
     await sleep(1500);
     const s = await stateOf(scope.novelId, taskId);
     expect(s.calls.map((c) => c.status)).toEqual(["responded"]);
     expect(s.cost.map((c) => c.cost_basis)).toEqual(["measured"]);
-    expect(s.runs[0]).toMatchObject({ status: "cancelled", stop_reason: "paused" });
+    expect(s.runs[0]).toMatchObject({ status: "interrupted", stop_reason: "lease_lost" });
     expect(s.task.attempt_count).toBe(0);
-    expect(s.task.status).not.toBe("failed");
+    expect(s.task.status).toBe("ready");
     e.abortAll();
   });
 
@@ -88,7 +89,8 @@ describe("graceful stop keeps the in-flight call", () => {
     await sleep(1000);
     const s = await stateOf(scope.novelId, taskId);
     expect(s.calls.map((c) => c.status)).toEqual(["unknown"]);
-    expect(s.runs[0]).toMatchObject({ status: "cancelled", stop_reason: "paused" });
+    expect(s.runs[0]).toMatchObject({ status: "interrupted", stop_reason: "lease_lost" });
+    expect(s.task.status).toBe("ready");
     expect(s.task.attempt_count).toBe(0);
   });
 });

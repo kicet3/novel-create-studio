@@ -499,6 +499,16 @@ export async function commitInitialOntology(deps: TaskDeps, tx: Tx, scope: Novel
       keyToEntity.set(e.key, byCastName.id);
       continue;
     }
+    // 설계 추가(world): a world ontology entity (concept-approval step) with the same type + name is the same thing —
+    // the bible's facts attach to it instead of opening a duplicate_entity question
+    const byWorldName =
+      !byKey && e.entity_type !== "character"
+        ? existing.find((x) => sameName.includes(x.id) && (x.equivalenceCheck as { source?: string } | null)?.source === "world_ontology")
+        : undefined;
+    if (byWorldName) {
+      keyToEntity.set(e.key, byWorldName.id);
+      continue;
+    }
     if (byKey) {
       keyToEntity.set(e.key, byKey.id);
       if (!sameName.includes(byKey.id)) await deps.ontology.addEntityName(tx, scope, byKey.id, { surface: e.name, nameKind: "true_name", status: "proposed", source: { kind: "series_bible", refType: "series_bible", refId: bibleId } }, actor);

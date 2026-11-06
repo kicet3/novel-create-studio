@@ -19,7 +19,7 @@ export const conceptSessions = pgTable(
     fieldFlipCounts: jsonb("field_flip_counts").$type<unknown>().notNull().default({}),
     agentTurnCount: integer("agent_turn_count").notNull().default(0),
     userMessageCount: integer("user_message_count").notNull().default(0),
-    turnLimit: integer("turn_limit").notNull().default(40),
+    turnLimit: integer("turn_limit").notNull().default(200),
     turnExtensionCount: integer("turn_extension_count").notNull().default(0),
     llmDisabled: boolean("llm_disabled").notNull().default(false),
     budgetLimitMicros: bigint("budget_limit_micros", { mode: "number" }).notNull(),
@@ -63,6 +63,9 @@ export const conceptMessages = pgTable(
     respondsToSeq: integer("responds_to_seq"),
     isSuperseded: boolean("is_superseded").notNull().default(false),
     providerMessageRef: text("provider_message_ref"),
+    autoApproved: boolean("auto_approved").notNull().default(false),
+    /** 설계 추가 0011: 답변이 쓴 웹 검색 출처 [{url,title,retrievedAt}] (없으면 null) */
+    sources: jsonb("sources").$type<unknown>(),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
 );

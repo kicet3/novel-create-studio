@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { labelKo, type ConceptMessageDto, type ConceptSessionViewDto } from "@ncs/shared";
 import { errorMessage } from "../../api/client.js";
-import { Avatar, Badge, Button, Callout, Field, formatDateTime, Kbd, Spinner, Textarea } from "../../components/ui/index.js";
+import { Avatar, Badge, Button, Callout, Checkbox, Field, formatDateTime, Kbd, Spinner, Textarea, WebSources } from "../../components/ui/index.js";
 import { cx } from "../../lib/cx.js";
-import { usePostConceptMessage, useStopTurn } from "./api.js";
+import { usePostConceptMessage, useSetAutoApprove, useStopTurn } from "./api.js";
+import { AUTO_APPROVE_HELP, autoMessageText, autoStatusLine, isAutoMessage, sendLocked } from "./auto-approve.js";
 import { fieldLabel } from "./brief-fields.js";
 import { showLiveReply, useConceptReplyStream } from "./reply-stream.js";
 
@@ -30,6 +31,10 @@ export function ChatPanel({
   const s = view.session;
   const post = usePostConceptMessage(novelId, s.id);
   const stop = useStopTurn(novelId, s.id);
+  const autoMut = useSetAutoApprove(novelId, s.id);
+  const auto = view.autoApprove;
+  const autoOn = !!auto?.enabled;
+  const autoLine = autoStatusLine(auto);
   const live = useConceptReplyStream(novelId, s.id, s.inFlightTaskId);
   const [draft, setDraft] = useState("");
   const [importMode, setImportMode] = useState(s.entryMode === "import" && s.userMessageCount === 0);
@@ -42,6 +47,8 @@ export function ChatPanel({
   const liveVisible = showLiveReply(live, messageIds, thinking);
   /** one turn at a time: no sending while the partner is writing (the server also answers 409 concept_turn_in_flight) */
   const busy = thinking || post.isPending || live.phase === "streaming" || liveVisible;
+  /** 자동 승인 중에는 보낸 메시지를 대기열에 넣습니다(서버가 지금 답 다음에 먼저 반영) */
+  const locked = sendLocked(busy, auto, importMode) || post.isPending;
 
   useEffect(() => {
     const el = logRef.current;
@@ -55,7 +62,7 @@ export function ChatPanel({
 
   const send = () => {
     const body = draft.trim();
-    if (!body || busy) return;
+    if (!body || locked) return;
     post.mutate({ body, kind: importMode ? "import_text" : "text" }, { onSuccess: () => { setDraft(""); setImportMode(false); } });
   };
 
@@ -80,9 +87,67 @@ export function ChatPanel({
 
   return (
     <section aria-labelledby="chat-title" className="flex min-h-[420px] min-w-0 flex-col self-start rounded-[10px] border border-border bg-surface shadow-card max-[860px]:w-full min-[861px]:sticky min-[861px]:top-4 min-[861px]:max-h-[calc(100dvh-2rem)]">
-      <h2 id="chat-title" className="border-b border-border px-4 py-2.5 text-[13.5px] font-bold">
-        컨셉 대화
-      </h2>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2">
+        <h2 id="chat-title" className="m-0 text-[13.5px] font-bold">
+          컨셉 대화
+        </h2>
+        {auto && (canTalk || autoOn) && (
+          <button
+            type="button"
+            role="switch"
+            aria-checked={autoOn}
+            aria-describedby="auto-approve-help"
+            disabled={autoMut.isPending || (!autoOn && !auto.canEnable)}
+            title={auto.canEnable || autoOn ? AUTO_APPROVE_HELP : "진행 중인 컨셉 대화에서만 켤 수 있습니다."}
+            onClick={() => autoMut.mutate({ enabled: !autoOn })}
+            className="inline-flex items-center gap-2 rounded-full px-1 py-0.5 text-[12.5px] font-semibold text-muted hover:text-text focus-visible:outline-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-50"
+            data-testid="auto-approve-toggle"
+          >
+            자동 승인
+            <span aria-hidden="true" className={cx("relative inline-block h-[18px] w-8 rounded-full transition-colors", autoOn ? "bg-accent" : "bg-border")}>
+              <span className={cx("absolute top-[2px] size-[14px] rounded-full bg-surface shadow transition-[left]", autoOn ? "left-[16px]" : "left-[2px]")} />
+            </span>
+          </button>
+        )}
+      </div>
+      <p id="auto-approve-help" className="sr-only">
+        {AUTO_APPROVE_HELP}
+      </p>
+      {auto && !autoOn && !autoLine && canTalk && auto.canEnable && (
+        <p className="m-0 border-b border-border px-4 py-1.5 text-[12px] leading-snug text-faint">{AUTO_APPROVE_HELP}</p>
+      )}
+      {autoLine && (
+        <div
+          role="status"
+          data-testid="auto-approve-status"
+          className={cx(
+            "flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-4 py-1.5 text-[12.5px]",
+            autoLine.tone === "accent" && "bg-accent-soft text-accent",
+            autoLine.tone === "warn" && "bg-warn-soft text-warn",
+            autoLine.tone === "ok" && "bg-ok-soft text-ok",
+            autoLine.tone === "neutral" && "bg-surface-2 text-muted",
+          )}
+        >
+          <span className="flex min-w-0 flex-1 items-center gap-1.5 font-semibold">
+            {autoOn && auto?.status === "running" && <Spinner />}
+            {autoLine.text}
+          </span>
+          {autoOn && (
+            <Checkbox
+              className="text-[12px] text-muted"
+              label="직접 정한 항목의 변경 제안도 자동 수락"
+              checked={!!auto?.acceptUserFieldProposals}
+              disabled={autoMut.isPending}
+              onChange={(e) => autoMut.mutate({ enabled: true, acceptUserFieldProposals: e.target.checked })}
+            />
+          )}
+          {autoLine.stoppable && (
+            <Button size="sm" variant="ghost" loading={stop.isPending} onClick={() => stop.mutate()}>
+              멈추기
+            </Button>
+          )}
+        </div>
+      )}
       <div ref={logRef} role="log" aria-live="polite" aria-label="대화 기록" tabIndex={0} className="flex max-h-[60dvh] min-h-[280px] flex-1 flex-col gap-3 overflow-y-auto px-4 py-3 min-[861px]:max-h-none min-[861px]:min-h-0">
         {messages.length === 0 && <p className="m-0 text-[13px] text-muted">컨셉 파트너가 첫 질문을 준비하고 있습니다.</p>}
         {messages.map((m) => (
@@ -117,6 +182,8 @@ export function ChatPanel({
                   <>
                     써 둔 기획 메모를 그대로 붙여 넣으세요. <Kbd>Ctrl</Kbd>+<Kbd>Enter</Kbd> 전송
                   </>
+                ) : busy && autoOn ? (
+                  <>자동 승인 중에도 보낼 수 있습니다. 보낸 메시지를 먼저 반영하고 자동 승인이 이어집니다.</>
                 ) : busy ? (
                   <>답변 작성 중… 입력은 계속할 수 있고, 답변이 끝나면 보낼 수 있습니다.</>
                 ) : (
@@ -130,6 +197,7 @@ export function ChatPanel({
             </Field>
             {post.error && <Callout tone="danger">{errorMessage(post.error)}</Callout>}
             {stop.error && <Callout tone="danger">{errorMessage(stop.error)}</Callout>}
+            {autoMut.error && <Callout tone="danger">{errorMessage(autoMut.error)}</Callout>}
             <div className="flex flex-wrap items-center justify-between gap-2">
               <Button variant="ghost" size="sm" onClick={() => setImportMode((v) => !v)} aria-pressed={importMode}>
                 {importMode ? "일반 메시지로" : "붙여 넣기"}
@@ -137,11 +205,11 @@ export function ChatPanel({
               <div className="flex items-center gap-2">
                 {thinking && (
                   <Button variant="ghost" loading={stop.isPending} onClick={() => stop.mutate()}>
-                    답변 멈추기
+                    {autoOn ? "답변·자동 승인 멈추기" : "답변 멈추기"}
                   </Button>
                 )}
-                <Button type="submit" variant="primary" loading={post.isPending} disabled={!draft.trim() || busy} title={busy && !post.isPending ? "답변 작성 중에는 보낼 수 없습니다." : undefined}>
-                  {busy && !post.isPending ? "답변 작성 중…" : "보내기"}
+                <Button type="submit" variant="primary" loading={post.isPending} disabled={!draft.trim() || locked} title={locked && !post.isPending ? "답변 작성 중에는 보낼 수 없습니다." : undefined}>
+                  {locked && !post.isPending ? "답변 작성 중…" : busy && autoOn ? "대기열에 보내기" : "보내기"}
                 </Button>
               </div>
             </div>
@@ -184,19 +252,34 @@ function MessageBubble({
   onPick: (o: NonNullable<ConceptMessageDto["options"]>[number]) => void;
 }) {
   const mine = m.authorKind === "user";
+  const auto = isAutoMessage(m);
   const options = m.options ?? [];
   return (
     <div id={`msg-${m.id}`} tabIndex={-1} className={cx("flex gap-2 rounded-lg focus:outline-2 focus:outline-accent", mine && "flex-row-reverse", highlight && "outline-2 outline-warn")}>
-      <Avatar initials={AUTHOR_INITIAL[m.authorKind]} className={cx(mine ? "bg-surface-2 text-text" : m.authorKind === "system" ? "bg-faint" : undefined)} />
+      <Avatar initials={auto ? "자" : AUTHOR_INITIAL[m.authorKind]} className={cx(auto ? "bg-violet-soft text-violet" : mine ? "bg-surface-2 text-text" : m.authorKind === "system" ? "bg-faint" : undefined)} />
       <div className={cx("flex min-w-0 max-w-[85%] flex-col gap-1.5", mine && "items-end")}>
         <div className="text-[11.5px] text-faint">
-          <span className="font-semibold text-muted">{labelKo("concept_message_author", m.authorKind)}</span> · {formatDateTime(m.createdAt, timezone)}
+          <span className="font-semibold text-muted">{auto ? "자동 승인" : labelKo("concept_message_author", m.authorKind)}</span> · {formatDateTime(m.createdAt, timezone)}
+          {auto && (
+            <Badge tone="violet" className="ml-1" title="자동 승인 모드가 컨셉 파트너의 추천안을 대신 골랐습니다">
+              자동 승인
+            </Badge>
+          )}
           {m.kind === "import_text" && <Badge className="ml-1">붙여 넣기</Badge>}
           {m.isSuperseded && <Badge className="ml-1">이전 제안</Badge>}
         </div>
-        <div className={cx("whitespace-pre-wrap rounded-[10px] px-3 py-2 text-[13.5px] leading-relaxed", mine ? "bg-accent-soft" : "bg-surface-2", m.kind === "notice" && "border border-dashed border-border bg-transparent text-muted")}>
-          {m.kind === "option_pick" && m.pickedIdx !== null ? <b>선택: </b> : null}
-          {m.body}
+        <div
+          className={cx(
+            "whitespace-pre-wrap rounded-[10px] px-3 py-2 text-[13.5px] leading-relaxed",
+            auto ? "border border-dashed border-violet bg-violet-soft text-violet" : mine ? "bg-accent-soft" : "bg-surface-2",
+            m.kind === "notice" && "border border-dashed border-border bg-transparent text-muted",
+          )}
+          data-auto-approved={auto || undefined}
+        >
+          {auto ? <b>추천안 선택: </b> : m.kind === "option_pick" && m.pickedIdx !== null ? <b>선택: </b> : null}
+          {auto ? autoMessageText(m.body) : m.body}
+          {/* 설계 추가 0011: 답변이 인터넷 검색으로 확인한 자료 */}
+          <WebSources sources={m.sources} className="mt-2 border-t border-border pt-1.5" />
         </div>
         {options.length > 0 && (
           <div role="group" aria-label="선택지" className="flex flex-wrap gap-1.5">
@@ -207,11 +290,16 @@ function MessageBubble({
                 variant={o.is_recommended ? "primary" : o.source === "control" ? "ghost" : "default"}
                 disabled={!pickable}
                 aria-pressed={m.pickedIdx === o.idx || undefined}
-                title={o.rationale}
+                className="h-auto! min-h-8 max-w-full justify-start! whitespace-normal! py-1.5 text-left [overflow-wrap:anywhere]"
                 onClick={() => onPick(o)}
               >
-                {o.label}
-                {o.is_recommended && <span className="sr-only">(추천)</span>}
+                <span className="flex min-w-0 flex-col items-start gap-0.5">
+                  <span>
+                    {o.label}
+                    {o.is_recommended && <span className="sr-only">(추천)</span>}
+                  </span>
+                  {o.rationale && <span className="text-[11.5px] font-normal leading-snug opacity-80">{o.rationale}</span>}
+                </span>
               </Button>
             ))}
           </div>

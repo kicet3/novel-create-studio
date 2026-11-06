@@ -59,6 +59,10 @@ export function createLlmModule(deps: LlmModuleDeps): ServerModule<LlmService> {
       ...(deps.adapters ?? []),
     ],
     oauth: deps.oauth,
+    webSearchPolicy: async (scope) => {
+      const n = await deps.novel.getNovel(scope);
+      return { enabled: n.webSearchEnabled ?? true, maxUses: n.webSearchMaxUses ?? 3 };
+    },
     novelTitles: async () => (await deps.novel.listNovels({ includeArchived: true })).map((n) => ({ id: n.id, title: n.title })),
   });
   deps.novel.registerCreationParticipant({

@@ -14,6 +14,7 @@ import {
 } from "./brief.js";
 import { DEF_BY_PATH, coerceValue, dependentsOf, isKnownPath, valueTypeOf } from "./question-set.js";
 import { valueIsFlagged, type InstallSafetyLists } from "./checks.js";
+import { addProposal, type ProposalSettlement } from "./change-proposals.js";
 
 /** stored option of an agent/system prompt message (concept_messages.options) */
 export interface StoredOption {
@@ -34,6 +35,8 @@ export interface GuardMessage {
   body: string;
   channelId: string;
   authorKind: "user" | "agent" | "system";
+  /** 설계 추가: posted by the auto-approve mode on the user's behalf — never the user's own words */
+  auto?: boolean;
 }
 
 export interface SlotClaim {
@@ -45,6 +48,8 @@ export interface SlotClaim {
   key_phrase: string;
   /** built by deterministic code from a user's own button pick (not model output) */
   userAction?: boolean;
+  /** 설계 추가: built by deterministic code from an auto-approve pick (the partner's recommendation, delegated) */
+  autoAccepted?: boolean;
 }
 
 export interface SlotDiff {
@@ -71,12 +76,14 @@ export interface GuardContext {
   /** paths whose value changed in this commit (dependency re-confirm, X-9) */
   changed: Set<string>;
   flipLimit: number;
+  /** proposals settled in this commit (superseded by a newer proposal, …) — audit trail */
+  settled: ProposalSettlement[];
 }
 
 const PROTECTED: readonly ConceptFieldOrigin[] = ["user_stated", "user_edited"];
 
 function quoteVerified(claim: SlotClaim, msg: GuardMessage | undefined, value: unknown): boolean {
-  if (!msg || msg.authorKind !== "user") return false;
+  if (!msg || msg.authorKind !== "user" || msg.auto) return false;
   const quote = normalizeText(claim.evidence_quote);
   const key = normalizeText(claim.key_phrase);
   if (!quote || !key) return false;
@@ -89,7 +96,7 @@ function quoteVerified(claim: SlotClaim, msg: GuardMessage | undefined, value: u
 
 /** the user's own message names this option (label or value) — required before a seed match counts as user_stated */
 function messageNamesOption(o: StoredOption, msg: GuardMessage): boolean {
-  if (msg.authorKind !== "user") return false;
+  if (msg.authorKind !== "user" || msg.auto) return false;
   const body = normalizeText(msg.body);
   if (!body) return false;
   const label = normalizeText(o.label);
@@ -222,7 +229,15 @@ export function applyClaim(b: WorkingBrief, ctx: GuardContext, claim: SlotClaim)
   let state: ConceptSlotState = "confirmed";
   /** the new value is grounded in the user's own words/pick (only then may it replace a user value) */
   let grounded = !!claim.userAction;
-  if (claim.origin_claim === "user_stated" && quoteVerified(claim, msg, value)) {
+  if (claim.autoAccepted) {
+    // 자동 승인: the partner's recommendation, accepted on the user's behalf (distinct provenance, not user evidence)
+    origin = "agent_auto_accepted";
+    grounded = false;
+  } else if (msg.auto) {
+    // a model claim citing an auto-approve message: an interpretation that still needs confirmation
+    origin = "agent_proposed_modified";
+    state = "proposed";
+  } else if (claim.origin_claim === "user_stated" && quoteVerified(claim, msg, value)) {
     origin = "user_stated";
     grounded = true;
   } else {
@@ -251,8 +266,7 @@ export function applyClaim(b: WorkingBrief, ctx: GuardContext, claim: SlotClaim)
 export function proposeChange(b: WorkingBrief, ctx: GuardContext, path: string, value: unknown, reason: string): boolean {
   if (isEmptyValue(getPath(b.content, path))) return false;
   if (sameValue(getPath(b.content, path), value)) return false;
-  if (b.change_proposals.some((p) => p.status === "pending" && p.field_path === path && sameValue(p.new_value, value))) return true;
-  b.change_proposals.push({ id: ctx.newId(), field_path: path, new_value: value, reason, status: "pending", run_id: ctx.runId });
+  addProposal(b, { id: ctx.newId(), path, value, reason, runId: ctx.runId }, ctx.settled);
   return true;
 }
 

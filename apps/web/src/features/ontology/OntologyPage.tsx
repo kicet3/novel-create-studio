@@ -21,6 +21,7 @@ import {
 import { cx } from "../../lib/cx.js";
 import { useCreateEntity, useEntities, useOntologySchema, type EntityListItemDto } from "./api.js";
 import { EntityDetail } from "./EntityDetail.js";
+import { WorldOntologyPanel } from "./WorldOntologyPanel.js";
 
 /** `/novels/:novelId/ontology` and `/novels/:novelId/entities/:entityId` (08 §9.5, FR-UI-05a). */
 export function OntologyPage() {
@@ -88,13 +89,17 @@ function EntityList({ novelId }: { novelId: string }) {
     <>
       <PageHeader
         title="세계관 온톨로지"
-        subtitle="인물·장소·조직 등 엔티티와 이름 사전, 시점별 사실을 봅니다. 이름·별칭·호칭으로 검색할 수 있습니다."
+        subtitle="컨셉이 승인되면 AI가 세계관(세력·장소·체계·역사·규칙) 후보를 만들고, 여기서 검토해 확정합니다. 아래 엔티티 목록에서 이름 사전과 시점별 사실을 봅니다."
         actions={
           <Button variant="primary" onClick={() => setCreating(true)}>
             엔티티 추가
           </Button>
         }
       />
+      <div className="mb-5">
+        <WorldOntologyPanel novelId={novelId} />
+      </div>
+      <h2 className="mb-2 mt-0 text-[15px] font-semibold">엔티티 목록</h2>
       <div className="mb-3 flex flex-wrap items-end gap-3">
         <label className="grid min-w-56 flex-1 gap-1 text-xs text-muted">
           검색
@@ -136,7 +141,7 @@ function EntityList({ novelId }: { novelId: string }) {
             rows={items}
             rowKey={(r) => r.entity.id}
             onRowClick={(r) => navigate(`/novels/${novelId}/entities/${r.entity.id}`)}
-            empty={query || type ? "조건에 맞는 엔티티가 없습니다." : "아직 엔티티가 없습니다. 기획서가 승인되면 초기 온톨로지가 만들어집니다."}
+            empty={query || type ? "조건에 맞는 엔티티가 없습니다." : "아직 엔티티가 없습니다. 컨셉이 승인되면 세계관 후보가, 기획서가 승인되면 초기 온톨로지가 만들어집니다."}
           />
         )}
       </QueryView>

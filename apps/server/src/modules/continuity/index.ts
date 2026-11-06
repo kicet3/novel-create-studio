@@ -24,6 +24,8 @@ export interface IssueEvidenceInput {
   setupId?: string | null;
   setupBeatId?: string | null;
   glossaryTermId?: string | null;
+  /** 설계 추가: plot (arc) of a plan_deviation issue */
+  arcId?: string | null;
   /** schema rule (CR-09~11) — stored on the evidence row */
   schemaRuleKey?: string | null;
   /** short quote / note (stored as evidence note; never copied to the audit log) */

@@ -47,12 +47,13 @@ function evidenceRows(scope: NovelScope, issueId: string, ev: IssueEvidenceInput
     if (e.setupId) rows.push({ ...base, refType: "setup", refId: e.setupId });
     if (e.setupBeatId) rows.push({ ...base, refType: "setup_beat", refId: e.setupBeatId });
     if (e.glossaryTermId) rows.push({ ...base, refType: "glossary_term", refId: e.glossaryTermId });
+    if (e.arcId) rows.push({ ...base, refType: "arc", refId: e.arcId });
   }
   return rows;
 }
 
 function evidenceIds(ev: IssueEvidenceInput[]): string[] {
-  return ev.flatMap((e) => [e.factId ?? e.factVersionId, e.answerId, e.nameId, e.mentionId, e.setupId, e.setupBeatId, e.glossaryTermId].filter((x): x is string => !!x));
+  return ev.flatMap((e) => [e.factId ?? e.factVersionId, e.answerId, e.nameId, e.mentionId, e.setupId, e.setupBeatId, e.glossaryTermId, e.arcId].filter((x): x is string => !!x));
 }
 
 export function createContinuityService(deps: ContinuityPorts): ContinuityInternals {

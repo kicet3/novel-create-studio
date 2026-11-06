@@ -19,6 +19,7 @@ export const messagingRepo = {
     const [b] = await db.select().from(messengerBots).where(eq(messengerBots.id, botId));
     return b ?? null;
   },
+  /** Telegram long polling only (Discord bots use the Gateway websocket) */
   listPollingBots: (db: Db) =>
     db
       .select()
@@ -91,6 +92,24 @@ export const messagingRepo = {
   async insertInbox(db: Db, row: typeof messengerInbox.$inferInsert): Promise<InboxRow | null> {
     const [r] = await db.insert(messengerInbox).values(row).onConflictDoNothing({ target: messengerInbox.dedupeKey }).returning();
     return r ?? null;
+  },
+  /** newest recorded Discord DM message id of a chat (Gateway catch-up after a fresh session) */
+  async lastDiscordMessageId(db: Db, botId: string, chatRef: string): Promise<string | null> {
+    const [r] = await db
+      .select({ id: messengerInbox.providerEventId })
+      .from(messengerInbox)
+      .where(
+        and(
+          eq(messengerInbox.botId, botId),
+          inArray(messengerInbox.eventKind, ["message", "command"]),
+          sql`${messengerInbox.payload}->>'t' = 'MESSAGE_CREATE'`,
+          sql`${messengerInbox.payload}->'d'->>'channel_id' = ${chatRef}`,
+        ),
+      )
+      // snowflakes: numeric order = (length, text) order
+      .orderBy(sql`length(${messengerInbox.providerEventId}) desc`, desc(messengerInbox.providerEventId))
+      .limit(1);
+    return r?.id ?? null;
   },
   /** IN2: claim due rows (received/retry) with SKIP LOCKED */
   async claimInbox(db: Db, now: Date, limit: number): Promise<InboxRow[]> {

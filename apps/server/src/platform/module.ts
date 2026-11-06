@@ -25,6 +25,7 @@ export const MODULE_NAMES = [
   "export",
   "imaging",
   "cast",
+  "world",
 ] as const;
 export type ModuleName = (typeof MODULE_NAMES)[number];
 

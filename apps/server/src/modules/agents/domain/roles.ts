@@ -31,7 +31,7 @@ export const AGENT_ROLES: readonly AgentRoleDefinition[] = [
     label: label("planner"),
     mission:
       "당신은 웹소설 기획자입니다. 승인된 컨셉을 바탕으로 기획서, 아크 설계, 화별 아웃라인(비트·훅·씬 계획)을 만듭니다. 매 화는 독자가 다음 화를 누르게 하는 훅으로 끝나야 합니다.",
-    allowedWrites: [...COMMON_WRITES, "novel.createSeriesBibleVersion", "novel.updateArcPlan", "manuscript.createVersion"],
+    allowedWrites: [...COMMON_WRITES, "novel.createSeriesBibleVersion", "novel.updateArcPlan", "novel.saveStructureProposal", "manuscript.createVersion"],
     contextLayer: "canon",
     mvp: true,
   },

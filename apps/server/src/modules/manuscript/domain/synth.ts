@@ -49,13 +49,18 @@ export function bibleMarkdown(p: BibleProposal): string {
 export function synthArcPlan(arc: { ord: number; title: string; plannedEpisodeFrom: number; plannedEpisodeTo: number }, outline?: { title: string; summary: string }): ArcPlanProposal {
   const episodes = [];
   for (let no = arc.plannedEpisodeFrom; no <= arc.plannedEpisodeTo; no++) {
-    episodes.push({ episode_no: no, title: `${no}화`, hook_note: `${no}화의 끝에서 다음 화로 이어지는 훅`, summary: `${outline?.summary ?? arc.title}의 ${no - arc.plannedEpisodeFrom + 1}번째 화입니다.` });
+    episodes.push({ episode_no: no, title: `${no}화`, hook_note: `${no}화의 끝에서 다음 화로 이어지는 훅`, summary: `${outline?.summary ?? arc.title}의 ${no - arc.plannedEpisodeFrom + 1}번째 화입니다.`, scene_count: null, target_chars: null });
   }
   return {
     title: outline?.title ?? arc.title,
     goal_text: `${arc.ord}번째 아크의 목표를 달성합니다.`,
     conflict_text: "주인공의 목표를 가로막는 갈등이 있습니다.",
     end_condition: `${arc.plannedEpisodeTo}화에서 아크 갈등이 일단락됩니다.`,
+    core_event: "",
+    involved_character_ids: [],
+    change_text: "",
+    setup_plan: { plant: [], payoff: [] },
+    new_characters: [],
     episodes,
   };
 }
