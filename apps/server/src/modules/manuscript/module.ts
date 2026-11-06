@@ -1,0 +1,87 @@
+/** Factory of `manuscript` (07 writing pipeline, 03 §4.1 E1–E16). */
+import type { Platform, ServerModule } from "../../platform/index.js";
+import type { AuditService } from "../audit/index.js";
+import type { AgentsService } from "../agents/index.js";
+import type { HitlService } from "../hitl/index.js";
+import type { LinkingService } from "../linking/index.js";
+import type { NovelService } from "../novel/index.js";
+import type { OntologyService } from "../ontology/index.js";
+import type { OrchestrationService } from "../orchestration/index.js";
+import type { ManuscriptService } from "./index.js";
+import { mountManuscriptRoutes } from "./adapters/http/routes.js";
+import { createTaskRegistrar } from "./application/agent-task.js";
+import { createContextSections } from "./application/context-sections.js";
+import { createManuscriptService } from "./application/manuscript-service.js";
+import { createPlanning } from "./application/planning.js";
+import { createPorts, createRegistries } from "./application/support.js";
+import { createWriting } from "./application/writing.js";
+
+export interface ManuscriptModuleDeps {
+  platform: Platform;
+  audit: AuditService;
+  novel: NovelService;
+  ontology: OntologyService;
+  linking: LinkingService;
+  orchestration: OrchestrationService;
+  agents: AgentsService;
+  hitl: HitlService;
+}
+
+/** test seam: approval handlers / scheduler of a built module (tests only; other modules use index.ts) */
+export const manuscriptTestHooks = new WeakMap<ManuscriptService, { approvalHandlers: ReturnType<typeof createPlanning>["approvalHandlers"] }>();
+
+export function createManuscriptModule(deps: ManuscriptModuleDeps): ServerModule<ManuscriptService> {
+  const reg = createRegistries();
+  const ports = createPorts(deps, reg);
+  const { service, internals } = createManuscriptService(ports);
+  const getService = () => service;
+  const planning = createPlanning(internals, getService);
+  const writing = createWriting(internals, getService);
+  service.requestArcPlanApproval = planning.requestArcPlanApproval;
+  service.schedule = planning.schedule;
+
+  // registrations (CONVENTIONS §6): context sections, task kinds, approval handlers, N3 hook
+  const sections = createContextSections(ports);
+  for (const s of sections) deps.agents.registerContextSection(s);
+  const register = createTaskRegistrar(ports, sections);
+  for (const h of [...planning.handlers, ...writing.handlers]) register(h);
+  for (const [type, handler] of Object.entries(planning.approvalHandlers)) {
+    deps.hitl.registerApprovalHandler(type as keyof typeof planning.approvalHandlers, handler);
+  }
+  deps.novel.onGoalSaved((ctx) => planning.onGoalSaved(ctx));
+  // scene texts for extract_facts / link_mentions (linking registry, CONVENTIONS §6)
+  deps.linking.registerSceneSource({
+    async getScenes(scope, { episodeId, manuscriptVersionId }) {
+      const version = await service.getVersion(scope, manuscriptVersionId);
+      const scenes = await service.listScenes(scope, episodeId, { versionId: manuscriptVersionId });
+      return scenes.map((sc) => ({
+        sceneId: sc.id,
+        sceneOrd: sc.ord,
+        storyPoint: sc.storyPoint,
+        timelineId: sc.timelineId,
+        text: version.content.slice(sc.charStart, sc.charEnd),
+        charOffset: sc.charStart,
+        povEntityId: sc.povEntityId,
+        narrationMode: sc.narrationMode,
+        participantEntityIds: [],
+      }));
+    },
+  });
+  manuscriptTestHooks.set(service, { approvalHandlers: planning.approvalHandlers });
+
+  const tick = async (signal: AbortSignal) => {
+    for (const n of await deps.novel.listNovels()) {
+      if (signal.aborted) return;
+      if (n.status !== "planning" && n.status !== "serializing") continue;
+      await planning.schedule({ novelId: n.id }).catch((err) => deps.platform.log.warn({ err, novelId: n.id }, "manuscript scheduler tick failed"));
+    }
+  };
+
+  return {
+    name: "manuscript",
+    implemented: true,
+    service,
+    routes: (r) => mountManuscriptRoutes(r, service, deps.novel),
+    loops: [{ name: "manuscript.scheduler", intervalMs: 30_000, wakeOn: ["wake", "task"], tick }],
+  };
+}

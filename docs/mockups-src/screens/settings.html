@@ -1,0 +1,221 @@
+<section class="screen" data-screen="settings" data-title="설정·감사" data-release="MVP-α" data-fr="FR-UI-09, FR-UI-07, FR-MSG-10, FR-BUD-02, FR-BUD-03, FR-SET-01, FR-SET-02, FR-SET-03">
+  <div class="app">
+    <aside class="app-side">
+      <div class="app-brand"><span class="logo">N</span>Novel Studio</div>
+      <div class="app-novel"><b>회귀자의 흉터</b><span class="muted">현대판타지 · 회귀물</span></div>
+      <div class="app-nav" data-nav="home">작품 홈</div>
+      <div class="app-nav" data-nav="board">작업 보드</div>
+      <div class="app-nav" data-nav="inbox">인박스 <span class="count">3</span></div>
+      <div class="app-nav" data-nav="manuscript">원고</div>
+      <div class="app-nav" data-nav="ontology">세계관 온톨로지</div>
+      <div class="app-nav" data-nav="foreshadow">떡밥</div>
+      <div class="app-nav" data-nav="media">미디어 스튜디오 <span class="badge violet">v1</span></div>
+      <div class="app-nav" data-nav="audit">감사 타임라인</div>
+      <div class="app-nav is-active" data-nav="settings">설정</div>
+    </aside>
+    <div class="app-main">
+      <div class="app-top">
+        <div>
+          <h3>설정 · 감사</h3>
+          <div class="sub">작품 「회귀자의 흉터」 설정 · 모든 변경은 감사 로그(<code>ActivityLog</code>)에 주체·이전/이후 값·근거와 함께 남습니다</div>
+        </div>
+        <div class="row">
+          <span class="btn sm">초기 설정 다시 보기</span>
+          <span class="btn sm primary">변경 저장</span>
+        </div>
+      </div>
+
+      <div class="tabs"><span class="is-active">설정</span><span>감사 타임라인</span></div>
+
+      <div class="grid g2 st-grid">
+        <!-- 채널·연결 점검 -->
+        <div class="card">
+          <h4>채널 연결 <span class="small muted">우선순위 순</span></h4>
+          <ul class="list">
+            <li><span class="st-rank">1</span><div class="st-grow"><div class="row between"><b>Telegram 1:1</b><span class="badge ok">연결됨</span></div><div class="small muted">@minjun · 일회용 링크 <code>/start</code> 바인딩 · 허용 사용자 1명</div></div></li>
+            <li><span class="st-rank">2</span><div class="st-grow"><div class="row between"><b>Discord 스레드</b><span class="badge violet">MVP-β</span></div><div class="small muted">#회귀자의-흉터 · 봇 생성 → 서버 초대 안내 후 확인 메시지 수신</div></div></li>
+            <li><span class="st-rank">3</span><div class="st-grow"><div class="row between"><b>웹 인박스</b><span class="badge">항상 사용</span></div><div class="small muted">메신저 장애 시에도 모든 질문 답변 가능</div></div></li>
+          </ul>
+          <div class="row" style="margin-top:8px"><span class="btn sm">Telegram 재연결 링크</span><span class="btn sm">확인 메시지 보내기</span></div>
+        </div>
+
+        <div class="card">
+          <h4>연결 점검 <span class="row"><span class="small muted">주기 점검 14:00</span><span class="btn sm">지금 점검</span></span></h4>
+          <ul class="list st-check">
+            <li><span class="badge ok">통과</span><div class="st-grow">LLM 키 유효성 <span class="small muted">· 잔액 $23.40(공급자 제공)</span></div></li>
+            <li><span class="badge ok">통과</span><div class="st-grow">봇 토큰 <span class="small muted">· Telegram</span></div></li>
+            <li><span class="badge ok">통과</span><div class="st-grow">채널 도달성 <span class="small muted">· 확인 메시지 0.8초</span></div></li>
+            <li><span class="badge ok">통과</span><div class="st-grow">Graph DB 상태 <span class="small muted">· 무결성 검사 정상</span></div></li>
+            <li><span class="badge warn">실패</span><div class="st-grow">백업 위치 <span class="small muted">· /Volumes/Backup/novel</span></div></li>
+          </ul>
+          <div class="callout warn small" style="margin-top:8px"><b>원인</b> 백업 경로에 접근할 수 없습니다(외장 디스크 미연결). <b>조치</b> 디스크를 연결하거나 백업 위치를 바꾼 뒤 다시 점검하세요. 마지막 백업: 오늘 03:00</div>
+        </div>
+
+        <!-- 공급자·모델 -->
+        <div class="card">
+          <h4>LLM 공급자 · 역할별 모델 <span class="badge info">다음 실행부터 적용</span></h4>
+          <div class="row small" style="margin-bottom:8px"><span class="muted">API 키</span><code>sk-••••••••a9f2</code><span class="badge ok">유효</span><span class="btn sm ghost">교체</span></div>
+          <div class="tbl-wrap">
+            <table class="tbl">
+              <thead><tr><th>역할</th><th>모델</th><th>출력 토큰 상한</th></tr></thead>
+              <tbody>
+                <tr><td><code>showrunner</code></td><td>공급자 A · 상위 모델</td><td class="mono">4,000</td></tr>
+                <tr><td><code>planner</code></td><td>공급자 A · 상위 모델</td><td class="mono">8,000</td></tr>
+                <tr><td><code>world_keeper</code></td><td>공급자 A · 중간 모델</td><td class="mono">4,000</td></tr>
+                <tr><td><code>writer</code></td><td>공급자 A · 상위 모델</td><td class="mono">12,000</td></tr>
+                <tr><td><code>continuity_editor</code></td><td>공급자 A · 중간 모델</td><td class="mono">4,000</td></tr>
+                <tr><td><code>foreshadow_manager</code></td><td>공급자 A · 중간 모델</td><td class="mono">3,000</td></tr>
+                <tr><td><code>line_editor</code></td><td>공급자 A · 중간 모델</td><td class="mono">12,000</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="row between small" style="margin-top:8px"><span>장애 시 대체 모델 사용 <span class="muted">· 역할별, 기본 꺼짐</span> <span class="badge violet">v1</span></span><span class="st-tog" aria-label="꺼짐"></span></div>
+          <div class="callout small" style="margin-top:8px"><b>외부로 보내는 데이터</b> 원고 본문, 아웃라인, 집필에 필요한 캐논 사실만 공급자 A로 전송합니다. 메신저에는 요약만 보내고 전문은 인증이 필요한 링크로 보냅니다. <a>공급자 보존 정책</a></div>
+        </div>
+
+        <!-- 자율성 -->
+        <div class="card">
+          <h4>자율성 수준 · 질문 민감도</h4>
+          <div class="st-opts">
+            <div class="st-opt is-on"><b><code>episode_approval</code></b><span class="small muted">화별 승인 · 기본값</span></div>
+            <div class="st-opt is-off"><b><code>arc_approval</code></b><span class="small muted">아크별 승인</span><span class="badge violet">MVP-β</span></div>
+            <div class="st-opt is-off"><b><code>full_auto</code></b><span class="small muted">완전 자율 · 정책·저작권 경고 확인</span><span class="badge violet">MVP-β</span></div>
+            <div class="st-opt is-off"><b><code>co_writing</code></b><span class="small muted">공동 집필</span><span class="badge violet">v1</span></div>
+          </div>
+          <div class="field" style="margin-top:12px">
+            <label>질문 민감도 <code>QuestionThreshold</code> <span class="badge violet">v1</span></label>
+            <div class="st-seg"><span>적게</span><span class="is-on">보통</span><span>많이</span></div>
+            <span class="small muted">비차단형 질문 수만 바뀝니다. 차단형 기준(결말 방향, 아크 목표, <code>approved</code> 이상 캐논 변경, 주요 인물 생사, 예산)은 바꿀 수 없습니다.</span>
+          </div>
+        </div>
+
+        <!-- 예산 -->
+        <div class="card">
+          <h4>예산 <span class="small muted">2026년 10월 · 작품 단위</span></h4>
+          <div class="row between"><span class="kpi"><span class="label">사용 / 월 상한</span><br><span class="value">$41.20</span> <span class="muted">/ $80</span></span><span class="small muted st-r">화당 평균 $1.62<br>예약 중 $1.90 (실행 1건)</span></div>
+          <div class="st-bar"><div class="progress"><span style="width:52%"></span></div><i class="st-mark" style="left:80%"></i></div>
+          <div class="row between small muted"><span>52%</span><span>소프트 경고 80% ($64)</span><span>하드 한도 $80</span></div>
+          <div class="tbl-wrap" style="margin-top:10px">
+            <table class="tbl">
+              <thead><tr><th>범위</th><th>소프트 경고</th><th>하드 한도</th><th>도달 시</th></tr></thead>
+              <tbody>
+                <tr><td>작품 · 월</td><td>80%</td><td>$80</td><td>자동 일시정지 + 승인 질문</td></tr>
+                <tr><td>텍스트</td><td>80%</td><td>$80</td><td>자동 일시정지 + 승인 질문</td></tr>
+                <tr><td>이미지 <span class="badge violet">v1</span></td><td>—</td><td>견적 승인</td><td>견적 승인 전 미실행</td></tr>
+                <tr><td>영상 <span class="badge violet">v2</span></td><td>—</td><td>견적 승인</td><td>견적 승인 전 미실행</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="small muted" style="margin-top:8px">하드 한도는 예약 상한(출력 토큰 상한 포함 최대 과금) 기준으로 지킵니다. 미상 비용 <code>unknown_cost</code> 0건 · 재개는 사람 승인 필수.</div>
+        </div>
+
+        <!-- 메신저 통제 -->
+        <div class="card">
+          <h4>질문 수신 통제</h4>
+          <div class="grid st-two">
+            <div class="field"><label>방해금지 시간</label><div class="input">23:00 – 08:00</div></div>
+            <div class="field"><label>일일 질문 상한</label><div class="input">10건 (비차단형)</div></div>
+          </div>
+          <div class="row between small" style="margin-top:10px"><span>긴급 예외 <span class="muted">· 보안 이벤트, 예산 하드 한도만 발송</span></span><span class="st-tog is-on" aria-label="켜짐"></span></div>
+          <div class="row between small" style="margin-top:6px"><span>질문 일시정지</span><span class="st-tog" aria-label="꺼짐"></span></div>
+          <div class="row between small" style="margin-top:6px"><span>차단형 리마인더</span><span class="muted">2회 · 마감 직후, 24시간 후</span></div>
+          <div class="tbl-wrap" style="margin-top:10px">
+            <table class="tbl st-kw">
+              <thead><tr><th>등급</th><th>발송</th><th>방해금지</th><th>일일 상한</th></tr></thead>
+              <tbody>
+                <tr><td><span class="badge danger">blocking</span></td><td>즉시</td><td>대기(긴급 예외)</td><td>적용 안 함</td></tr>
+                <tr><td><span class="badge warn">non_blocking</span></td><td>digest</td><td>대기</td><td>적용 · 초과분 다음 digest</td></tr>
+                <tr><td><span class="badge info">informational</span></td><td>일일 요약</td><td>대기</td><td>적용 안 함</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 분량 -->
+        <div class="card st-wide">
+          <h4><span>분량 프로필 <code>PlatformProfile</code></span></h4>
+          <div class="row">
+            <span class="chip st-pick">● 기본 · 공백 포함 5,000~5,500자</span>
+            <span class="chip">○ 공백 제외 3,800~4,200자 (사용자 정의)</span>
+            <span class="btn sm ghost">+ 프로필 만들기</span>
+          </div>
+          <div class="small muted" style="margin-top:6px"><code>line_editor</code> 분량 검수와 원고 화면의 글자 수 경고에 쓰입니다. 정책 메모·확인일은 v1.</div>
+        </div>
+      </div>
+
+      <!-- 감사 타임라인 -->
+      <div class="card" style="margin-top:14px">
+        <h4>감사 타임라인 <span class="small muted">최근 상태 변경 10건</span></h4>
+        <div class="row st-filters">
+          <span class="small muted">주체</span>
+          <span class="chip st-pick">전체</span><span class="chip">사람</span><span class="chip">에이전트</span><span class="chip">시스템</span>
+          <span class="small muted st-sep">대상</span>
+          <span class="chip">화 ▾</span><span class="chip">사실</span><span class="chip">떡밥</span><span class="chip">질문</span><span class="chip">설정</span>
+          <div class="input st-search">대상 이력 검색: 예) 12화, S-02</div>
+        </div>
+        <ol class="st-tl">
+          <li><span class="st-dot is-h"></span><div class="st-grow"><div class="row between"><span><span class="badge accent">사람</span> <b>민준</b> · 설정 › 일일 질문 상한</span><span class="small faint">14:31</span></div><div class="st-diff"><s>8건</s> → <b>10건</b></div><div class="small muted">근거: 설정 화면 변경 (FR-UI-09)</div></div></li>
+          <li><span class="st-dot is-s"></span><div class="st-grow"><div class="row between"><span><span class="badge">시스템</span> 연결 점검 › 백업 위치</span><span class="small faint">14:00</span></div><div class="st-diff"><s>통과</s> → <b>실패</b></div><div class="small muted">근거: 주기 점검 — 경로 접근 불가, 웹 배너로 통지</div></div></li>
+          <li><span class="st-dot is-s"></span><div class="st-grow"><div class="row between"><span><span class="badge">시스템</span> 12화 (<code>Episode</code>)</span><span class="small faint">13:58</span></div><div class="st-diff"><code>drafting</code> → <code>drafting</code> + <code>blocked</code></div><div class="small muted">근거: 차단형 질문 Q-128 대기 · 해당 화만 정지</div></div></li>
+          <li><span class="st-dot is-a"></span><div class="st-grow"><div class="row between"><span><span class="badge violet">에이전트</span> <code>showrunner</code> · 질문 Q-128</span><span class="small faint">13:57</span></div><div class="st-diff">— → <code>blocking</code> · <code>single_choice</code></div><div class="small muted">근거: 판정 기준 "주요 인물의 생사" (FR-HIL-07) · 추천안 살린다</div></div></li>
+          <li><span class="st-dot is-a"></span><div class="st-grow"><div class="row between"><span><span class="badge violet">에이전트</span> <code>continuity_editor</code> · 연속성 이슈</span><span class="small faint">13:41</span></div><div class="st-diff">이슈 생성 · <b>심각도 높음</b> (12화 씬2)</div><div class="small muted">근거: 인물 지식 제약 "서윤은 아크 2 끝까지 회귀 사실 모름"(사용자 답변 출처)</div></div></li>
+          <li><span class="st-dot is-h"></span><div class="st-grow"><div class="row between"><span><span class="badge accent">사람</span> <b>민준</b> · 설정 › 방해금지 시간</span><span class="small faint">11:20</span></div><div class="st-diff"><s>없음</s> → <b>23:00–08:00</b></div><div class="small muted">근거: 설정 화면 변경 · 긴급 예외 켬</div></div></li>
+          <li><span class="st-dot is-h"></span><div class="st-grow"><div class="row between"><span><span class="badge accent">사람</span> <b>민준</b> · 8화 공개 처리</span><span class="small faint">10:05</span></div><div class="st-diff"><code>approved</code> → <code>published</code></div><div class="small muted">근거: 사람 공개 처리 (<code>episode_approval</code> 게이트 표)</div></div></li>
+          <li><span class="st-dot is-s"></span><div class="st-grow"><div class="row between"><span><span class="badge">시스템</span> 8화 사실 23건 (<code>Fact</code>)</span><span class="small faint">10:05</span></div><div class="st-diff"><code>approved</code> → <code>published_locked</code></div><div class="small muted">근거: 8화 공개 처리 (FR-MAN-03) · 이후 변경은 리트콘 승인 필요</div></div></li>
+                    <li><span class="st-dot is-h"></span><div class="st-grow"><div class="row between"><span><span class="badge accent">사람</span> <b>민준</b> · 설정 › LLM API 키</span><span class="small faint">08:47</span></div><div class="st-diff"><code>sk-••••3c1e</code> → <code>sk-••••a9f2</code></div><div class="small muted">근거: 키 교체 · 값은 감사 로그에서 가림 (NFR-SEC-02)</div></div></li>
+          <li><span class="st-dot is-a"></span><div class="st-grow"><div class="row between"><span><span class="badge violet">에이전트</span> <code>foreshadow_manager</code> · S-02 은빛 문장</span><span class="small faint">10/24 09:12</span></div><div class="st-diff"><code>planted</code> → <code>reinforced</code></div><div class="small muted">근거 씬: 9화 씬3 · 회수 기한 30화 유지</div></div></li>
+        </ol>
+        <div class="row" style="margin-top:6px"><span class="btn sm">12화 전체 이력</span><span class="btn sm ghost">더 보기</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="annot"><b>요구사항 대응</b>
+    <ul>
+      <li><span class="fr">FR-UI-09</span> 채널 연결, 역할별 공급자·모델, 자율성 수준, 예산, 방해금지 시간, 분량 프로필을 한 화면에 두고, 저장한 변경은 감사 타임라인 첫 항목처럼 남습니다.</li>
+      <li><span class="fr">FR-UI-07</span> 감사 타임라인: 주체(사람/에이전트/시스템)·대상 필터, 이전→이후 값과 근거, "12화 전체 이력" 같은 대상별 이력 조회.</li>
+      <li><span class="fr">FR-MSG-10</span> 방해금지 시간·일일 질문 상한·질문 일시정지·채널 우선순위와 등급별 적용표. 긴급 예외는 D-14 잠정안(보안 이벤트, 예산 하드 한도).</li>
+      <li><span class="fr">FR-BUD-02</span><span class="fr">FR-BUD-03</span> 월 상한, 소프트 경고 80%, 기능별(텍스트·이미지·영상) 한도, 하드 한도 도달 시 자동 일시정지와 승인 질문(FR-BUD-02). 예약 중 금액과 예약 상한 기준 집행(FR-BUD-03).</li>
+      <li><span class="fr">FR-SET-01</span> 초기 설정 다시 보기, 외부로 보내는 데이터 범위 안내(NFR-SEC-04).</li>
+      <li><span class="fr">FR-SET-02</span> Telegram(MVP-α) 연결과 Discord(MVP-β) 봇 생성·서버 초대 안내, 확인 메시지.</li>
+      <li><span class="fr">FR-SET-03</span> LLM 키·잔액, 봇 토큰, 채널 도달성, Graph DB, 백업 위치 점검. 실패 시 원인과 조치를 표시합니다.</li>
+    </ul>
+  </div>
+</section>
+<style>
+[data-screen="settings"] .st-grow{flex:1;min-width:0}
+[data-screen="settings"] .st-rank{width:22px;height:22px;border-radius:6px;background:var(--surface-2);color:var(--muted);display:grid;place-items:center;font-size:12px;font-weight:700;flex:none}
+[data-screen="settings"] .st-check>li{align-items:center;padding:6px 0}
+[data-screen="settings"] .st-check .badge{min-width:40px;justify-content:center}
+[data-screen="settings"] .st-wide{grid-column:1/-1}
+[data-screen="settings"] .st-tog{width:34px;height:20px;border-radius:999px;background:var(--border);position:relative;flex:none}
+[data-screen="settings"] .st-tog::after{content:"";position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:50%;background:var(--surface);box-shadow:var(--shadow)}
+[data-screen="settings"] .st-tog.is-on{background:var(--accent)}
+[data-screen="settings"] .st-tog.is-on::after{left:17px}
+[data-screen="settings"] .st-opts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+[data-screen="settings"] .st-opt{border:1px solid var(--border);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:2px;align-items:flex-start}
+[data-screen="settings"] .st-opt.is-on{border-color:var(--accent);background:var(--accent-soft)}
+[data-screen="settings"] .st-opt.is-off{opacity:.62}
+[data-screen="settings"] .st-seg{display:flex;border:1px solid var(--border);border-radius:7px;overflow:hidden;width:max-content;max-width:100%}
+[data-screen="settings"] .st-seg>span{padding:4px 14px;font-size:12.5px;color:var(--muted)}
+[data-screen="settings"] .st-seg>span.is-on{background:var(--accent-soft);color:var(--accent);font-weight:600}
+[data-screen="settings"] .st-r{text-align:right}
+[data-screen="settings"] .st-bar{position:relative;margin:8px 0 4px}
+[data-screen="settings"] .st-mark{position:absolute;top:-3px;width:2px;height:13px;background:var(--warn);border-radius:1px}
+[data-screen="settings"] .st-two{grid-template-columns:repeat(2,minmax(0,1fr))}
+[data-screen="settings"] .st-pick{border-color:var(--accent);color:var(--accent);background:var(--accent-soft);font-weight:600}
+[data-screen="settings"] .st-filters{margin-bottom:10px}
+[data-screen="settings"] .st-sep{margin-left:6px}
+[data-screen="settings"] .st-search{width:auto;flex:1 1 200px;color:var(--faint);padding:4px 10px;font-size:12.5px}
+[data-screen="settings"] .st-tl{list-style:none;margin:0;padding:0 0 0 4px;border-left:2px solid var(--border);margin-left:6px}
+[data-screen="settings"] .st-tl>li{display:flex;gap:10px;padding:8px 0 8px 0;position:relative}
+[data-screen="settings"] .st-dot{width:10px;height:10px;border-radius:50%;margin:6px 0 0 -11px;flex:none;border:2px solid var(--surface);box-sizing:content-box}
+[data-screen="settings"] .st-dot.is-h{background:var(--accent)}
+[data-screen="settings"] .st-dot.is-a{background:var(--violet)}
+[data-screen="settings"] .st-dot.is-s{background:var(--faint)}
+[data-screen="settings"] .st-diff{font-size:13px;margin:2px 0}
+[data-screen="settings"] .st-diff s{color:var(--faint)}
+[data-screen="settings"] .st-kw td{overflow-wrap:normal}
+@media (max-width:520px){
+  [data-screen="settings"] .st-opts,[data-screen="settings"] .st-two{grid-template-columns:1fr}
+}
+</style>

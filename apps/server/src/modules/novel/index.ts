@@ -1,0 +1,303 @@
+/**
+ * novel — public API (design/03 §3.1, §4.11–4.12; 11 §5.8; 08 §9.8).
+ * Owns: users, novels, goals, series_bibles, arcs, length_profiles, notification_policies, novel_counters.
+ *
+ * Cross-module participation without import cycles (novel depends only on audit):
+ *  - N1 creation set (INV-NOV-06): other modules register a `NovelCreationParticipant`
+ *    (ontology → schema v1 + main timeline, messaging → web channel, budget → default policy,
+ *    llm → role bindings, concept → ConceptSession). All run in the creating transaction.
+ *  - `onGoalSaved` / `onStatusChanged` hooks run in the same transaction (e.g. orchestration creates
+ *    `plan_series_bible` on N3, INV-GOL-02 wakes planning tasks on goal revisions).
+ */
+import type {
+  ArcStatus,
+  AutonomyLevel,
+  ConceptEntryMode,
+  NarrationMode,
+  NovelCounterKind,
+  NovelStatus,
+  PauseReason,
+  PublishPolicy,
+  QuestionThreshold,
+  CountBasis,
+  AgeRating,
+} from "@ncs/shared";
+import type {
+  ArcsRow,
+  GoalsRow,
+  LengthProfilesRow,
+  NotificationPoliciesRow,
+  NovelsRow,
+  SeriesBiblesRow,
+  UsersRow,
+} from "@ncs/db/schema";
+import type { ActorRef, ModuleName, NovelScope, Tx } from "../../platform/index.js";
+
+export type User = UsersRow;
+export type Novel = NovelsRow;
+export type Goal = GoalsRow;
+export type SeriesBible = SeriesBiblesRow;
+export type Arc = ArcsRow;
+export type LengthProfile = LengthProfilesRow;
+export type NotificationPolicy = NotificationPoliciesRow;
+
+// ── hooks ────────────────────────────────────────────────────────────────
+export interface NovelCreatedContext {
+  tx: Tx;
+  scope: NovelScope;
+  novel: Novel;
+  actor: ActorRef;
+  ownerUserId: string;
+  entryMode: ConceptEntryMode;
+  /** pre-allocated `osv_` id: the ontology participant MUST insert schema version 1 with this id */
+  schemaVersionId: string;
+  /** participants publish ids for later participants (lower `order` runs first) */
+  outputs: {
+    mainTimelineId?: string;
+    webChannelId?: string;
+    budgetPolicyId?: string;
+    conceptSessionId?: string;
+  };
+}
+
+export interface NovelCreationParticipant {
+  module: ModuleName;
+  /** ontology 10, messaging 20, budget 30, llm 40, concept 50 */
+  order: number;
+  onNovelCreated(ctx: NovelCreatedContext): Promise<void>;
+}
+
+export interface NovelStatusChangedContext {
+  tx: Tx;
+  scope: NovelScope;
+  from: NovelStatus;
+  to: NovelStatus;
+  ruleId: string;
+  novel: Novel;
+  actor: ActorRef;
+}
+
+export interface GoalSavedContext {
+  tx: Tx;
+  scope: NovelScope;
+  goal: Goal;
+  previous: Goal | null;
+  novel: Novel;
+  /** true when this save performed N3 (onboarding → planning) */
+  enteredPlanning: boolean;
+  actor: ActorRef;
+}
+
+export type NovelHook<C> = (ctx: C) => Promise<void>;
+
+/**
+ * 설계 추가: guard run inside `saveGoal` before the FIRST goal save (N3, onboarding → planning). Throw a
+ * `DomainValidationError` to refuse (e.g. cast: the character-setup step must be confirmed first).
+ */
+export interface GoalGuardContext {
+  tx: Tx;
+  scope: NovelScope;
+  novel: Novel;
+  actor: ActorRef;
+}
+export interface GoalGuard {
+  module: ModuleName;
+  check(ctx: GoalGuardContext): Promise<void>;
+}
+
+/** hitl surface for `ending_change` approvals; wired late because hitl is built after novel */
+export type NovelApprovalPort = Pick<import("../hitl/index.js").HitlService, "requestApproval" | "registerApprovalHandler">;
+
+/** saveGoal result: the stored goal plus a pending ending_change approval when the ending was revised */
+export type SavedGoal = Goal & { pendingEndingChange?: { approvalId: string; questionId: string; endingDirection: string } };
+
+// ── inputs ───────────────────────────────────────────────────────────────
+export interface CreateNovelInput {
+  title?: string;
+  ageRating?: AgeRating;
+  entryMode?: ConceptEntryMode;
+  timezone?: string;
+}
+
+export interface NovelSettingsPatch {
+  title?: string;
+  /** confirm the current (auto/provisional) title as the user's title without changing it */
+  confirmTitle?: boolean;
+  targetAudience?: string | null;
+  questionThreshold?: QuestionThreshold;
+  defaultNarrationMode?: NarrationMode;
+  timezone?: string;
+  possessionModeEnabled?: boolean;
+}
+
+export interface ChangeAutonomyInput {
+  autonomyLevel: AutonomyLevel;
+  publishPolicy?: PublishPolicy;
+  acknowledgedFullAutoWarning: boolean;
+  reason?: string;
+}
+
+/** 11 M-01~M-05 fields copied from the approved ConceptBrief (N2 / pre-bible revision). */
+export interface ConceptApprovalInput {
+  conceptBriefId: string;
+  purpose: "initial" | "revision";
+  /** brief `title` (user-confirmed) → novels.title, title_source=user */
+  title?: string;
+  /** brief `title_candidates[]` — M-01 fallback: first candidate when the novel title is still provisional */
+  titleCandidates?: string[];
+  genre: string;
+  ageRating: AgeRating;
+  targetAudience?: string | null;
+  defaultNarrationMode?: NarrationMode;
+  category: Record<string, unknown>;
+  approvalId?: string;
+}
+
+export interface SaveGoalInput {
+  totalEpisodesMin: number;
+  totalEpisodesMax: number | null;
+  cadenceEpisodesPerWeek: number;
+  reserveTargetEpisodes: number;
+  endingDirection: string;
+  notes: string | null;
+  expectedRevision?: number;
+}
+
+export interface CreateBibleVersionInput {
+  logline: string;
+  synopsis: string;
+  content: unknown;
+  contentMd: string;
+  conceptBriefId: string;
+}
+
+export interface ArcInput {
+  ord: number;
+  title: string;
+  goalText: string;
+  conflictText: string;
+  endCondition: string;
+  plannedEpisodeFrom: number;
+  plannedEpisodeTo: number;
+}
+
+export interface LengthProfilePatch {
+  minChars?: number;
+  maxChars?: number;
+  countBasis?: CountBasis;
+}
+
+export type NotificationPolicyPatch = Partial<
+  Pick<
+    NotificationPolicy,
+    | "quietHoursStart"
+    | "quietHoursEnd"
+    | "urgentExceptionEnabled"
+    | "dailyCapNonBlocking"
+    | "digestWindowMinutes"
+    | "digestMaxItems"
+    | "deadlineHoursBlocking"
+    | "deadlineHoursNonBlocking"
+    | "reminderOffsetsMinutes"
+    | "questionsPaused"
+    | "channelPriority"
+    | "dailySummaryTime"
+  >
+>;
+
+// ── service ──────────────────────────────────────────────────────────────
+/**
+ * Methods taking `tx` run inside the caller's transaction (02 M-2); methods with `tx?` open their
+ * own transaction when omitted. All writes record audit events in the same transaction.
+ */
+export interface NovelService {
+  // users (INV-USR-01: local_trusted has exactly one owner)
+  ensureOwnerUser(displayName?: string): Promise<User>;
+  getOwnerUser(): Promise<User | null>;
+
+  // hooks
+  registerCreationParticipant(p: NovelCreationParticipant): void;
+  onStatusChanged(hook: NovelHook<NovelStatusChangedContext>): void;
+  onGoalSaved(hook: NovelHook<GoalSavedContext>): void;
+  /** 설계 추가: pre-N3 guards (cast confirmation) — run in the saveGoal transaction before the first goal insert */
+  registerGoalGuard(guard: GoalGuard): void;
+
+  // novel
+  /** N1: novel(status=concept) + length profile + notification policy + all creation participants, one transaction */
+  createNovel(input: CreateNovelInput, actor: ActorRef): Promise<Novel>;
+  exists(novelId: string): Promise<boolean>;
+  getNovel(scope: NovelScope, tx?: Tx): Promise<Novel>;
+  listNovels(opts?: { includeArchived?: boolean }): Promise<Novel[]>;
+  updateSettings(scope: NovelScope, patch: NovelSettingsPatch, actor: ActorRef, tx?: Tx): Promise<Novel>;
+  changeAutonomy(scope: NovelScope, input: ChangeAutonomyInput, actor: ActorRef): Promise<Novel>;
+  /** sets paused_at/pause_reason (INV-NOV-03 is enforced by orchestration when leasing) */
+  pause(scope: NovelScope, reason: PauseReason, actor: ActorRef, opts?: { tx?: Tx; note?: string }): Promise<Novel>;
+  resume(scope: NovelScope, actor: ActorRef, opts?: { tx?: Tx; note?: string }): Promise<Novel>;
+  /** generic guarded transition (N4–N6); N2 via applyConceptApproval, N3 via saveGoal */
+  transitionStatus(tx: Tx, scope: NovelScope, to: NovelStatus, actor: ActorRef, reason?: string): Promise<Novel>;
+  /** N2 (purpose=initial, concept → onboarding) or pre-bible revision (11 3.10) — called by concept in the approval tx */
+  applyConceptApproval(tx: Tx, scope: NovelScope, input: ConceptApprovalInput, actor: ActorRef): Promise<Novel>;
+  /**
+   * Working title from the concept conversation (설계 추가). Applied only while `title_source` is not `user`
+   * (a user-set title is never overwritten); sets `title_source=auto` and audits `novel.settings_changed`.
+   * `source: "user"` is used when the user stated the title in the conversation.
+   */
+  applyWorkingTitle(tx: Tx, scope: NovelScope, input: { title: string; source: "auto" | "user"; reason?: string }, actor: ActorRef): Promise<{ novel: Novel; applied: boolean }>;
+  /** display numbers T-12, CI-3, S-01 … (00 §5.2) */
+  nextDisplayNo(tx: Tx, scope: NovelScope, kind: NovelCounterKind): Promise<number>;
+
+  // goal
+  getGoal(scope: NovelScope, tx?: Tx): Promise<Goal | null>;
+  /**
+   * create (N3 when onboarding) or revise (revision+1, optimistic check). After the first save a new
+   * `endingDirection` is not applied directly: an `ending_change` approval is requested (03 Goal, 05 §10)
+   * and the value is applied when it is approved; the other fields are saved at once.
+   */
+  saveGoal(scope: NovelScope, input: SaveGoalInput, actor: ActorRef): Promise<SavedGoal>;
+  /** composition: `novel.service.connectApprovals(hitl.service)` after hitl is built (registers `ending_change`) */
+  connectApprovals(port: NovelApprovalPort): void;
+
+  // series bible
+  createBibleVersion(tx: Tx, scope: NovelScope, input: CreateBibleVersionInput, actor: ActorRef): Promise<SeriesBible>;
+  /** draft→awaiting_approval (approvalId), awaiting_approval→approved (supersedes previous approved), →draft, →superseded */
+  transitionBible(
+    tx: Tx,
+    scope: NovelScope,
+    bibleId: string,
+    to: SeriesBible["status"],
+    actor: ActorRef,
+    opts?: { approvalId?: string; reason?: string },
+  ): Promise<SeriesBible>;
+  getBible(scope: NovelScope, bibleId: string, tx?: Tx): Promise<SeriesBible>;
+  getApprovedBible(scope: NovelScope, tx?: Tx): Promise<SeriesBible | null>;
+  listBibles(scope: NovelScope, tx?: Tx): Promise<SeriesBible[]>;
+
+  // arcs
+  createArc(tx: Tx | undefined, scope: NovelScope, input: ArcInput, actor: ActorRef): Promise<Arc>;
+  updateArc(scope: NovelScope, arcId: string, patch: Partial<ArcInput>, actor: ActorRef, tx?: Tx): Promise<Arc>;
+  transitionArc(
+    tx: Tx,
+    scope: NovelScope,
+    arcId: string,
+    to: ArcStatus,
+    actor: ActorRef,
+    opts?: { planApprovalId?: string; arcApprovalId?: string; reason?: string },
+  ): Promise<Arc>;
+  setArcPaused(scope: NovelScope, arcId: string, paused: boolean, actor: ActorRef, tx?: Tx): Promise<Arc>;
+  getArc(scope: NovelScope, arcId: string, tx?: Tx): Promise<Arc>;
+  listArcs(scope: NovelScope, tx?: Tx): Promise<Arc[]>;
+  /** arc whose planned range contains the episode (non-cancelled) */
+  findArcForEpisode(scope: NovelScope, episodeNo: number, tx?: Tx): Promise<Arc | null>;
+
+  // length profile & notification policy
+  getLengthProfile(scope: NovelScope, tx?: Tx): Promise<LengthProfile>;
+  listLengthPresets(): Promise<LengthProfile[]>;
+  /** edits a novel-owned copy (clones the install preset on first edit) */
+  updateLengthProfile(scope: NovelScope, patch: LengthProfilePatch, actor: ActorRef): Promise<LengthProfile>;
+  getNotificationPolicy(scope: NovelScope, tx?: Tx): Promise<NotificationPolicy>;
+  updateNotificationPolicy(scope: NovelScope, patch: NotificationPolicyPatch, actor: ActorRef): Promise<NotificationPolicy>;
+}
+
+export type { NovelModuleDeps } from "./module.js";
+export { createNovelModule } from "./module.js";
+export { NOVEL_TRANSITIONS, ARC_TRANSITIONS, SERIES_BIBLE_TRANSITIONS } from "./domain/transitions.js";

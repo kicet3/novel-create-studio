@@ -1,0 +1,201 @@
+<section class="screen" data-screen="manuscript" data-title="원고 편집기" data-release="MVP-α" data-fr="FR-UI-04, FR-MAN-01, FR-MAN-02, FR-MAN-07, FR-HIL-04, FR-ONT-06, FR-FOR-08, FR-AGT-05, FR-AGT-12">
+  <div class="app">
+    <aside class="app-side">
+      <div class="app-brand"><span class="logo">N</span>Novel Studio</div>
+      <div class="app-novel"><b>회귀자의 흉터</b><span class="muted">현대판타지 · 회귀물</span></div>
+      <div class="app-nav" data-nav="home">작품 홈</div>
+      <div class="app-nav" data-nav="board">작업 보드</div>
+      <div class="app-nav" data-nav="inbox">인박스 <span class="count">3</span></div>
+      <div class="app-nav is-active" data-nav="manuscript">원고</div>
+      <div class="app-nav" data-nav="ontology">세계관 온톨로지</div>
+      <div class="app-nav" data-nav="foreshadow">떡밥</div>
+      <div class="app-nav" data-nav="media">미디어 스튜디오 <span class="badge violet">v1</span></div>
+      <div class="app-nav" data-nav="audit">감사 타임라인</div>
+      <div class="app-nav" data-nav="settings">설정</div>
+    </aside>
+    <div class="app-main">
+      <div class="app-top">
+        <div>
+          <div class="sub">아크 1 (1~30화) · 원고 › 12화</div>
+          <h3>12화 · 흉터가 기억하는 것</h3>
+          <div class="row small" style="margin-top:4px">
+            <span class="badge info"><code>drafting</code> 초고</span>
+            <span class="badge danger"><code>blocked</code> 질문 Q-128</span>
+            <span class="badge danger">높음 이슈 1건 열림 → <code>awaiting_approval</code> 불가</span>
+          </div>
+        </div>
+        <div class="row">
+          <span class="btn sm">TXT · Markdown 내보내기</span>
+          <span class="btn sm">재검사</span>
+          <span class="btn sm primary">사람 수정 저장 (v4)</span>
+        </div>
+      </div>
+
+      <div class="ms-pipe small">
+        <span class="done">아웃라인 <code>outlining</code></span><span class="cur">초고 <code>drafting</code></span><span>검사 <code>checking</code></span><span>검수 <code>polishing</code></span><span>승인 대기 <code>awaiting_approval</code></span>
+      </div>
+
+      <div class="split">
+        <div class="card ms-editor">
+          <input type="checkbox" id="ms-diff" class="ms-toggle" checked>
+          <div class="ms-bar row between small">
+            <div class="row">
+              <span class="chip">비교: <b>v3</b> writer → <b>v4</b> 사람</span>
+              <label for="ms-diff" class="ms-sw"><span class="ms-knob"></span>diff 보기</label>
+            </div>
+            <div class="row ms-count">
+              <span><b>5,120</b>자 <span class="muted">공백 포함</span></span>
+              <span><b>3,948</b>자 <span class="muted">공백 제외</span></span>
+              <span class="badge ok">기본 5,000~5,500 충족</span>
+            </div>
+          </div>
+          <div class="ms-legend small muted row">
+            <span><i class="ms-dot w"></i>writer (초고·재작성)</span>
+            <span><i class="ms-dot h"></i>사람 수정 (민준)</span>
+            <span><i class="ms-dot i"></i>이슈 위치</span>
+            <span><i class="ms-dot f"></i>떡밥 근거</span>
+          </div>
+
+          <div class="ms-body">
+            <div class="ms-scene"><span>씬 1</span> 청람 길드 본부 · 분석실 · T2 · 12화 오전 <em>강도현, 한서윤</em></div>
+            <p class="w">모니터의 푸른 빛이 서윤의 안경알에 겹쳐 흘렀다. 그녀는 화면을 넘기다 말고 손을 멈췄다.</p>
+            <p class="w">“이 문장, 기억나요? 3화 때 회수한 파편에 새겨져 있던 거.”</p>
+            <p class="w"><mark class="ms-f" title="S-02 강화 근거">은빛 실로 수놓은 듯한 초승달. 흑월 결사의 문장이 또 한 번 화면 가득 떠올랐다.</mark></p>
+            <p class="w">도현은 대답 대신 소매를 끌어내렸다. 손목 안쪽이 이유 없이 욱신거렸다.</p>
+
+            <div class="ms-scene"><span>씬 2</span> 청람 길드 본부 · 복도 · T2 <em>강도현, 한서윤</em></div>
+            <p class="w">“도현 씨는 가끔, 일어날 일을 미리 아는 사람처럼 굴어요.”</p>
+            <p class="w"><mark class="ms-i" id="ms-loc1">“혹시… 한 번 겪어 본 일이라서 그런 거예요? 처음이 아닌 것처럼.”</mark> <a class="ms-pin" href="#ms-iss1">#1</a></p>
+            <p class="w">도현의 걸음이 반 박자 늦어졌다. 그는 웃었다. 웃는 것 말고는 할 수 있는 게 없었다.</p>
+
+            <div class="ms-scene"><span>씬 3</span> 서울 마포 게이트 구역 · 붕괴 현장 · T2 <em>강도현, 최무진</em></div>
+            <p class="h"><del>무진은 오른팔을 들어 붕괴선을 가리켰다.</del><ins>무진은 의수를 낀 왼팔로 붕괴선을 가리켰다.</ins></p>
+            <p class="w"><mark class="ms-f" title="S-05 강화 근거">“게이트가 무너진 건 사고가 아니야. 안쪽에서 누가 코어를 뽑아 갔어.”</mark></p>
+            <p class="h"><del>도현은 고개를 끄덕였다.</del><ins>도현은 대답하지 못했다. 1회차에서 그 말을 들은 사람은 아무도 살아남지 못했다.</ins></p>
+
+            <div class="ms-scene"><span>씬 4</span> 마포 게이트 구역 · 균열 내부 · T2 · 12화 밤 <em>강도현, 최무진, 백하린</em></div>
+            <p class="w">균열이 닫히기 직전, 하린의 목소리가 통신기 너머로 갈라졌다.</p>
+            <p class="w">“강도현. 지금 나오면 최무진은 못 데리고 나와.”</p>
+            <p class="w ms-hook">도현은 무진의 손을 잡았다. 그리고 그 순간, 손목의 흉터가 처음으로 빛을 냈다.</p>
+            <p class="faint small ms-gap">… 본문 중략 (원문 위치 기준 씬 경계 4개, 수정 시 재계산) …</p>
+          </div>
+        </div>
+
+        <div class="stack">
+          <div class="card">
+            <h4>연속성 이슈 <span class="badge">continuity_editor · 2건</span></h4>
+            <ul class="list small">
+              <li id="ms-iss1" class="ms-iss is-sel">
+                <span class="badge danger">높음</span>
+                <div>
+                  <b>씬2: 서윤이 도현의 회귀를 암시하는 대사</b>
+                  <div class="muted">유형: 인물 지식 · 제약 위반</div>
+                  <div>근거 사실 <a href="#">「한서윤은 아크 2 끝까지 도현의 회귀 사실을 모른다」</a> <span class="badge accent"><code>approved</code></span> <span class="faint">출처: 질문 답변</span></div>
+                  <div><a href="#ms-loc1">원고 위치 → 씬2, 2번째 문단</a></div>
+                  <div class="row" style="margin-top:6px"><span class="btn sm">재작성 요청</span><span class="btn sm ghost">직접 수정</span></div>
+                </div>
+              </li>
+              <li>
+                <span class="badge warn">중간</span>
+                <div>
+                  <b>씬3: 무진의 의수가 오른팔로 표기</b>
+                  <div class="muted">유형: 외형 · 캐논은 왼팔 · 11화에도 같은 이슈(중간) 열림</div>
+                  <div>근거 사실 <a href="#">「최무진의 의수는 왼팔」</a> <span class="badge accent"><code>published_locked</code></span></div>
+                  <div><a href="#">원고 위치 → 씬3, 1번째 문단</a></div>
+                  <div class="ms-ok">v3 표기 → 사람 수정 v4로 해소 (재검사 대기)</div>
+                </div>
+              </li>
+            </ul>
+            <div class="callout danger small" style="margin-top:8px">높음 이슈가 열려 있어 <code>awaiting_approval</code>로 넘어가지 않습니다. 재검사 후에도 남고 재작성 상한(NFR-COST-02)에 닿으면 차단형 질문이 생깁니다.</div>
+          </div>
+
+          <div class="card">
+            <h4>떡밥 검사 <span class="badge">foreshadow_manager</span></h4>
+            <div class="small muted" style="margin-bottom:4px">이번 화 배정 · 설치 0 · 강화 3 · 회수 0</div>
+            <ul class="list small">
+              <li><span class="ms-ck ok">✓</span><div><b>S-02</b> 흑월 결사의 은빛 문장 · 강화<br><span class="muted"><code>reinforced</code> · 근거: 씬1 3번째 문단 · 기한 30화</span></div></li>
+              <li><span class="ms-ck ok">✓</span><div><b>S-05</b> 마포 게이트 붕괴 원인 · 강화<br><span class="muted"><code>planted</code> → <code>reinforced</code> · 근거: 씬3 · 기한 25화 <span class="badge warn">기한 임박</span></span></div></li>
+              <li><span class="ms-ck no">!</span><div><b>S-01</b> 도현 손목의 흉터 · 강화<br><span class="muted"><code>planted</code> 유지 · 씬4 마지막 문단 후보, 근거 연결 확인 필요</span></div></li>
+            </ul>
+            <div class="small faint">설치·회수 배정 없음. 누락 항목은 이슈가 되어 승인 대기로 넘어가지 않습니다.</div>
+          </div>
+
+          <div class="card">
+            <h4>버전 · 작성 주체</h4>
+            <ul class="list small">
+              <li><span class="ms-v h">v4</span><div><b>사람 수정</b> · 민준 · 방금<br><span class="muted">씬3 2문단 수정 · 사실 추출 다시 실행 중</span></div></li>
+              <li><span class="ms-v w">v3</span><div><b>writer</b> · 초고 재작성 · 09:42<br><span class="muted">연속성 이슈 자동 수정 1건 (diff 기록)</span></div></li>
+              <li><span class="ms-v w">v2</span><div><b>writer</b> · 초고 · 08:15</div></li>
+              <li><span class="ms-v">v1</span><div><b>planner</b> · 아웃라인 · 어제</div></li>
+            </ul>
+            <div class="small muted" style="margin-top:6px">버전마다 작성 주체(역할·모델 또는 사람) 기록 · 임의 두 버전 비교 가능 · 사람 수정은 에이전트가 승인 없이 되돌리지 못함</div>
+          </div>
+
+          <div class="card">
+            <h4>회차 말 훅 <span class="badge">line_editor</span></h4>
+            <div class="small"><span class="ms-ck ok">✓</span> 아웃라인 훅 「흉터가 처음 빛난다」 → 씬4 마지막 문단에 반영</div>
+            <div class="small muted" style="margin-top:4px">검수(문장·분량) 단계에서 최종 확인 · 최무진 생사는 Q-128 답변 대기</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="annot"> <b>요구사항 대응</b>
+    <ul>
+      <li><span class="fr">FR-UI-04</span> 에디터 본문, 버전 diff 토글, 작성 주체 줄 표시(좌측 색 띠), 연속성 이슈·떡밥 주석, 씬1~4 경계 헤더. 이슈의 링크가 근거 사실과 원고 위치(#1 하이라이트)로 이동.</li>
+      <li><span class="fr">FR-MAN-01</span> v1 아웃라인(planner) → v2·v3 초고(writer) → v4 사람 수정. 두 버전 diff와 줄 단위 작성 주체 구분.</li>
+      <li><span class="fr">FR-MAN-02</span> 공백 포함 5,120자 / 공백 제외 3,948자를 분량 프로필 기준과 비교.</li>
+      <li><span class="fr">FR-MAN-07</span> <span class="fr">FR-HIL-04</span> 웹 에디터 직접 수정이 별도 버전(v4)으로 남고, 사실 추출을 다시 실행.</li>
+      <li><span class="fr">FR-ONT-06</span> 이슈마다 심각도, 근거 사실(캐논 상태), 원고 위치. 높음 이슈가 열려 있으면 <code>awaiting_approval</code> 진입 차단.</li>
+      <li><span class="fr">FR-FOR-08</span> 이번 화 배정 설치·강화·회수 체크와 근거 위치 연결, 미확인 항목 표시.</li>
+      <li><span class="fr">FR-AGT-05</span> <span class="fr">FR-AGT-12</span> 씬 장소·시간선·등장 엔티티, 화 상태 <code>drafting</code> + <code>blocked</code> 표시. 회차 말 훅은 <code>line_editor</code> 검수 항목(4.1절).</li>
+    </ul>
+  </div>
+</section>
+<style>
+[data-screen="manuscript"] .ms-pipe{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:12px}
+[data-screen="manuscript"] .ms-pipe>span{padding:3px 10px;border-radius:999px;border:1px solid var(--border);background:var(--surface);color:var(--faint)}
+[data-screen="manuscript"] .ms-pipe>span.done{color:var(--ok);border-color:var(--ok);background:var(--ok-soft)}
+[data-screen="manuscript"] .ms-pipe>span.cur{color:var(--accent);border-color:var(--accent);background:var(--accent-soft);font-weight:600}
+[data-screen="manuscript"] .ms-toggle{position:absolute;opacity:0;pointer-events:none}
+[data-screen="manuscript"] .ms-editor{position:relative;padding:0;overflow:hidden}
+[data-screen="manuscript"] .ms-bar{padding:10px 14px;border-bottom:1px solid var(--border);background:var(--surface-2)}
+[data-screen="manuscript"] .ms-count{gap:10px;font-variant-numeric:tabular-nums}
+[data-screen="manuscript"] .ms-sw{display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-weight:600}
+[data-screen="manuscript"] .ms-knob{width:28px;height:16px;border-radius:999px;background:var(--border);position:relative;flex:none}
+[data-screen="manuscript"] .ms-knob::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:var(--surface)}
+[data-screen="manuscript"] .ms-toggle:checked~.ms-bar .ms-knob{background:var(--accent)}
+[data-screen="manuscript"] .ms-toggle:checked~.ms-bar .ms-knob::after{left:14px}
+[data-screen="manuscript"] .ms-legend{gap:12px;padding:8px 14px 0}
+[data-screen="manuscript"] .ms-dot{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+[data-screen="manuscript"] .ms-dot.w{background:var(--info)}
+[data-screen="manuscript"] .ms-dot.h{background:var(--violet)}
+[data-screen="manuscript"] .ms-dot.i{background:var(--danger)}
+[data-screen="manuscript"] .ms-dot.f{background:var(--ok)}
+[data-screen="manuscript"] .ms-body{padding:6px 14px 14px;font-size:15px;line-height:1.85}
+[data-screen="manuscript"] .ms-body p{margin:0;padding:3px 0 3px 12px;border-left:3px solid var(--info-soft)}
+[data-screen="manuscript"] .ms-body p.h{border-left-color:var(--violet)}
+[data-screen="manuscript"] .ms-body p.ms-gap{border-left-color:transparent;text-align:center;padding-top:8px}
+[data-screen="manuscript"] .ms-scene{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;margin:14px 0 6px;padding-top:8px;border-top:1px dashed var(--border);font-size:12px;color:var(--muted)}
+[data-screen="manuscript"] .ms-scene:first-child{margin-top:6px;border-top:0}
+[data-screen="manuscript"] .ms-scene>span{font-weight:700;color:var(--accent);background:var(--accent-soft);padding:0 8px;border-radius:4px}
+[data-screen="manuscript"] .ms-scene em{font-style:normal;color:var(--faint)}
+[data-screen="manuscript"] mark{color:inherit;border-radius:3px;padding:0 1px}
+[data-screen="manuscript"] mark.ms-f{background:var(--ok-soft);box-shadow:inset 0 -2px 0 var(--ok)}
+[data-screen="manuscript"] mark.ms-i{background:var(--danger-soft);box-shadow:inset 0 -2px 0 var(--danger);outline:2px solid var(--danger);outline-offset:1px}
+[data-screen="manuscript"] .ms-pin{font:700 11px/1 ui-monospace,Menlo,monospace;color:var(--accent-text);background:var(--danger);padding:2px 5px;border-radius:4px;text-decoration:none;vertical-align:2px}
+[data-screen="manuscript"] del{display:none;color:var(--danger);background:var(--danger-soft);text-decoration:line-through}
+[data-screen="manuscript"] ins{text-decoration:none}
+[data-screen="manuscript"] .ms-toggle:checked~.ms-body del{display:inline;margin-right:4px}
+[data-screen="manuscript"] .ms-toggle:checked~.ms-body ins{background:var(--violet-soft);color:var(--text);box-shadow:inset 0 -2px 0 var(--violet)}
+[data-screen="manuscript"] .ms-hook{background:var(--warn-soft);font-weight:600}
+[data-screen="manuscript"] .ms-iss.is-sel{background:var(--danger-soft);margin:0 -8px;padding:8px;border-radius:8px}
+[data-screen="manuscript"] .ms-iss a,[data-screen="manuscript"] .list a{overflow-wrap:anywhere}
+[data-screen="manuscript"] .ms-ok{color:var(--ok)}
+[data-screen="manuscript"] .ms-ck{flex:none;width:20px;height:20px;border-radius:5px;display:inline-grid;place-items:center;font-weight:700;font-size:12px}
+[data-screen="manuscript"] .ms-ck.ok{background:var(--ok-soft);color:var(--ok)}
+[data-screen="manuscript"] .ms-ck.no{background:var(--warn-soft);color:var(--warn)}
+[data-screen="manuscript"] .ms-v{flex:none;font:700 11px/1.6 ui-monospace,Menlo,monospace;padding:1px 6px;border-radius:4px;background:var(--surface-2);color:var(--muted)}
+[data-screen="manuscript"] .ms-v.w{background:var(--info-soft);color:var(--info)}
+[data-screen="manuscript"] .ms-v.h{background:var(--violet-soft);color:var(--violet)}
+</style>

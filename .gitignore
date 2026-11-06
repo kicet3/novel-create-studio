@@ -1,0 +1,57 @@
+# deps / build
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+.vite/
+*.log
+
+# env: 실제 값이 든 파일은 모두 제외, 예제만 커밋
+.env
+.env.*
+!.env.example
+!.env.*.example
+.envrc
+.direnv/
+
+# 설치 홈(DB·암호화 비밀·마스터 키·백업)
+.ncs/
+.ncs-*/
+**/secrets/
+master.key
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.keystore
+
+# 공급자 로그인 정보·토큰 (Codex/Claude/gcloud 등)
+auth.json
+.credentials.json
+credentials.json
+*credentials*.json
+service-account*.json
+*.token
+*.secret
+token.json
+.netrc
+.npmrc
+
+# DB 덤프·백업
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+backups/
+
+# 테스트·스모크 임시 산출물
+tmp/
+.tmp/
+*.har
+
+# OS / 에디터
+.DS_Store
+.idea/
+.vscode/
+*.swp

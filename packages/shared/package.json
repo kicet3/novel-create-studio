@@ -1,0 +1,54 @@
+{
+  "name": "@ncs/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "@ncs/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./enums": {
+      "@ncs/source": "./src/enums.ts",
+      "types": "./dist/enums.d.ts",
+      "default": "./dist/enums.js"
+    },
+    "./ids": {
+      "@ncs/source": "./src/ids.ts",
+      "types": "./dist/ids.d.ts",
+      "default": "./dist/ids.js"
+    },
+    "./labels": {
+      "@ncs/source": "./src/labels.ko.ts",
+      "types": "./dist/labels.ko.d.ts",
+      "default": "./dist/labels.ko.js"
+    },
+    "./defaults": {
+      "@ncs/source": "./src/defaults.ts",
+      "types": "./dist/defaults.d.ts",
+      "default": "./dist/defaults.js"
+    },
+    "./config": {
+      "@ncs/source": "./src/config-schema.ts",
+      "types": "./dist/config-schema.d.ts",
+      "default": "./dist/config-schema.js"
+    },
+    "./dto": {
+      "@ncs/source": "./src/dto/index.ts",
+      "types": "./dist/dto/index.d.ts",
+      "default": "./dist/dto/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json",
+    "test": "vitest run --project shared"
+  },
+  "dependencies": {
+    "zod": "^4.6.7"
+  }
+}

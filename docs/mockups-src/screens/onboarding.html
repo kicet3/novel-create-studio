@@ -1,0 +1,220 @@
+<section class="screen" data-screen="onboarding" data-title="작품 생성·목표 설정" data-release="MVP-α" data-fr="FR-NOV-01, FR-NOV-02, FR-NOV-04a, FR-HIL-01a, FR-HIL-01b, FR-HIL-02, FR-BUD-02, FR-ONT-04, FR-SET-01, FR-SET-02, FR-SET-03, FR-MSG-02">
+  <div class="app">
+    <aside class="app-side">
+      <div class="app-brand"><span class="logo">N</span>Novel Studio</div>
+      <div class="app-novel"><b>회귀자의 흉터</b><span class="muted">현대판타지 · 회귀물</span></div>
+      <div class="app-nav" data-nav="home">작품 홈</div>
+      <div class="app-nav" data-nav="board">작업 보드</div>
+      <div class="app-nav" data-nav="inbox">인박스 <span class="count">3</span></div>
+      <div class="app-nav" data-nav="manuscript">원고</div>
+      <div class="app-nav" data-nav="ontology">세계관 온톨로지</div>
+      <div class="app-nav" data-nav="foreshadow">떡밥</div>
+      <div class="app-nav" data-nav="media">미디어 스튜디오 <span class="badge violet">v1</span></div>
+      <div class="app-nav" data-nav="audit">감사 타임라인</div>
+      <div class="app-nav is-active" data-nav="settings">설정</div>
+    </aside>
+    <div class="app-main">
+      <div class="app-top">
+        <div>
+          <h3>새 작품 만들기</h3>
+          <div class="sub">초기 설정 · LLM API 키 등록 완료 · 외부 전송 데이터 범위 안내 확인됨</div>
+        </div>
+        <div class="row"><span class="badge">임시 저장됨 14:02</span><span class="btn ghost sm">나중에 계속</span></div>
+      </div>
+
+      <ol class="ob-steps">
+        <li class="done"><span class="ob-num">✓</span><span><b>기본 정보</b><span class="small muted">장르·규칙·시간선</span></span></li>
+        <li class="done"><span class="ob-num">✓</span><span><b>목표</b><span class="small muted">화수·분량·예산</span></span></li>
+        <li class="cur"><span class="ob-num">3</span><span><b>자율성 수준</b><span class="small muted">승인 게이트 위치</span></span></li>
+        <li><span class="ob-num">4</span><span><b>채널 연결</b><span class="small muted">Telegram·연결 점검</span></span></li>
+      </ol>
+
+      <div class="ob-layout">
+        <div class="stack">
+          <div class="card">
+            <h4><span>3단계 · 자율성 수준 선택</span><span class="badge">나중에 설정에서 변경 가능</span></h4>
+            <p class="small muted ob-p">자율성 수준(<code>AutonomyLevel</code>)은 사람 승인 게이트의 위치를 정합니다. 질문 민감도와는 독립입니다. 변경 이력은 감사 로그에 남습니다.</p>
+
+            <div class="grid g3 ob-cards">
+              <label class="ob-opt is-sel">
+                <div class="row between"><span class="ob-radio" aria-hidden="true"></span><span class="badge accent">기본값</span></div>
+                <b>화별 승인</b><code>episode_approval</code>
+                <div class="small muted">매 화를 직접 확인하고 결정 기록을 남깁니다.</div>
+                <div class="ob-h">사람 승인 필수</div>
+                <ul class="ob-g">
+                  <li>기획서 확정</li>
+                  <li>아크 계획(떡밥 배치 포함)</li>
+                  <li>화 승인 <b>매 화</b></li>
+                </ul>
+                <div class="ob-h">자동 확정 시점</div>
+                <ul class="ob-g faint-li">
+                  <li>신규 사실·떡밥 <code>paid_off</code>: 화 승인 때</li>
+                  <li>공개 처리: 사람</li>
+                </ul>
+                <div class="row"><span class="badge ok">MVP-α</span></div>
+              </label>
+
+              <label class="ob-opt">
+                <div class="row between"><span class="ob-radio" aria-hidden="true"></span><span class="badge info">MVP-β</span></div>
+                <b>아크별 승인</b><code>arc_approval</code>
+                <div class="small muted">비축분이 쌓이면 아크 단위로 묶어 승인합니다.</div>
+                <div class="ob-h">사람 승인 필수</div>
+                <ul class="ob-g">
+                  <li>기획서 확정</li>
+                  <li>아크 계획(떡밥 배치 포함)</li>
+                  <li>아크 승인 <b>아크의 모든 화 일괄</b></li>
+                </ul>
+                <div class="ob-h">자동 확정 시점</div>
+                <ul class="ob-g faint-li">
+                  <li>화 승인: 없음(아크 승인에 포함)</li>
+                  <li>신규 사실·<code>paid_off</code>: 아크 승인 때. 그 전엔 "미확정"으로 컨텍스트 사용</li>
+                  <li>공개 처리: 사람</li>
+                </ul>
+                <div class="row"><span class="badge">MVP-β에서 선택 가능</span></div>
+              </label>
+
+              <label class="ob-opt">
+                <div class="row between"><span class="ob-radio" aria-hidden="true"></span><span class="badge info">MVP-β</span></div>
+                <b>완전 자율</b><code>full_auto</code>
+                <div class="small muted">질문 응답만 하고 나머지는 에이전트가 진행합니다.</div>
+                <div class="ob-h">사람 승인 필수</div>
+                <ul class="ob-g">
+                  <li>기획서 확정</li>
+                </ul>
+                <div class="ob-h">자동 확정 시점</div>
+                <ul class="ob-g faint-li">
+                  <li>아크 계획: 없음(정보성 보고)</li>
+                  <li>신규 사실: 검사·검수 통과(열린 높음 이슈 0건) 시 자동, 주체는 에이전트</li>
+                  <li><code>paid_off</code>: 검사 통과 시 자동(근거 씬 기록)</li>
+                  <li>공개 처리: 일괄 공개 질문(주 1회 digest), 예약 공개를 켜면 연재 주기대로</li>
+                </ul>
+                <div class="callout warn small">선택 시 정책·저작권 경고를 확인해야 합니다. 이 열은 잠정(D-24)입니다.</div>
+              </label>
+            </div>
+
+            <div class="callout small ob-common">
+              <b>모든 수준에서 항상 사람 승인</b> — 기존 <code>approved</code> 사실 변경 · 리트콘(<code>published_locked</code> 변경) · 결말 방향 변경 · 예산 하드 한도 도달 후 재개 · 떡밥 폐기. 떡밥 기한 연장은 수준과 관계없이 질문으로 갑니다.
+            </div>
+          </div>
+
+          <div class="card">
+            <h4><span>게이트 비교 (6.3.1)</span><span class="small muted">필수 = 승인 없이는 진행 안 함 · 없음 = 진행하고 기록</span></h4>
+            <div class="tbl-wrap">
+              <table class="tbl">
+                <thead><tr><th>이벤트</th><th><code>episode_approval</code></th><th><code>arc_approval</code></th><th><code>full_auto</code></th></tr></thead>
+                <tbody>
+                  <tr><td>기획서 확정</td><td><span class="badge danger">필수</span></td><td><span class="badge danger">필수</span></td><td><span class="badge danger">필수</span></td></tr>
+                  <tr><td>아크 계획(떡밥 배치 포함)</td><td><span class="badge danger">필수</span></td><td><span class="badge danger">필수</span></td><td><span class="badge">없음(정보성 보고)</span></td></tr>
+                  <tr><td>화 승인</td><td><span class="badge danger">필수(매 화)</span></td><td><span class="badge">없음(아크 승인에 포함)</span></td><td><span class="badge">없음</span></td></tr>
+                  <tr><td>아크 승인(아크의 모든 화 일괄)</td><td><span class="badge">없음</span></td><td><span class="badge danger">필수</span></td><td><span class="badge">없음</span></td></tr>
+                  <tr><td>신규 사실 추가(<code>candidate</code> → <code>approved</code>)</td><td>화 승인 때</td><td>아크 승인 때(그 전엔 "미확정"으로 컨텍스트 사용)</td><td>검사·검수 통과(열린 높음 이슈 0건) 시 자동, 주체 에이전트</td></tr>
+                  <tr><td>떡밥 <code>paid_off</code> 확정</td><td>화 승인 때</td><td>아크 승인 때</td><td>검사 통과 시 자동(근거 씬 기록)</td></tr>
+                  <tr><td>공개 처리</td><td>사람</td><td>사람</td><td>일괄 공개 질문(주 1회 digest) / 예약 공개 켜면 자동</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="small faint ob-p2"><code>full_auto</code> 열은 잠정(D-24). <code>co_writing</code>(공동 집필)은 v1에서 추가됩니다.</div>
+          </div>
+
+          <div class="row between">
+            <span class="btn">← 이전: 목표</span>
+            <span class="btn primary">다음: 채널 연결 →</span>
+          </div>
+        </div>
+
+        <div class="stack">
+          <div class="card">
+            <h4><span><span class="badge ok">✓</span> 1. 기본 정보</span><span class="btn ghost sm">수정</span></h4>
+            <dl class="ob-dl">
+              <dt>작품명</dt><dd>회귀자의 흉터</dd>
+              <dt>장르</dt><dd>현대판타지 회귀물 <span class="faint small">(직접 입력 · 템플릿은 v1)</span></dd>
+              <dt>타깃 독자</dt><dd>20~30대 현판 독자</dd>
+              <dt>규칙</dt><dd>회귀 시 기억만 이월, 손목 흉터가 회차를 기록</dd>
+              <dt>다중 시간선</dt><dd><span class="badge ok">사용</span> <span class="badge info">MVP-β</span><br><span class="small muted">T1 = 1회차 · T2 = 회귀 후</span></dd>
+            </dl>
+          </div>
+
+          <div class="card">
+            <h4><span><span class="badge ok">✓</span> 2. 목표</span><span class="btn ghost sm">수정</span></h4>
+            <dl class="ob-dl">
+              <dt>총 화수</dt><dd>120화</dd>
+              <dt>분량 프로필</dt><dd>기본(공백 포함 5,000~5,500자)</dd>
+              <dt>연재 주기</dt><dd>하루 1화</dd>
+              <dt>비축분 목표</dt><dd>5화</dd>
+              <dt>결말 방향</dt><dd>주인공이 회귀 원인을 끊는다</dd>
+              <dt>월 예산</dt><dd>하드 한도 $80 · 소프트 경고 80%</dd>
+              <dt>연령 등급</dt><dd>15세 <span class="faint small">(MVP는 15세 이하만)</span></dd>
+            </dl>
+          </div>
+
+          <div class="card ob-next">
+            <h4><span><span class="badge">4</span> 채널 연결 · 다음 단계</span><span class="badge">대기</span></h4>
+            <div class="small muted">Telegram 1:1 채팅에서 일회용 링크를 열고 <code>/start</code>를 누르면 이 작품에 바인딩됩니다.</div>
+            <div class="ob-link mono">t.me/NovelStudioBot?start=•••••• <span class="badge warn">1회용 · 만료 15분(가정)</span></div>
+            <div class="ob-h">연결 점검</div>
+            <ul class="list small">
+              <li><span class="badge ok">통과</span><span>LLM 키 유효성 · 잔액 $63.10</span></li>
+              <li><span class="badge">대기</span><span>봇 토큰</span></li>
+              <li><span class="badge">대기</span><span>채널 도달성 (확인용 첫 메시지)</span></li>
+              <li><span class="badge ok">통과</span><span>Graph DB 상태</span></li>
+              <li><span class="badge ok">통과</span><span>백업 위치</span></li>
+            </ul>
+            <div class="small faint">Discord 스레드 연결은 MVP-β.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="annot"> <b>요구사항 대응</b>
+    <ul>
+      <li><span class="fr">FR-NOV-01</span> 1단계 요약: 작품명·장르·타깃 독자, 연령 등급 15세(MVP는 15세 이하만, D-13)</li>
+      <li><span class="fr">FR-NOV-02</span> <span class="fr">FR-NOV-04a</span> 2단계 요약: 총 화수, 분량 프로필 기본값, 연재 주기, 비축분, 결말 방향, 예산</li>
+      <li><span class="fr">FR-BUD-02</span> 월 예산의 하드 한도와 소프트 경고</li>
+      <li><span class="fr">FR-ONT-04</span> "다중 시간선 사용" 토글(MVP-β 배지) — 시간선 T1/T2</li>
+      <li><span class="fr">FR-HIL-01a</span> <span class="fr">FR-HIL-01b</span> 3단계 카드 3개: <code>episode_approval</code> 기본값, <code>arc_approval</code>·<code>full_auto</code>는 MVP-β, <code>full_auto</code> 정책·저작권 경고 확인</li>
+      <li><span class="fr">FR-HIL-02</span> 카드별 사람 승인 게이트 요약 + 6.3.1 비교표 + 모든 수준 공통 필수 게이트</li>
+      <li><span class="fr">FR-SET-02</span> <span class="fr">FR-MSG-02</span> 4단계: Telegram 일회용·만료 링크와 <code>/start</code> 바인딩, 확인용 첫 메시지</li>
+      <li><span class="fr">FR-SET-01</span> <span class="fr">FR-SET-03</span> 상단 초기 설정 상태(LLM 키, 데이터 범위 안내)와 연결 점검 5항목</li>
+    </ul>
+  </div>
+</section>
+<style>
+[data-screen="onboarding"] .ob-steps{list-style:none;margin:0 0 14px;padding:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+[data-screen="onboarding"] .ob-steps>li{display:flex;gap:9px;align-items:center;padding:9px 11px;border:1px solid var(--border);border-radius:9px;background:var(--surface);min-width:0}
+[data-screen="onboarding"] .ob-steps>li>span:last-child{display:flex;flex-direction:column;line-height:1.35;min-width:0}
+[data-screen="onboarding"] .ob-steps b{font-size:13px}
+[data-screen="onboarding"] .ob-num{flex:none;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:700;background:var(--surface-2);color:var(--muted)}
+[data-screen="onboarding"] .ob-steps .done .ob-num{background:var(--ok-soft);color:var(--ok)}
+[data-screen="onboarding"] .ob-steps .cur{border-color:var(--accent);background:var(--accent-soft)}
+[data-screen="onboarding"] .ob-steps .cur .ob-num{background:var(--accent);color:var(--accent-text)}
+[data-screen="onboarding"] .ob-steps .cur b{color:var(--accent)}
+[data-screen="onboarding"] .ob-layout{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:12px;align-items:start}
+[data-screen="onboarding"] .ob-p{margin:-4px 0 12px}
+[data-screen="onboarding"] .ob-p2{margin-top:8px}
+[data-screen="onboarding"] .ob-cards{align-items:stretch}
+[data-screen="onboarding"] .ob-opt{display:flex;flex-direction:column;gap:5px;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--surface);cursor:default;min-width:0}
+[data-screen="onboarding"] .ob-opt>b{font-size:14.5px;margin-top:2px}
+[data-screen="onboarding"] .ob-opt>code{align-self:flex-start}
+[data-screen="onboarding"] .ob-opt.is-sel{border:2px solid var(--accent);padding:11px;background:var(--accent-soft)}
+[data-screen="onboarding"] .ob-radio{width:16px;height:16px;border-radius:50%;border:2px solid var(--faint)}
+[data-screen="onboarding"] .ob-opt.is-sel .ob-radio{border:5px solid var(--accent)}
+[data-screen="onboarding"] .ob-h{font-size:11.5px;font-weight:700;color:var(--muted);margin-top:6px}
+[data-screen="onboarding"] .ob-g{margin:0;padding-left:16px;font-size:12.5px;line-height:1.5}
+[data-screen="onboarding"] .ob-g>li{margin:2px 0}
+[data-screen="onboarding"] .ob-g.faint-li{color:var(--muted)}
+[data-screen="onboarding"] .ob-opt .callout{margin-top:auto}
+[data-screen="onboarding"] .ob-opt>.row:last-child{margin-top:auto;padding-top:6px}
+[data-screen="onboarding"] .ob-common{margin-top:12px}
+[data-screen="onboarding"] .tbl td .badge{white-space:normal}
+[data-screen="onboarding"] .tbl{min-width:560px}
+[data-screen="onboarding"] .tbl code{white-space:nowrap}
+[data-screen="onboarding"] .tbl td:first-child{min-width:120px}
+[data-screen="onboarding"] .ob-dl{display:grid;grid-template-columns:auto minmax(0,1fr);gap:5px 12px;margin:0;font-size:12.5px}
+[data-screen="onboarding"] .ob-dl dt{color:var(--muted);white-space:nowrap}
+[data-screen="onboarding"] .ob-dl dd{margin:0;min-width:0}
+[data-screen="onboarding"] .ob-next{border-style:dashed}
+[data-screen="onboarding"] .ob-link{margin:8px 0 2px;padding:7px 9px;border:1px solid var(--border);border-radius:7px;background:var(--code-bg);display:flex;flex-wrap:wrap;gap:6px;align-items:center;justify-content:space-between}
+[data-screen="onboarding"] .ob-next .list>li{align-items:center}
+@media (max-width:1100px){[data-screen="onboarding"] .ob-layout{grid-template-columns:minmax(0,1fr)}[data-screen="onboarding"] .ob-layout>.stack:last-child{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(240px,100%),1fr))}}
+@media (max-width:860px){[data-screen="onboarding"] .ob-steps{grid-template-columns:repeat(2,minmax(0,1fr))}}
+</style>

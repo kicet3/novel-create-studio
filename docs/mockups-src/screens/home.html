@@ -1,0 +1,233 @@
+<section class="screen" data-screen="home" data-title="작품 홈" data-release="MVP-α" data-fr="FR-UI-01, FR-AGT-06, FR-AGT-07, FR-AGT-12, FR-FOR-04, FR-FOR-07, FR-BUD-01, FR-BUD-02, FR-HIL-03, FR-HIL-07, FR-MSG-09, FR-MSG-17, FR-ONT-06">
+  <div class="app">
+    <aside class="app-side">
+      <div class="app-brand"><span class="logo">N</span>Novel Studio</div>
+      <div class="app-novel"><b>회귀자의 흉터</b><span class="muted">현대판타지 · 회귀물</span></div>
+      <div class="app-nav is-active" data-nav="home">작품 홈</div>
+      <div class="app-nav" data-nav="board">작업 보드</div>
+      <div class="app-nav" data-nav="inbox">인박스 <span class="count">3</span></div>
+      <div class="app-nav" data-nav="manuscript">원고</div>
+      <div class="app-nav" data-nav="ontology">세계관 온톨로지</div>
+      <div class="app-nav" data-nav="foreshadow">떡밥</div>
+      <div class="app-nav" data-nav="media">미디어 스튜디오 <span class="badge violet">v1</span></div>
+      <div class="app-nav" data-nav="audit">감사 타임라인</div>
+      <div class="app-nav" data-nav="settings">설정</div>
+    </aside>
+    <div class="app-main">
+      <div class="app-top">
+        <div>
+          <h3>작품 홈</h3>
+          <div class="sub">목표 120화 · 하루 1화 · 아크 1(1~30화) 진행 중 · 결말 방향 “주인공이 회귀 원인을 끊는다”</div>
+        </div>
+        <div class="row">
+          <span class="badge accent" title="자율성 수준">자율성 <code>episode_approval</code></span>
+          <span class="btn sm">작품 일시정지</span>
+        </div>
+      </div>
+
+      <!-- 장애 배너 영역 (FR-UI-01) -->
+      <div class="callout ok hm-status">
+        <div class="row between">
+          <span><b>시스템 정상</b> <span class="muted small">LLM 공급자 · Graph DB · Telegram 1:1(@minjun) 연결 점검 통과 · 14:02</span></span>
+          <span class="badge ok">장애 없음</span>
+        </div>
+      </div>
+      <details class="hm-example">
+        <summary class="small muted">장애 배너 예시 보기 (5.7 예외 시나리오)</summary>
+        <div class="callout danger" style="margin-top:8px">
+          <div class="row between">
+            <b>Telegram 연결 끊김 · 봇 토큰 폐기</b>
+            <span class="badge warn">웹 배너로 대체 통지</span>
+          </div>
+          <div class="small">대기 질문 3건은 대기열에 유지되고 차단형 마감 계산은 계속됩니다. 웹 인박스에서 바로 답할 수 있습니다. 재연결 후 대기 질문을 일괄 발송합니다.</div>
+          <div class="row" style="margin-top:6px"><span class="btn sm primary">채널 다시 연결</span><span class="btn sm">인박스에서 답하기</span></div>
+        </div>
+      </details>
+
+      <!-- KPI -->
+      <div class="grid g4 hm-kpis">
+        <div class="card kpi">
+          <div class="label">목표 진척 (승인 대기 포함)</div>
+          <div class="value">11 <span class="hm-of">/ 120화</span></div>
+          <div class="progress"><span style="width:9.2%"></span></div>
+          <div class="delta"><code>approved</code> 10화(공개 처리 8) · 승인 대기 1화(11화)</div>
+        </div>
+        <div class="card kpi">
+          <div class="label">비축분 (승인 대기 포함)</div>
+          <div class="value">3 <span class="hm-of">/ 목표 5화</span></div>
+          <div class="progress warn"><span style="width:60%"></span></div>
+          <div class="delta">9~11화 · 승인 대기 제외 2화 · <span class="hm-warn">목표 대비 −2</span></div>
+        </div>
+        <div class="card kpi">
+          <div class="label">다음 화 예정</div>
+          <div class="value hm-v-sm">12화</div>
+          <div class="row"><code>drafting</code><span class="badge danger"><code>blocked</code> 질문</span></div>
+          <div class="delta">예상 완료: Q-128 답변 후 약 70분</div>
+        </div>
+        <div class="card kpi">
+          <div class="label">이번 달 예산 소진</div>
+          <div class="value">52<span class="hm-of">%</span></div>
+          <div class="progress hm-budget"><span style="width:52%"></span><i style="left:80%" title="소프트 경고 80%"></i></div>
+          <div class="delta">$41.20 / $80 · 화당 평균 $1.62</div>
+        </div>
+      </div>
+
+      <div class="split hm-body">
+        <div class="stack">
+          <!-- 대기 질문 -->
+          <div class="card">
+            <h4>대기 질문 <span class="row"><span class="badge danger">차단형 2</span><a class="small">인박스 →</a></span></h4>
+            <div class="callout danger hm-q">
+              <div class="row between">
+                <span class="row"><span class="mono">Q-128</span><span class="badge danger"><code>blocking</code></span><code>single_choice</code></span>
+                <span class="small hm-warn">마감 오늘 21:00</span>
+              </div>
+              <div class="hm-qt">12화에서 최무진을 죽일까요?</div>
+              <div class="small muted">추천안 <b class="hm-text">살린다</b> — 근거: S-05 “마포 게이트 붕괴 원인” 회수에 무진의 증언이 필요합니다.</div>
+              <div class="small faint">등급 판정 근거(<code>showrunner</code>): 주요 인물의 생사 · 대기 작업: 12화 집필 · 마감이 지나도 자동 결정하지 않고 12화만 정지</div>
+              <div class="row" style="margin-top:8px"><span class="btn sm primary">추천안으로 답하기</span><span class="btn sm">다른 선택</span><span class="btn sm ghost">관련 노드 보기</span></div>
+            </div>
+            <ul class="list hm-ql">
+              <li>
+                <span class="mono small">Q-131</span>
+                <div class="hm-grow"><div>11화 승인 요청 <span class="small muted">· 요약, 주요 변경점, 연속성 경고 1건</span></div>
+                  <div class="row"><span class="badge danger"><code>blocking</code></span><code>approve_reject</code></div></div>
+                <span class="btn sm">검토</span>
+              </li>
+              <li>
+                <span class="mono small">Q-129·130</span>
+                <div class="hm-grow"><div>digest: 조연 이름, 지명 <span class="small muted">· 추천안으로 먼저 진행 중</span></div>
+                  <div class="row"><span class="badge warn"><code>non_blocking</code></span><code>single_choice</code></div></div>
+                <span class="btn sm">보기</span>
+              </li>
+            </ul>
+          </div>
+
+          <!-- 연속성 이슈 -->
+          <div class="card">
+            <h4>열린 연속성 이슈 <span class="row"><span class="badge">2건</span><a class="small">원고 →</a></span></h4>
+            <ul class="list">
+              <li>
+                <span class="badge danger">높음</span>
+                <div class="hm-grow">12화 씬2: 서윤이 도현의 회귀를 암시하는 대사
+                  <div class="small muted">인물 지식 제약 위반 · 근거 사실 「한서윤은 아크 2 끝까지 도현의 회귀 사실을 모른다」 <code>approved</code> · 출처: 질문 답변</div></div>
+              </li>
+              <li>
+                <span class="badge warn">중간</span>
+                <div class="hm-grow">11화: 무진의 의수가 오른팔로 표기
+                  <div class="small muted">외형 · 캐논은 왼팔 (<code>published_locked</code>, 4화)</div></div>
+              </li>
+            </ul>
+            <div class="small faint" style="margin-top:6px">심각도 높음 이슈가 열려 있는 화는 <code>awaiting_approval</code>로 넘어가지 않습니다.</div>
+          </div>
+
+          <!-- 에이전트 실행 -->
+          <div class="card">
+            <h4>에이전트 실행 현황 <a class="small">작업 보드 →</a></h4>
+            <div class="tbl-wrap">
+              <table class="tbl">
+                <thead><tr><th>역할</th><th>작업</th><th>상태</th><th>이번 실행</th></tr></thead>
+                <tbody>
+                  <tr><td><code>writer</code></td><td>12화 초고</td><td><span class="badge danger"><code>blocked</code> Q-128</span></td><td class="faint">대기</td></tr>
+                  <tr><td><code>planner</code></td><td>13화 아웃라인</td><td><span class="badge info">실행 중</span></td><td>$0.21 · 6분</td></tr>
+                  <tr><td><code>foreshadow_manager</code></td><td>13화 떡밥 배치 점검</td><td><span class="badge info">실행 중</span></td><td>$0.08 · 2분</td></tr>
+                  <tr><td><code>continuity_editor</code></td><td>11화 재검사</td><td><span class="badge ok">완료</span></td><td>$0.34</td></tr>
+                  <tr><td><code>showrunner</code></td><td>비축분 스케줄 조정</td><td><span class="badge">대기</span></td><td class="faint">—</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="small faint" style="margin-top:6px">차단형 질문과 무관한 13~14화 작업은 계속 진행됩니다.</div>
+          </div>
+        </div>
+
+        <div class="stack">
+          <!-- 답변 반영 알림 -->
+          <div class="card">
+            <h4>최근 답변 반영 <span class="badge ok">반영 완료</span></h4>
+            <div class="small"><b>Q-127</b> “12화 씬3에 한서윤을 등장시킬까요?” → <b>등장하지 않음 (씬3은 도현·무진 둘만)</b></div>
+            <ul class="hm-refl small">
+              <li>사실·제약: 사실 1건 · 제약 1건 <code>approved</code> (출처: Q-127 답변)</li>
+              <li>후속 실행: <span class="mono">run-0412</span> (<code>writer</code>), <span class="mono">run-0413</span> (<code>continuity_editor</code>)</li>
+              <li>반영 위치: 12화 씬3 원고 2,140~3,380자 구간</li>
+            </ul>
+            <div class="small faint">Telegram으로 반영 요약 + 링크 발송 · 어제 22:31</div>
+          </div>
+
+          <!-- 기한 임박 떡밥 -->
+          <div class="card">
+            <h4>기한 임박 떡밥 <a class="small">떡밥 →</a></h4>
+            <div class="callout warn">
+              <div class="row between"><b><span class="mono">S-05</span> 마포 게이트 붕괴 원인</b><span class="badge warn">기한 25화</span></div>
+              <div class="row small" style="margin-top:4px"><code>planted</code><span class="muted">2화 설치 · 강화 없음 · 기한까지 13화 · 20화 아웃라인부터 회수 후보 씬 제안</span></div>
+            </div>
+            <ul class="list small" style="margin-top:8px">
+              <li><span class="mono">S-02</span><div class="hm-grow">흑월 결사의 은빛 문장 <span class="muted">· <code>reinforced</code> 9화</span></div><span class="badge">기한 30화</span></li>
+              <li><span class="mono">S-01</span><div class="hm-grow">도현 손목의 흉터 <span class="muted">· <code>planted</code> 5화 · 중요도 높음</span></div><span class="badge">기한 40화</span></li>
+            </ul>
+          </div>
+
+          <!-- 떡밥 지표 -->
+          <div class="card">
+            <h4>떡밥 지표</h4>
+            <div class="grid g3 hm-met">
+              <div><div class="small muted">회수율</div><div class="hm-mv">—</div><div class="small faint">기한 도래 0건</div></div>
+              <div><div class="small muted">폐기율</div><div class="hm-mv">—</div><div class="small faint">기한 도래 0건</div></div>
+              <div><div class="small muted">기한 초과 처리율</div><div class="hm-mv">—</div><div class="small faint">기한 초과 0건 · 목표 90%</div></div>
+            </div>
+            <div class="small faint" style="margin-top:8px">활성 4건(<code>planted</code> 3 · <code>reinforced</code> 1) · <code>planned</code> 1건(S-03)</div>
+          </div>
+
+          <!-- 예산 -->
+          <div class="card">
+            <h4>예산 <a class="small">설정 →</a></h4>
+            <div class="row between small"><span>텍스트 (월)</span><span class="mono">$41.20 / $80</span></div>
+            <div class="progress hm-budget" style="margin:6px 0"><span style="width:52%"></span><i style="left:80%"></i></div>
+            <div class="small muted">소프트 경고 80% · 하드 한도 도달 시 자동 일시정지 후 승인 질문</div>
+            <div class="small faint">이번 달 <code>unknown_cost</code> 0건 · 원장 중복 0건</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="annot"> <b>요구사항 대응</b>
+    <ul>
+      <li><span class="fr">FR-UI-01</span> 목표 진척·비축분·다음 화·대기 질문·연속성 이슈·기한 임박 떡밥·예산·장애 배너를 한 화면에 두고 각 카드에서 상세 화면으로 이동</li>
+      <li><span class="fr">FR-AGT-06</span> 비축분을 승인 대기 포함(3)·제외(2)로 나누고 목표 대비 차이와 다음 화 예상 완료 시각 표시</li>
+      <li><span class="fr">FR-AGT-12</span> 12화 상태 <code>drafting</code> + 별도 표시 <code>blocked</code>(질문)</li>
+      <li><span class="fr">FR-HIL-07</span> Q-128을 차단형으로 강조하고 <code>showrunner</code>의 등급 판정 근거(주요 인물의 생사)와 마감 후 자동 결정 없음(fail-closed) 표시</li>
+      <li><span class="fr">FR-AGT-07</span> 실행 현황: 12화가 막혀도 13화 아웃라인과 떡밥 배치 점검 실행은 계속</li>
+      <li><span class="fr">FR-ONT-06</span> 열린 이슈의 심각도·근거 사실 표시, 높음 이슈의 승인 대기 차단 안내</li>
+      <li><span class="fr">FR-FOR-04</span> 기한 임박 S-05의 남은 화수와 회수 후보 씬 제안 시작 시점(기한 5화 전, 가정) 표시</li>
+      <li><span class="fr">FR-FOR-07</span> 회수율·폐기율·기한 초과 처리율을 따로 표시(9절 정의: 분모가 기한 도래·기한 초과 떡밥이라 현재는 “—”)</li>
+      <li><span class="fr">FR-BUD-01·02</span> 예산 소진율, 소프트 경고 80% 표시, 하드 한도 동작 안내, <code>unknown_cost</code> 건수</li>
+      <li><span class="fr">FR-MSG-09·17</span> 최근 답변 반영 기록(변경 목록·후속 실행 ID·반영 위치)과 채널 통지</li>
+      <li><span class="fr">5.7</span> 정상 상태 표시와 채널 연결 끊김 배너 예시(웹 인박스 대체 경로)</li>
+      <li><span class="fr">FR-HIL-03</span> 작품 단위 일시정지 버튼</li>
+    </ul>
+  </div>
+</section>
+<style>
+[data-screen="home"] .hm-status{margin-bottom:6px}
+[data-screen="home"] .hm-example{margin-bottom:14px}
+[data-screen="home"] .hm-example summary{cursor:pointer}
+[data-screen="home"] .hm-kpis{margin-bottom:12px}
+[data-screen="home"] .hm-kpis .progress{margin:4px 0 6px}
+[data-screen="home"] .hm-of{font-size:13px;font-weight:500;color:var(--muted)}
+[data-screen="home"] .hm-v-sm{margin-bottom:2px}
+[data-screen="home"] .hm-warn{color:var(--warn);font-weight:600}
+[data-screen="home"] .hm-text{color:var(--text)}
+[data-screen="home"] .hm-budget{position:relative;overflow:visible}
+[data-screen="home"] .hm-budget>i{position:absolute;top:-3px;width:2px;height:13px;background:var(--warn);border-radius:1px}
+[data-screen="home"] .hm-q{margin-bottom:6px}
+[data-screen="home"] .hm-qt{font-weight:700;font-size:15px;margin:4px 0 2px}
+[data-screen="home"] .hm-grow{flex:1;min-width:0}
+[data-screen="home"] .hm-ql .row{margin-top:3px}
+[data-screen="home"] .hm-refl{margin:8px 0;padding-left:18px}
+[data-screen="home"] .hm-refl li{margin:2px 0}
+[data-screen="home"] .hm-mv{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums}
+[data-screen="home"] .hm-met{gap:8px}
+[data-screen="home"] .card h4 a{font-weight:500;text-decoration:none;cursor:default}
+[data-screen="home"] .tbl td{white-space:nowrap}
+@media (max-width:860px){[data-screen="home"] .app,[data-screen="home"] .hm-body{grid-template-columns:minmax(0,1fr)}[data-screen="home"] .app-side{min-width:0}}
+@media (max-width:520px){[data-screen="home"] .hm-met{grid-template-columns:repeat(3,minmax(0,1fr))}}
+</style>

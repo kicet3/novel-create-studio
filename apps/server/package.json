@@ -1,0 +1,37 @@
+{
+  "name": "@ncs/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "@ncs/source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "dev": "NCS_DEV_MODE=1 tsx watch --env-file-if-exists=../../.env.dev --conditions=@ncs/source src/main.ts",
+    "start": "node --env-file-if-exists=../../.env.live dist/main.js",
+    "build": "tsc -b",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json",
+    "test": "vitest run --project server"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "1.5.0",
+    "@ncs/db": "workspace:*",
+    "@ncs/shared": "workspace:*",
+    "dotenv": "^18.0.9",
+    "drizzle-orm": "0.45.4",
+    "express": "^5.3.0",
+    "pino": "^10.4.0",
+    "postgres": "^3.4.9",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.15",
+    "@ncs/test-kit": "workspace:*",
+    "@types/express": "^5.0.6",
+    "pino-pretty": "^13.2.0"
+  }
+}

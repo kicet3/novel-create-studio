@@ -1,0 +1,233 @@
+<section class="screen" data-screen="board" data-title="작업 보드" data-release="MVP-α" data-fr="FR-UI-02, FR-AGT-03, FR-AGT-12, FR-AGT-07, FR-AGT-06">
+  <div class="app">
+    <aside class="app-side">
+      <div class="app-brand"><span class="logo">N</span>Novel Studio</div>
+      <div class="app-novel"><b>회귀자의 흉터</b><span class="muted">현대판타지 · 회귀물</span></div>
+      <div class="app-nav" data-nav="home">작품 홈</div>
+      <div class="app-nav is-active" data-nav="board">작업 보드</div>
+      <div class="app-nav" data-nav="inbox">인박스 <span class="count">3</span></div>
+      <div class="app-nav" data-nav="manuscript">원고</div>
+      <div class="app-nav" data-nav="ontology">세계관 온톨로지</div>
+      <div class="app-nav" data-nav="foreshadow">떡밥</div>
+      <div class="app-nav" data-nav="media">미디어 스튜디오 <span class="badge violet">v1</span></div>
+      <div class="app-nav" data-nav="audit">감사 타임라인</div>
+      <div class="app-nav" data-nav="settings">설정</div>
+    </aside>
+    <div class="app-main">
+      <div class="app-top">
+        <div>
+          <h3>작업 보드</h3>
+          <div class="sub">아크 1 (1~30화) · 자율성 <code>episode_approval</code> · 상태는 화 상태(<code>Episode</code>) 기준</div>
+        </div>
+        <div class="row">
+          <div class="tabs bd-seg"><span class="is-active">칸반</span><span>트리</span></div>
+          <span class="chip">아크 1 ▾</span>
+          <span class="chip">막힌 작업만</span>
+        </div>
+      </div>
+
+      <div class="grid g4 bd-kpis">
+        <div class="card kpi"><div class="label">실행 중</div><div class="value">1</div><div class="delta">13화 아웃라인 · <code>planner</code></div></div>
+        <div class="card kpi"><div class="label">막힌 화 (<code>blocked</code>)</div><div class="value" style="color:var(--danger)">1</div><div class="delta">원인: 질문 1 · 예산 0 · 장애 0 (승인 대기 11화는 별도)</div></div>
+        <div class="card kpi"><div class="label">비축분 (목표 5화)</div><div class="value">3<span class="bd-unit">화</span></div><div class="delta">승인 대기 포함 3 · 제외 2 · 목표 대비 −2<br>다음 화(12화) 예상 완료: <code>Q-128</code> 답변 후</div></div>
+        <div class="card kpi"><div class="label">이번 달 비용</div><div class="value">$41.20</div><div class="progress" style="margin-top:6px"><span style="width:52%"></span></div><div class="delta">상한 $80 중 52% · 화당 평균 $1.62</div></div>
+      </div>
+
+      <div class="card bd-pipe-card">
+        <h4>화 생성 파이프라인 <span class="small muted">단계 이름 = 화 상태 · 각 단계 산출물은 버전으로 저장</span></h4>
+        <ol class="bd-pipe">
+          <li><span class="bd-step">아웃라인</span><code>outlining</code><span class="small muted"><code>planner</code></span><span class="badge info">13·14화</span></li>
+          <li class="is-blocked"><span class="bd-step">초고</span><code>drafting</code><span class="small muted"><code>writer</code></span><span class="badge danger">12화 막힘</span></li>
+          <li><span class="bd-step">검사 (연속성·떡밥)</span><code>checking</code><span class="small muted"><code>continuity_editor</code> · <code>foreshadow_manager</code></span><span class="badge">0</span></li>
+          <li><span class="bd-step">검수 (문장·분량)</span><code>polishing</code><span class="small muted"><code>line_editor</code></span><span class="badge">0</span></li>
+          <li class="is-wait"><span class="bd-step">승인 대기</span><code>awaiting_approval</code><span class="small muted">사람 · <code>approve_reject</code></span><span class="badge warn">11화</span></li>
+        </ol>
+        <div class="small muted bd-pipe-foot">이후 <code>approved</code> → 공개 처리 시 <code>published</code>. 반려하면 <code>revising</code>으로 가서 고른 단계(아웃라인부터 / 초고부터 / 문장만)부터 다시 진행합니다. 반려된 화는 재승인 전까지 비축분에서 빠집니다. 같은 화 반려 3회(가정)면 방향 결정 차단형 질문(재기획 / 사람 직접 수정 / 보류).</div>
+      </div>
+
+      <div class="callout danger bd-alert">
+        <div class="row between">
+          <div><b>12화가 막혔습니다</b> · 사유: 질문 <code>Q-128</code> <span class="badge danger">blocking</span> <code>single_choice</code><br>
+          <span class="small">“12화에서 최무진을 죽일까요?” · 추천안: 살린다 (S-05 회수에 무진의 증언 필요) · 마감 오늘 21:00 · 마감이 지나도 자동 결정하지 않음</span></div>
+          <span class="btn sm primary">인박스에서 답하기</span>
+        </div>
+        <div class="small muted" style="margin-top:4px">의존하지 않는 작업은 계속 진행 중: 13화 아웃라인(<code>planner</code> 실행 중), 14화 아웃라인 대기열.</div>
+      </div>
+
+      <div class="bd-hint small faint">열 9개 · 가로로 스크롤 →</div>
+      <div class="bd-board">
+        <div class="bd-col">
+          <div class="bd-colh"><code>planned</code><span class="bd-n">16</span></div>
+          <div class="bd-card is-dim">
+            <div class="row between"><b>15~30화</b><span class="small muted">16개 화</span></div>
+            <div class="small muted">아크 1 후반 · 아웃라인 전</div>
+            <div class="small">15화: S-03 설치 예정</div>
+            <div class="row"><span class="chip mono">showrunner</span></div>
+          </div>
+        </div>
+
+        <div class="bd-col">
+          <div class="bd-colh"><code>outlining</code><span class="bd-n">2</span></div>
+          <div class="bd-card is-run">
+            <div class="row between"><b>13화</b><span class="bd-live"><i></i>실행 중</span></div>
+            <div class="small">게이트 잔류자 수색 · 비트 6/9</div>
+            <div class="row"><span class="chip mono">planner</span><span class="small muted">4분째 · $0.11</span></div>
+          </div>
+          <div class="bd-card">
+            <div class="row between"><b>14화</b><span class="small muted">대기열</span></div>
+            <div class="small">흑월 결사 첫 접촉</div>
+            <div class="row"><span class="chip mono">planner</span><span class="small muted">13화 다음</span></div>
+          </div>
+        </div>
+
+        <div class="bd-col">
+          <div class="bd-colh"><code>drafting</code><span class="bd-n">1</span></div>
+          <div class="bd-card is-blocked">
+            <div class="row between"><b>12화</b><span class="badge danger">blocked</span></div>
+            <div class="small">무진의 선택 · 씬 1/4 초고 완료</div>
+            <div class="bd-reason"><span class="bd-rk">질문</span><code>Q-128</code> 응답 대기 · 마감 21:00</div>
+            <div class="row"><span class="chip mono">writer</span><span class="small muted">답변 대기 · $0.58</span></div>
+          </div>
+        </div>
+
+        <div class="bd-col is-empty">
+          <div class="bd-colh"><code>checking</code><span class="bd-n">0</span></div>
+          <div class="bd-empty">없음</div>
+        </div>
+
+        <div class="bd-col is-empty">
+          <div class="bd-colh"><code>polishing</code><span class="bd-n">0</span></div>
+          <div class="bd-empty">없음</div>
+        </div>
+
+        <div class="bd-col">
+          <div class="bd-colh"><code>awaiting_approval</code><span class="bd-n">1</span></div>
+          <div class="bd-card is-wait">
+            <div class="row between"><b>11화</b><span class="badge warn">승인 대기</span></div>
+            <div class="small">은빛 문장의 주인 · 5,312자</div>
+            <div class="bd-reason warn"><span class="bd-rk">승인</span><code>Q-131</code> <code>approve_reject</code> · 연속성 경고 1(중간)</div>
+            <div class="row"><span class="chip">사람</span><span class="small muted">$1.71</span></div>
+          </div>
+        </div>
+
+        <div class="bd-col is-empty">
+          <div class="bd-colh"><code>revising</code><span class="bd-n">0</span></div>
+          <div class="bd-empty">반려된 화 없음</div>
+        </div>
+
+        <div class="bd-col">
+          <div class="bd-colh"><code>approved</code><span class="bd-n">2</span></div>
+          <div class="bd-card">
+            <div class="row between"><b>10화</b><span class="badge ok">비축분</span></div>
+            <div class="small">청람 길드 입단 시험</div>
+            <div class="row"><span class="small muted">5,148자 · $1.58</span></div>
+          </div>
+          <div class="bd-card">
+            <div class="row between"><b>9화</b><span class="badge ok">비축분</span></div>
+            <div class="small">S-02 은빛 문장 강화</div>
+            <div class="row"><span class="small muted">5,401자 · $1.66</span></div>
+          </div>
+        </div>
+
+        <div class="bd-col">
+          <div class="bd-colh"><code>published</code><span class="bd-n">8</span></div>
+          <div class="bd-card is-dim">
+            <div class="row between"><b>1~8화</b><span class="badge accent">공개 처리</span></div>
+            <div class="small muted">사실 <code>published_locked</code></div>
+            <div class="small muted">최근: 8화 · 어제 20:10</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid g2 bd-bottom">
+        <div class="card">
+          <h4>차단 사유별 <span class="small muted">아크 1</span></h4>
+          <ul class="list small">
+            <li><span class="badge danger">질문</span><span>12화 · <code>Q-128</code> 차단형 질문 대기 (Q-129/130 비차단형은 추천안으로 진행)</span></li>
+            <li><span class="badge warn">승인</span><span>11화 · <code>Q-131</code> 화 승인 요청</span></li>
+            <li><span class="badge">예산</span><span class="muted">없음 · 소프트 경고 80% 미도달</span></li>
+            <li><span class="badge">장애</span><span class="muted">없음 · 공급자 정상</span></li>
+          </ul>
+        </div>
+        <div class="card">
+          <h4>최근 실행 <span class="small muted">단계별 소요·비용</span></h4>
+          <div class="tbl-wrap">
+            <table class="tbl">
+              <tr><th>화</th><th>단계</th><th>역할</th><th>소요</th><th>비용</th></tr>
+              <tr><td>13</td><td><code>outlining</code></td><td class="mono">planner</td><td>4분 · 진행</td><td>$0.11</td></tr>
+              <tr><td>12</td><td><code>drafting</code></td><td class="mono">writer</td><td>11분 · 대기</td><td>$0.58</td></tr>
+              <tr><td>11</td><td><code>polishing</code></td><td class="mono">line_editor</td><td>6분</td><td>$0.22</td></tr>
+              <tr><td>11</td><td><code>checking</code></td><td class="mono">continuity_editor</td><td>9분</td><td>$0.31</td></tr>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="annot"> <b>요구사항 대응</b>
+    <ul>
+      <li><span class="fr">FR-UI-02</span> 아크 1의 화 단위 칸반. 카드마다 담당 역할 칩, 실행 중 표시(13화), 차단 사유(질문·승인·예산·장애)와 하단 사유별 집계.</li>
+      <li><span class="fr">FR-AGT-12</span> 열 9개가 화 상태 <code>planned</code>~<code>published</code>와 같음. <code>blocked</code>는 열이 아니라 카드 표시(12화). 반려 시 <code>revising</code>과 되돌릴 단계 안내.</li>
+      <li><span class="fr">FR-AGT-03</span> 상단 파이프라인 5단계와 단계별 담당 역할, 최근 실행 표의 단계별 소요 시간·비용.</li>
+      <li><span class="fr">FR-AGT-07</span> 12화가 <code>Q-128</code>로 막혀도 13·14화 아웃라인은 계속 진행.</li>
+      <li><span class="fr">FR-AGT-06</span> 비축분 KPI에 승인 대기 포함·제외, 목표 대비 차이, 다음 화 예상 완료 시각 표시.</li>
+    </ul>
+  </div>
+</section>
+<style>
+[data-screen="board"] .bd-seg{margin:0;border-bottom:0}
+[data-screen="board"] .bd-seg>span{padding:3px 10px}
+[data-screen="board"] .bd-unit{font-size:13px;font-weight:600;margin-left:2px}
+[data-screen="board"] .bd-kpis{margin-bottom:12px}
+[data-screen="board"] .bd-pipe-card{margin-bottom:12px}
+[data-screen="board"] .bd-pipe{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;counter-reset:st}
+[data-screen="board"] .bd-pipe>li{position:relative;display:flex;flex-direction:column;align-items:flex-start;gap:3px;padding:8px 10px 8px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;min-width:0;counter-increment:st}
+[data-screen="board"] .bd-pipe>li::before{content:counter(st);position:absolute;top:8px;right:9px;font-size:11px;color:var(--faint);font-weight:700}
+[data-screen="board"] .bd-pipe>li:not(:last-child)::after{content:"→";position:absolute;right:-11px;top:50%;transform:translateY(-50%);color:var(--faint);font-size:12px;z-index:1;background:var(--surface);border-radius:50%;line-height:14px}
+[data-screen="board"] .bd-pipe>li.is-blocked{border-color:var(--danger);background:var(--danger-soft)}
+[data-screen="board"] .bd-pipe>li.is-wait{border-color:var(--warn);background:var(--warn-soft)}
+[data-screen="board"] .bd-step{font-weight:700;font-size:13px}
+[data-screen="board"] .bd-pipe code{font-size:11px}
+[data-screen="board"] .bd-pipe-foot{margin-top:8px}
+[data-screen="board"] .bd-alert{margin-bottom:12px}
+[data-screen="board"] .bd-hint{text-align:right;margin-bottom:4px}
+[data-screen="board"] .bd-board{display:flex;gap:8px;overflow-x:auto;padding-bottom:8px;margin-bottom:12px;scroll-snap-type:x proximity}
+[data-screen="board"] .bd-col{flex:0 0 168px;background:var(--surface-2);border:1px solid var(--border);border-radius:9px;padding:8px;display:flex;flex-direction:column;gap:6px;scroll-snap-align:start}
+[data-screen="board"] .bd-col.is-empty{flex-basis:118px}
+[data-screen="board"] .bd-colh{display:flex;align-items:center;justify-content:space-between;gap:4px;font-weight:600;padding:0 2px 2px}
+[data-screen="board"] .bd-colh code{background:transparent;padding:0;font-size:11.5px;font-weight:700;overflow-wrap:anywhere}
+[data-screen="board"] .bd-n{font-size:11px;color:var(--muted);background:var(--surface);border-radius:999px;padding:0 7px;border:1px solid var(--border)}
+[data-screen="board"] .bd-empty{font-size:12px;color:var(--faint);text-align:center;padding:14px 4px;border:1px dashed var(--border);border-radius:7px}
+[data-screen="board"] .bd-card{background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--border);border-radius:7px;padding:7px 9px;display:flex;flex-direction:column;gap:4px;font-size:13px;box-shadow:var(--shadow)}
+[data-screen="board"] .bd-card .chip{font-size:11px;padding:0 7px}
+[data-screen="board"] .bd-card.is-run{border-left-color:var(--accent)}
+[data-screen="board"] .bd-card.is-blocked{border-color:var(--danger);border-left-color:var(--danger)}
+[data-screen="board"] .bd-card.is-wait{border-left-color:var(--warn)}
+[data-screen="board"] .bd-card.is-dim{background:var(--surface);opacity:.85}
+[data-screen="board"] .bd-reason{font-size:12px;background:var(--danger-soft);color:var(--danger);border-radius:5px;padding:3px 6px}
+[data-screen="board"] .bd-reason.warn{background:var(--warn-soft);color:var(--warn)}
+[data-screen="board"] .bd-reason code{background:transparent;padding:0;color:inherit;font-size:11.5px}
+[data-screen="board"] .bd-rk{font-weight:700;margin-right:4px}
+[data-screen="board"] .bd-live{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;color:var(--accent)}
+[data-screen="board"] .bd-live i{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+[data-screen="board"] .bd-bottom .tbl td,[data-screen="board"] .bd-bottom .tbl th{padding:5px 8px;white-space:nowrap}
+[data-screen="board"] .bd-bottom .list>li{align-items:center}
+@media (max-width:1100px){
+  [data-screen="board"] .bd-pipe{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  [data-screen="board"] .bd-pipe>li::after{display:none}
+  [data-screen="board"] .bd-pipe>li:last-child{grid-column:1/-1}
+}
+@media (max-width:860px){
+  [data-screen="board"] .bd-hint{display:none}
+  [data-screen="board"] .bd-bottom{grid-template-columns:minmax(0,1fr)}
+  [data-screen="board"] .app-main>*{min-width:0;max-width:100%}
+  [data-screen="board"] .bd-board{flex-direction:column;overflow:visible}
+  [data-screen="board"] .bd-col,[data-screen="board"] .bd-col.is-empty{flex:none}
+  [data-screen="board"] .bd-col.is-empty{flex-direction:row;align-items:center;justify-content:space-between;padding:6px 8px}
+  [data-screen="board"] .bd-col.is-empty .bd-colh{padding:0}
+  [data-screen="board"] .bd-col.is-empty .bd-empty{border:0;padding:0}
+}
+@media (max-width:520px){
+  [data-screen="board"] .bd-pipe{grid-template-columns:1fr}
+}
+</style>

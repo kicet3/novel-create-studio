@@ -1,0 +1,38 @@
+{
+  "name": "novel-create-studio-root",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm -r --parallel --filter @ncs/server --filter @ncs/web run dev",
+    "start:live": "node --env-file=.env.live apps/server/dist/main.js",
+    "build": "pnpm -r run build",
+    "typecheck": "pnpm -r run typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:live": "vitest run --config vitest.live.config.ts",
+    "lint": "pnpm -r run typecheck",
+    "db:check-embedded": "pnpm --filter @ncs/db run check-embedded",
+    "ncs": "pnpm --filter @ncs/cli dev --"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "fast-check": "^4.10.2",
+    "tsx": "4.23.15",
+    "typescript": "~5.9.3",
+    "vitest": "^5.1.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "embedded-postgres",
+      "@embedded-postgres/darwin-arm64",
+      "@embedded-postgres/darwin-x64",
+      "@embedded-postgres/linux-x64",
+      "@embedded-postgres/linux-arm64",
+      "esbuild"
+    ]
+  }
+}

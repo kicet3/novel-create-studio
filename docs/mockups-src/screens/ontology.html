@@ -1,0 +1,207 @@
+<section class="screen" data-screen="ontology" data-title="세계관 온톨로지" data-release="MVP-α" data-fr="FR-UI-05a, FR-UI-05b, FR-ONT-01, FR-ONT-02, FR-ONT-03, FR-ONT-04, FR-ONT-05, FR-ONT-09, FR-ONT-10a">
+  <div class="app">
+    <aside class="app-side">
+      <div class="app-brand"><span class="logo">N</span>Novel Studio</div>
+      <div class="app-novel"><b>회귀자의 흉터</b><span class="muted">현대판타지 · 회귀물</span></div>
+      <div class="app-nav" data-nav="home">작품 홈</div>
+      <div class="app-nav" data-nav="board">작업 보드</div>
+      <div class="app-nav" data-nav="inbox">인박스 <span class="count">3</span></div>
+      <div class="app-nav" data-nav="manuscript">원고</div>
+      <div class="app-nav is-active" data-nav="ontology">세계관 온톨로지</div>
+      <div class="app-nav" data-nav="foreshadow">떡밥</div>
+      <div class="app-nav" data-nav="media">미디어 스튜디오 <span class="badge violet">v1</span></div>
+      <div class="app-nav" data-nav="audit">감사 타임라인</div>
+      <div class="app-nav" data-nav="settings">설정</div>
+    </aside>
+    <div class="app-main">
+      <div class="app-top">
+        <div>
+          <h3>세계관 온톨로지</h3>
+          <div class="sub">엔티티 46 · 관계 71 · 사실 312 (캐논 287 · <code>candidate</code> 25) · 다중 시간선 사용 ON</div>
+        </div>
+        <div class="row">
+          <span class="ont-sel" title="N화 시점 · 시간선 선택">
+            <span class="muted small">조회 시점</span>
+            <b>12화</b><span class="faint">▾</span>
+            <span class="ont-div"></span>
+            <span class="muted small">시간선</span>
+            <b>T2 · 회귀 후</b><span class="faint">▾</span><span class="badge info">MVP-β</span>
+          </span>
+          <span class="btn sm">사실 추가</span>
+        </div>
+      </div>
+
+      <div class="callout small" style="margin-bottom:12px">
+        "<b>12화 시점, 시간선 T2</b>에서 참인 캐논"을 보고 있습니다. 12화는 집필 중이라 해당 화에서 추출된 사실은 <code>candidate</code>(미확정)로 표시되며, 자율성 수준 <code>episode_approval</code>에 따라 <b>화 승인 때</b> <code>approved</code>가 됩니다.
+      </div>
+
+      <div class="ont-body">
+        <!-- 엔티티 목록 -->
+        <div class="card ont-list">
+          <input class="input" value="" placeholder="엔티티 검색" aria-label="엔티티 검색">
+          <div class="ont-types">
+            <span class="chip is-on">전체 46</span><span class="chip">인물 14</span><span class="chip">장소 9</span><span class="chip">조직 5</span><span class="chip">사물 8</span><span class="chip">사건 6</span><span class="chip">규칙·설정 3</span><span class="chip">능력·시스템 1</span>
+          </div>
+          <div class="ont-grp">인물</div>
+          <div class="ont-ent is-sel"><span class="avatar">강</span><span><b>강도현</b><span class="small muted">주인공 · 회귀자</span></span></div>
+          <div class="ont-ent"><span class="avatar" style="background:var(--violet)">한</span><span><b>한서윤</b><span class="small muted">길드 분석관</span></span></div>
+          <div class="ont-ent"><span class="avatar" style="background:var(--warn)">최</span><span><b>최무진</b><span class="small muted">옛 동료 · 조연</span></span></div>
+          <div class="ont-ent"><span class="avatar" style="background:var(--info)">백</span><span><b>백하린</b><span class="small muted">라이벌 길드장</span></span></div>
+          <div class="ont-grp">장소</div>
+          <div class="ont-ent"><span class="ont-ico">◎</span><span><b>서울 마포 게이트 구역</b></span></div>
+          <div class="ont-ent"><span class="ont-ico">◎</span><span><b>청람 길드 본부</b></span></div>
+          <div class="ont-grp">조직</div>
+          <div class="ont-ent"><span class="ont-ico">▣</span><span><b>청람 길드</b></span></div>
+          <div class="ont-ent"><span class="ont-ico">▣</span><span><b>흑월 결사</b></span></div>
+          <div class="ont-grp">사물 · 사건 · 규칙</div>
+          <div class="ont-ent"><span class="ont-ico">◆</span><span><b>회귀 시계</b><span class="small muted">사물</span></span></div>
+          <div class="ont-ent"><span class="ont-ico">✦</span><span><b>마포 게이트 붕괴</b><span class="small muted">사건 · T1/T2 결과 다름</span></span></div>
+          <div class="ont-ent"><span class="ont-ico">§</span><span><b>회귀 시 기억만 이월</b><span class="small muted">규칙·설정</span></span></div>
+        </div>
+
+        <!-- 엔티티 상세 -->
+        <div class="stack">
+          <div class="card">
+            <div class="row between">
+              <div class="row">
+                <span class="avatar" style="width:38px;height:38px;font-size:14px">강</span>
+                <div><b style="font-size:16px">강도현</b> <span class="badge">인물</span><div class="small muted">주인공 · 회귀자 · 28세 · 청람 길드</div></div>
+              </div>
+              <div class="row"><span class="btn sm">변경 이력</span><span class="btn sm">사실 잠금</span></div>
+            </div>
+            <div class="tabs" style="margin:12px 0 0"><span class="is-active">사실</span><span>인물 지식</span><span>외형</span><span>등장 화·씬</span><span>떡밥</span><span>관계</span></div>
+          </div>
+
+          <div class="card">
+            <h4 class="ont-wrap">시점별 사실 <span class="row small muted" style="font-weight:400"><span class="badge info">신규 2</span><span class="badge">변경 0</span><span class="badge danger">충돌 1</span> 12화 초고 추출</span></h4>
+            <div class="tbl-wrap">
+              <table class="tbl">
+                <thead><tr><th>사실</th><th>유효 범위</th><th>시간선</th><th>출처</th><th>상태</th></tr></thead>
+                <tbody>
+                  <tr><td>회귀자이며 1회차(T1)의 기억을 가지고 있다</td><td>1화~</td><td><span class="badge accent">T2</span></td><td class="small">1화 씬1</td><td><code>published_locked</code></td></tr>
+                  <tr><td>T1에서 마포 게이트 붕괴로 사망</td><td>회귀 이전</td><td><span class="badge">T1</span></td><td class="small">기획서 · 사용자 입력</td><td><code>published_locked</code></td></tr>
+                  <tr><td>나이 28세</td><td>1화~</td><td><span class="badge accent">T2</span></td><td class="small">기획서 · 사용자 입력</td><td><code>published_locked</code></td></tr>
+                  <tr><td>청람 길드 소속(신입 각성자로 위장)</td><td>4화~</td><td><span class="badge accent">T2</span></td><td class="small">4화 씬3</td><td><code>published_locked</code></td></tr>
+                  <tr><td>흑월 결사의 은빛 문장을 T1 기억으로 알아본다</td><td>9화~</td><td><span class="badge accent">T2</span></td><td class="small">9화 씬4</td><td><code>approved</code></td></tr>
+                  <tr><td>최무진과 T1에서 같은 공략대 동료</td><td>회귀 이전</td><td><span class="badge">T1</span></td><td class="small">10화 씬2</td><td><code>approved</code></td></tr>
+                  <tr class="ont-cand"><td>회귀 시계가 균열을 일으키면 손목 흉터가 아린다 <span class="badge info">신규</span></td><td>12화~</td><td><span class="badge accent">T2</span></td><td class="small">12화 씬1 (추출)</td><td><code>candidate</code></td></tr>
+                  <tr class="ont-cand"><td>서윤에게 회귀 사실을 들켰다 <span class="badge danger">충돌</span> <span class="small muted">→ 연속성 이슈</span></td><td>12화 씬2</td><td><span class="badge accent">T2</span></td><td class="small">12화 씬2 (추출)</td><td><code>candidate</code></td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="small muted" style="margin-top:8px">출처가 없는 사실은 <code>approved</code>가 될 수 없습니다. <code>approved</code> 변경은 승인, <code>published_locked</code> 변경은 리트콘 승인이 필요합니다.</div>
+          </div>
+
+          <div class="grid g2">
+            <div class="card">
+              <h4>인물 지식 상태 <span class="small muted" style="font-weight:400">12화 · T2</span></h4>
+              <ul class="list small">
+                <li><span class="avatar" style="background:var(--violet)">한</span><div><b>한서윤</b>은 도현의 <b>회귀 사실을 모른다</b> <span class="badge warn">지식 제약</span><div class="muted">~아크 2 끝 · 출처: 질문 답변 · <code>approved</code></div><div class="danger-t">12화 씬2 암시 대사와 충돌 — 연속성 이슈(심각도 높음)</div></div></li>
+                <li><span class="avatar" style="background:var(--violet)">한</span><div><b>한서윤</b>은 도현을 <b>평범한 신입 각성자로 잘못 알고 있다</b> <span class="badge">오인</span><div class="muted">4화~ · 출처: 4화 씬3 · <code>published_locked</code></div></div></li>
+                <li><span class="avatar">강</span><div><b>강도현</b>은 T1의 마포 게이트 붕괴를 <b>기억한다</b> <span class="badge violet">시간선 이월</span><div class="muted">1화~ · 분기점: 회귀 · <code>published_locked</code></div></div></li>
+                <li><span class="avatar" style="background:var(--warn)">최</span><div><b>최무진</b>은 T1의 기억이 <b>없다</b><div class="muted">7화~ · 출처: 7화 씬1 · <code>published_locked</code></div></div></li>
+              </ul>
+            </div>
+            <div class="stack">
+              <div class="card">
+                <h4>외형 사실</h4>
+                <div class="row" style="align-items:flex-start;flex-wrap:nowrap">
+                  <svg class="ont-wrist" viewBox="0 0 64 64" aria-hidden="true"><rect x="2" y="2" width="60" height="60" rx="8" fill="var(--surface-2)" stroke="var(--border)"/><path d="M14 46 C24 30 40 26 52 18" stroke="var(--faint)" stroke-width="10" stroke-linecap="round" fill="none"/><path d="M26 30 l10 10 M30 27 l9 9" stroke="var(--danger)" stroke-width="2" stroke-linecap="round"/></svg>
+                  <div class="small"><b>왼쪽 손목의 사선 흉터</b> <span class="badge">상처</span><div class="muted">5화~ · T2 · 출처 5화 씬3 · <code>published_locked</code></div><div class="muted">떡밥 S-01과 연결</div></div>
+                </div>
+                <div class="small muted" style="margin-top:8px">검은 코트(의상) 2화~ · 28세(나이) 1화~</div>
+              </div>
+              <div class="card">
+                <h4>등장 화 <span class="small muted" style="font-weight:400">12화 중 11화</span></h4>
+                <div class="ont-eps"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span class="off">7</span><span>8</span><span>9</span><span>10</span><span>11</span><span class="cur">12</span></div>
+                <div class="small faint" style="margin-top:6px">칸 = 화 · 강조 = 집필 중 · 흐림 = 미등장</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid g2">
+            <div class="card">
+              <h4>관련 떡밥</h4>
+              <ul class="list small">
+                <li><code>S-01</code><div style="flex:1">도현 손목의 흉터 <div class="muted">planted 5화 · 기한 40화 · 중요도 높음</div></div><span class="badge accent">planted</span></li>
+                <li><code>S-04</code><div style="flex:1">회귀 시계의 균열 <div class="muted">planted 1화 · 기한 120화(최종)</div></div><span class="badge accent">planted</span></li>
+                <li><code>S-05</code><div style="flex:1">마포 게이트 붕괴 원인 <div class="muted">planted 2화 · 기한 25화</div></div><span class="badge warn">기한 임박</span></li>
+              </ul>
+            </div>
+            <div class="card">
+              <h4>관계도 · 시간선 <span class="badge violet">v1</span></h4>
+              <svg class="graph" viewBox="0 0 320 196" role="img" aria-label="강도현 중심 관계도">
+                <g class="edge"><line x1="160" y1="92" x2="62" y2="34"/><line x1="160" y1="92" x2="258" y2="34"/><line x1="160" y1="92" x2="52" y2="128"/><line x1="160" y1="92" x2="268" y2="128"/><line x1="160" y1="92" x2="160" y2="170"/></g>
+                <line x1="160" y1="92" x2="258" y2="34" stroke="var(--danger)" stroke-width="1.4" stroke-dasharray="4 3"/>
+                <circle class="node" cx="160" cy="92" r="22" style="fill:var(--accent-soft)"/><text x="160" y="96" text-anchor="middle" font-weight="700">강도현</text>
+                <circle class="node" cx="62" cy="34" r="16"/><text x="62" y="62" text-anchor="middle">한서윤</text>
+                <circle class="node" cx="258" cy="34" r="16"/><text x="258" y="62" text-anchor="middle">흑월 결사</text>
+                <circle class="node" cx="52" cy="128" r="16"/><text x="52" y="156" text-anchor="middle">최무진</text>
+                <circle class="node" cx="268" cy="128" r="16"/><text x="268" y="156" text-anchor="middle">백하린</text>
+                <circle class="node" cx="160" cy="170" r="14"/><text x="196" y="174" text-anchor="start">청람 길드</text>
+                <text x="98" y="56" class="ont-el">동료</text><text x="180" y="50" class="ont-el">적대(T1)</text><text x="92" y="104" class="ont-el">옛 동료</text><text x="214" y="104" class="ont-el">경쟁</text><text x="164" y="140" class="ont-el">소속</text>
+              </svg>
+              <svg class="graph" viewBox="0 0 320 50" role="img" aria-label="시간선 T1, T2 타임라인">
+                <line x1="10" y1="14" x2="120" y2="14" stroke="var(--faint)" stroke-width="2"/><text x="10" y="9" class="ont-el">T1 · 1회차</text>
+                <path d="M120 14 Q132 14 136 36" stroke="var(--accent)" stroke-width="1.5" fill="none" stroke-dasharray="3 2"/><text x="124" y="9" class="ont-el">회귀(분기점)</text>
+                <line x1="136" y1="36" x2="310" y2="36" stroke="var(--accent)" stroke-width="2"/>
+                <circle cx="150" cy="36" r="3" fill="var(--accent)"/><circle cx="196" cy="36" r="3" fill="var(--accent)"/><circle cx="254" cy="36" r="3" fill="var(--accent)"/><circle cx="296" cy="36" r="4" fill="var(--warn)"/>
+                <text x="150" y="49" text-anchor="middle" class="ont-el">1화</text><text x="196" y="49" text-anchor="middle" class="ont-el">5화</text><text x="254" y="49" text-anchor="middle" class="ont-el">9화</text><text x="296" y="49" text-anchor="middle" class="ont-el">12화</text><text x="310" y="30" text-anchor="end" class="ont-el">T2</text>
+              </svg>
+            </div>
+          </div>
+
+          <div class="card">
+            <h4 class="ont-wrap">변경 이력 <span class="small muted" style="font-weight:400">사실 "청람 길드 소속"</span></h4>
+            <ul class="list small ont-hist">
+              <li><span class="badge">v3</span><div style="flex:1"><code>approved</code> → <code>published_locked</code> · 4화 공개 처리 · 사람(민준)</div><span class="btn sm" title="published_locked는 리트콘 승인 필요">되돌리기 (리트콘 승인 필요)</span></li>
+              <li><span class="badge">v2</span><div style="flex:1"><code>candidate</code> → <code>approved</code> · 4화 승인 때 · 사람(민준)</div></li>
+              <li><span class="badge">v1</span><div style="flex:1"><code>candidate</code> 생성 · 4화 씬3 추출 · world_keeper</div></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="annot"> <b>요구사항 대응</b>
+    <ul>
+      <li><span class="fr">FR-UI-05a</span> 왼쪽 엔티티 목록(유형 필터·검색)과 오른쪽 상세(사실·등장 화·떡밥).</li>
+      <li><span class="fr">FR-ONT-01</span> 인물, 장소, 조직, 사물, 사건, 규칙·설정, 능력·시스템 유형별 엔티티 목록과 관계(관계 탭).</li>
+      <li><span class="fr">FR-ONT-02</span> 사실 표의 유효 범위·시간선·출처·상태 열, 상단 "12화 시점 · 시간선 T2" 조회 선택기.</li>
+      <li><span class="fr">FR-ONT-03</span> 인물 지식 상태 카드: 모름·오인·기억, 서윤의 답변 유래 지식 제약과 충돌 표시.</li>
+      <li><span class="fr">FR-ONT-04</span> T1/T2 사실 구분, 회귀 분기점, 이월된 기억(시간선 이월 배지). 시간선 선택기의 MVP-β 배지대로 MVP-α는 단일 시간선이며, 이 부분은 MVP-β 화면입니다.</li>
+      <li><span class="fr">FR-ONT-05</span> 12화 초고 추출 결과의 신규·변경·충돌 분류. 충돌 후보는 연속성 이슈로 연결.</li>
+      <li><span class="fr">FR-ONT-09</span> 사실 추가·잠금 버튼과 버전 이력, <code>published_locked</code> 되돌리기는 리트콘 승인이 필요.</li>
+      <li><span class="fr">FR-ONT-10a</span> 외형 사실(왼쪽 손목 흉터·의상·나이)을 시점별 사실로 표시.</li>
+      <li><span class="fr">FR-UI-05b</span> 관계도·시간선 타임라인 미니 뷰(v1 배지).</li>
+    </ul>
+  </div>
+</section>
+<style>
+[data-screen="ontology"] .ont-sel{display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;border:1px solid var(--border);background:var(--surface);border-radius:8px;padding:4px 10px;font-size:13px}
+[data-screen="ontology"] .ont-div{width:1px;height:16px;background:var(--border);margin:0 4px}
+[data-screen="ontology"] .ont-body{display:grid;grid-template-columns:220px minmax(0,1fr);gap:12px;align-items:start}
+[data-screen="ontology"] .ont-list{padding:12px;display:flex;flex-direction:column;gap:2px}
+[data-screen="ontology"] .ont-types{display:flex;flex-wrap:wrap;gap:4px;margin:8px 0 4px}
+[data-screen="ontology"] .ont-types .chip{font-size:11.5px;padding:1px 7px}
+[data-screen="ontology"] .ont-types .chip.is-on{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+[data-screen="ontology"] .ont-grp{font-size:11px;font-weight:700;color:var(--faint);margin:8px 4px 2px}
+[data-screen="ontology"] .ont-ent{display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:7px;font-size:13px;line-height:1.35}
+[data-screen="ontology"] .ont-ent>span:last-child{display:flex;flex-direction:column;min-width:0}
+[data-screen="ontology"] .ont-ent.is-sel{background:var(--accent-soft)}
+[data-screen="ontology"] .ont-ico{width:26px;height:26px;flex:none;display:grid;place-items:center;border-radius:6px;background:var(--surface-2);color:var(--muted);font-size:12px}
+[data-screen="ontology"] .ont-cand td{background:var(--info-soft)}
+[data-screen="ontology"] .danger-t{color:var(--danger);font-weight:600}
+[data-screen="ontology"] .ont-wrist{width:56px;height:56px;flex:none}
+[data-screen="ontology"] .ont-eps{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:3px}
+[data-screen="ontology"] .ont-eps>span{text-align:center;font-size:11px;padding:3px 0;border-radius:4px;background:var(--accent-soft);color:var(--accent);font-weight:600}
+[data-screen="ontology"] .ont-eps>span.off{background:var(--surface-2);color:var(--faint);font-weight:400}
+[data-screen="ontology"] .ont-eps>span.cur{background:var(--warn-soft);color:var(--warn);outline:1px dashed var(--warn)}
+[data-screen="ontology"] .graph .ont-el{fill:var(--muted);font-size:9.5px}
+[data-screen="ontology"] .tbl{min-width:640px}
+[data-screen="ontology"] .ont-hist>li{flex-wrap:wrap}
+[data-screen="ontology"] h4.ont-wrap{flex-wrap:wrap}
+[data-screen="ontology"] code{white-space:nowrap}
+[data-screen="ontology"] .tbl td:nth-child(2),[data-screen="ontology"] .tbl td:nth-child(3){white-space:nowrap}
+@media (max-width:860px){[data-screen="ontology"] .ont-body{grid-template-columns:minmax(0,1fr)}}
+</style>

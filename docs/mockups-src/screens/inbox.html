@@ -1,0 +1,267 @@
+<section class="screen" data-screen="inbox" data-title="인박스" data-release="MVP-α" data-fr="FR-UI-03, FR-MSG-01, FR-MSG-06, FR-MSG-07, FR-MSG-08, FR-MSG-09, FR-MSG-12, FR-MSG-16, FR-MSG-17, FR-MSG-18, FR-HIL-07">
+  <div class="app">
+    <aside class="app-side">
+      <div class="app-brand"><span class="logo">N</span>Novel Studio</div>
+      <div class="app-novel"><b>회귀자의 흉터</b><span class="muted">현대판타지 · 회귀물</span></div>
+      <div class="app-nav" data-nav="home">작품 홈</div>
+      <div class="app-nav" data-nav="board">작업 보드</div>
+      <div class="app-nav is-active" data-nav="inbox">인박스 <span class="count">3</span></div>
+      <div class="app-nav" data-nav="manuscript">원고</div>
+      <div class="app-nav" data-nav="ontology">세계관 온톨로지</div>
+      <div class="app-nav" data-nav="foreshadow">떡밥</div>
+      <div class="app-nav" data-nav="media">미디어 스튜디오 <span class="badge violet">v1</span></div>
+      <div class="app-nav" data-nav="audit">감사 타임라인</div>
+      <div class="app-nav" data-nav="settings">설정</div>
+    </aside>
+    <div class="app-main">
+      <div class="app-top">
+        <div>
+          <h3>인박스</h3>
+          <div class="sub">질문과 승인 요청 · 메신저와 같은 질문을 여기서도 답할 수 있습니다</div>
+        </div>
+        <div class="row small">
+          <span class="chip">자율성 <code>episode_approval</code></span>
+          <span class="chip">질문 민감도 보통</span>
+        </div>
+      </div>
+
+      <div class="ib-layout">
+        <!-- ===== 좌측: 질문 목록 ===== -->
+        <div class="ib-list card">
+          <div class="ib-filter">
+            <span class="chip is-on">전체 7</span>
+            <span class="chip"><i class="dot d-danger"></i><code>blocking</code> 2</span>
+            <span class="chip"><i class="dot d-warn"></i><code>non_blocking</code> 3</span>
+            <span class="chip"><i class="dot d-info"></i><code>informational</code> 1</span>
+            <span class="chip">늦은 답변 1</span>
+          </div>
+
+          <div class="ib-group">대기 · 차단형</div>
+          <div class="ib-item is-sel">
+            <div class="row between"><span class="mono faint">Q-128</span><span class="badge danger"><code>blocking</code></span></div>
+            <div class="ib-q">12화에서 최무진을 죽일까요?</div>
+            <div class="row small muted"><code>single_choice</code><span>마감 오늘 21:00</span><span class="badge warn">12화 작업 정지</span></div>
+          </div>
+          <div class="ib-item">
+            <div class="row between"><span class="mono faint">Q-131</span><span class="badge danger"><code>blocking</code></span></div>
+            <div class="ib-q">11화 승인 요청</div>
+            <div class="row small muted"><code>approve_reject</code><span>연속성 경고 1건</span></div>
+            <div class="small faint">미리보기: 요약 · 주요 변경점 3 · <a class="ib-link">전문 보기</a></div>
+          </div>
+
+          <div class="ib-group">digest · 비차단형 (15분 창 · 2건)</div>
+          <div class="ib-digest">
+            <div class="row between small"><span class="muted">digest 08:00 Telegram 발송</span><span class="badge warn"><code>non_blocking</code></span></div>
+            <div class="ib-sub"><span class="mono faint">Q-129</span> 12화 조연 게이트 관리인 이름<div class="small muted">추천안 "윤태석"으로 먼저 진행 중 · 마감 내일 08:00</div></div>
+            <div class="ib-sub"><span class="mono faint">Q-130</span> 마포 게이트 구역 내 폐상가 지명<div class="small muted">추천안 "망원 7지구"로 먼저 진행 중 · 마감 내일 08:00</div></div>
+          </div>
+
+          <div class="ib-group">늦은 답변</div>
+          <div class="ib-item">
+            <div class="row between"><span class="mono faint">Q-126</span><span class="badge warn"><code>non_blocking</code></span></div>
+            <div class="ib-q">11화 길드 회의 장소</div>
+            <div class="small muted">마감 후 추천안 "청람 길드 본부 회의실" 적용됨 → 이후 다른 답 "본부 옥상" 도착</div>
+            <div class="row small" style="margin-top:4px"><span class="badge danger">늦은 답변</span><span class="faint">영향 범위: 공개 전(11화 비축분)</span></div>
+            <div class="row" style="margin-top:6px"><span class="btn sm">수정 요청 만들기</span><span class="btn sm">추천안 유지</span></div>
+          </div>
+
+          <div class="ib-group">정보성</div>
+          <div class="ib-item">
+            <div class="row between"><span class="small">일일 요약 (오늘)</span><span class="badge info"><code>informational</code></span></div>
+            <div class="small muted">비축분 3화 · 이번 달 비용 $41.20 (52%)</div>
+          </div>
+
+          <div class="ib-group">답변 완료</div>
+          <div class="ib-item">
+            <div class="row between"><span class="mono faint">Q-127</span><span class="row"><span class="badge warn"><code>non_blocking</code></span><span class="badge ok">반영 완료</span></span></div>
+            <div class="ib-q">12화 씬3에 한서윤을 등장시킬까요?</div>
+            <div class="small muted"><code>free_text</code> 답변 · 해석 확인 후 반영</div>
+          </div>
+        </div>
+
+        <!-- ===== 우측: Q-128 상세 ===== -->
+        <div class="stack">
+          <div class="card">
+            <div class="row between">
+              <div class="row"><span class="mono faint">Q-128</span><span class="badge danger"><code>blocking</code> 차단형</span><span class="badge"><code>single_choice</code></span></div>
+              <span class="badge warn">마감 오늘 21:00 · 남은 시간 6시간 40분</span>
+            </div>
+            <h4 class="ib-title">12화에서 최무진을 죽일까요?</h4>
+            <p class="small muted" style="margin:0 0 10px">요청 <code>writer</code> · 12화 씬3 직전에서 생사 결정을 못 해 집필이 멈췄습니다. 다른 화 작업(13~14화 아웃라인)은 계속 진행 중입니다.</p>
+
+            <div class="ib-opts">
+              <label class="ib-opt is-rec"><span class="radio on"></span><span><b>살린다</b> <span class="badge accent">추천안</span><br><span class="small muted">중상 후 생존, 13화에서 증언</span></span></label>
+              <label class="ib-opt"><span class="radio"></span><span><b>죽인다</b><br><span class="small muted">12화 씬3에서 사망, 도현 각성 계기</span></span></label>
+            </div>
+
+            <div class="callout" style="margin-top:10px">
+              <b>추천 근거</b> · <code>showrunner</code><br>
+              떡밥 <b>S-05 "마포 게이트 붕괴 원인"</b>(<code>planted</code> 2화, 기한 25화, 기한 임박)을 회수하려면 붕괴 현장에 있던 무진의 증언이 필요합니다. 사망 시 회수 경로를 새로 설계해야 해 25화 기한을 넘길 가능성이 높습니다.
+            </div>
+
+            <div class="grid g2" style="margin-top:10px">
+              <div class="ib-meta">
+                <div class="lbl">등급 판정 근거</div>
+                <div><b>주요 인물의 생사</b> — 기본 차단형 기준(FR-HIL-07)</div>
+                <div class="small muted">판정 주체 <code>showrunner</code> · 비차단형으로 낮출 수 없음</div>
+              </div>
+              <div class="ib-meta">
+                <div class="lbl">마감 처리</div>
+                <div>마감이 지나도 자동 결정하지 않음 (fail-closed)</div>
+                <div class="small muted">12화 작업만 정지 · 리마인더 마감 직후, 24시간 후 (잠정 D-14)</div>
+              </div>
+            </div>
+
+            <div class="ib-meta" style="margin-top:10px">
+              <div class="lbl">관련 작업·온톨로지 노드</div>
+              <div class="row">
+                <a class="chip ib-link">작업 · 12화 집필 (<code>writer</code>)</a>
+                <a class="chip ib-link">인물 · 최무진</a>
+                <a class="chip ib-link">떡밥 · S-05</a>
+                <a class="chip ib-link">사실 · 무진은 2화 붕괴 현장에 있었다 <code>published_locked</code></a>
+              </div>
+            </div>
+
+            <div class="ib-meta" style="margin-top:10px">
+              <div class="lbl">발송 채널 상태</div>
+              <div class="ib-ch">
+                <div class="row between"><span class="row"><i class="dot d-ok"></i><b>Telegram</b> <span class="muted small">1:1 · @minjun</span></span><span class="badge ok">발송됨 08:00</span></div>
+                <div class="small muted">방해금지 시간 종료 후 즉시 발송 · 버튼 2개로 변환</div>
+              </div>
+              <div class="ib-ch">
+                <div class="row between"><span class="row"><i class="dot d-off"></i><b>Discord</b> <span class="muted small">스레드 #회귀자의-흉터</span></span><span class="badge">미연결 · MVP-β</span></div>
+                <div class="small muted">연결되면 같은 질문 ID로 표시되고, 먼저 온 답만 채택 · 다른 채널 메시지는 "답변 완료(채널, 시각)"로 갱신</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 답변 입력 + 해석 확인 -->
+          <div class="card">
+            <h4>웹에서 답하기 <span class="small muted" style="font-weight:400">메신저 장애 시에도 여기서 답하고 작업을 진행할 수 있습니다</span></h4>
+            <div class="row" style="margin-bottom:10px">
+              <span class="btn primary sm">추천안 "살린다"로 답하기</span>
+              <span class="btn sm">"죽인다"로 답하기</span>
+            </div>
+            <div class="field">
+              <label>선택지 밖 서술형 답</label>
+              <div class="input ib-ta">살리되, 증언 직후 길드를 떠나게 해줘. 도현이랑은 연락만 되는 걸로.</div>
+            </div>
+
+            <div class="ib-steps">
+              <span class="ib-step done">1 답변 입력</span>
+              <span class="ib-step on">2 해석 확인</span>
+              <span class="ib-step">3 반영</span>
+            </div>
+
+            <div class="callout warn">
+              <div class="row between"><b>해석 확인</b><span class="badge danger"><code>blocking</code> (원 질문과 같은 등급)</span></div>
+              <div class="small muted" style="margin:2px 0 8px"><code>world_keeper</code>가 답을 아래 후보로 바꿨습니다. 확인 전에는 캐논이 되지 않습니다.</div>
+              <ul class="list small">
+                <li><span class="badge">사실</span><span>최무진은 12화 시점 생존한다 <span class="faint"><code>candidate</code> → 확인 시 <code>approved</code></span></span></li>
+                <li><span class="badge">제약</span><span>최무진은 13화 증언 이후 청람 길드를 떠난다 <span class="faint"><code>candidate</code> → 확인 시 <code>approved</code></span></span></li>
+                <li><span class="badge">작업 변경</span><span>13화 아웃라인에 무진 증언·이탈 씬 추가</span></li>
+              </ul>
+              <div class="row" style="margin-top:8px">
+                <span class="btn primary sm">이대로 확정</span>
+                <span class="btn sm">고쳐서 답하기</span>
+                <span class="small faint">해석이 모호하면 확인 대신 후속 질문이 갑니다</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 이전 답변의 AnswerReflection -->
+          <div class="card">
+            <h4>답변 반영 기록 <code>AnswerReflection</code> <span class="badge ok">반영 완료</span></h4>
+            <div class="small muted" style="margin:-4px 0 10px">이전 답변 · <span class="mono">Q-127</span> "12화 씬3에 한서윤을 등장시킬까요?" · Telegram 어제 22:14 · 서술형 → 해석 확인(<code>non_blocking</code>, digest) 22:41</div>
+            <blockquote class="ib-quote">"아니. 서윤은 아직 무진을 몰라야 해. 씬3은 도현이랑 무진 둘만."</blockquote>
+            <div class="grid g3 ib-refl">
+              <div>
+                <div class="lbl">(a) 생성된 사실·제약</div>
+                <ul class="list small">
+                  <li><span class="badge">사실</span><span>한서윤은 12화 시점 최무진을 모른다 <code>approved</code></span></li>
+                  <li><span class="badge">제약</span><span>12화 씬3 등장 인물: 강도현, 최무진 <code>approved</code></span></li>
+                  <li><span class="badge">작업 변경</span><span>12화 씬3 아웃라인 수정</span></li>
+                </ul>
+                <div class="small faint">출처: Q-127 답변</div>
+              </div>
+              <div>
+                <div class="lbl">(b) 후속 실행 ID</div>
+                <div class="mono">run-0412</div>
+                <div class="small muted"><code>planner</code> · 답변 ID를 컨텍스트에 넣고 12화 아웃라인 재개</div>
+                <div class="mono" style="margin-top:6px">run-0413</div>
+                <div class="small muted"><code>continuity_editor</code> · 아웃라인 제약 검사 통과</div>
+              </div>
+              <div>
+                <div class="lbl">(c) 반영 위치</div>
+                <div><b>12화 아웃라인 · 씬3 항목</b></div>
+                <div class="small muted">등장 인물: 강도현, 최무진</div>
+                <span class="btn sm" style="margin-top:6px">아웃라인에서 위치 보기 →</span>
+              </div>
+            </div>
+            <div class="callout ok small" style="margin-top:10px">반영 통지 · 비차단형이라 다음 digest에 포함 · Telegram 오늘 08:00 "Q-127 반영: 12화 씬3 아웃라인, 사실 1건·제약 1건 추가. 링크"</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="annot"> <b>요구사항 대응</b>
+    <ul>
+      <li><span class="fr">FR-UI-03</span> 질문·승인 요청(Q-131 <code>approve_reject</code>, 미리보기 링크)을 한 목록에서 처리, 추천안·근거, 해석 후보 부분 수정("고쳐서 답하기"), 답변 반영 기록과 반영 위치 이동, 원시 JSON 없이 구조화 표시</li>
+      <li><span class="fr">FR-MSG-01</span> Q-128 상세에 유형, 추천안, 근거, 마감, 등급, 등급 판정 근거, 관련 작업·온톨로지 노드 링크를 모두 표시</li>
+      <li><span class="fr">FR-MSG-06</span> 좌측 등급 필터와 비차단형 Q-129/130 digest 묶음(15분 창, 추천안으로 먼저 진행), 정보성은 일일 요약</li>
+      <li><span class="fr">FR-MSG-07</span> 차단형 마감 처리: fail-closed, 12화 작업만 정지, 리마인더 일정</li>
+      <li><span class="fr">FR-MSG-08</span> Q-126 "늦은 답변" 표시와 영향 범위(공개 전), MVP-α는 기록·표시만 하고 "수정 요청 만들기/추천안 유지"를 사용자가 고름</li>
+      <li><span class="fr">FR-MSG-09</span> 하단 <code>AnswerReflection</code> 카드: (a) 사실·제약·작업 변경 (b) 후속 실행 ID (c) 반영 위치 12화 아웃라인 씬3 항목</li>
+      <li><span class="fr">FR-MSG-12</span> "웹에서 답하기" 카드로 메신저 없이도 답변 가능</li>
+      <li><span class="fr">FR-MSG-16</span> 선택지 밖 서술형 답 → <code>world_keeper</code> 해석 후보 → <code>candidate</code> 상태로 같은 등급 해석 확인 후에야 <code>approved</code></li>
+      <li><span class="fr">FR-MSG-17</span> 반영 완료 통지 기록(답변이 온 채널로 요약+링크, 비차단형 Q-127은 다음 digest에 포함)</li>
+      <li><span class="fr">FR-MSG-18</span> 발송 채널 상태: 먼저 온 답 채택, 다른 채널은 "답변 완료(채널, 시각)" 갱신 규칙 안내</li>
+      <li><span class="fr">FR-HIL-07</span> 등급 판정 근거 "주요 인물의 생사", 판정 주체 <code>showrunner</code></li>
+    </ul>
+  </div>
+</section>
+<style>
+[data-screen="inbox"] .ib-layout{display:grid;min-width:0;grid-template-columns:minmax(260px,320px) minmax(0,1fr);gap:12px;align-items:start}
+[data-screen="inbox"] .ib-list{padding:12px}
+[data-screen="inbox"] .ib-filter{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px}
+[data-screen="inbox"] .ib-filter .chip{font-size:11.5px;padding:1px 8px}
+[data-screen="inbox"] .ib-filter code{background:none;padding:0;font-size:11px}
+[data-screen="inbox"] .chip.is-on{background:var(--accent-soft);color:var(--accent);border-color:var(--accent)}
+[data-screen="inbox"] .dot{display:inline-block;width:7px;height:7px;border-radius:50%;flex:none}
+[data-screen="inbox"] .d-danger{background:var(--danger)}
+[data-screen="inbox"] .d-warn{background:var(--warn)}
+[data-screen="inbox"] .d-info{background:var(--info)}
+[data-screen="inbox"] .d-ok{background:var(--ok)}
+[data-screen="inbox"] .d-off{background:var(--faint)}
+[data-screen="inbox"] .ib-group{font-size:11.5px;font-weight:700;color:var(--muted);margin:12px 2px 5px}
+[data-screen="inbox"] .ib-item{border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin-bottom:6px;background:var(--surface)}
+[data-screen="inbox"] .ib-item.is-sel{border-color:var(--accent);background:var(--accent-soft)}
+[data-screen="inbox"] .ib-q{font-weight:600;font-size:13.5px;margin:2px 0}
+[data-screen="inbox"] .ib-digest{border:1px dashed var(--warn);border-radius:8px;padding:8px 10px;background:var(--warn-soft)}
+[data-screen="inbox"] .ib-sub{background:var(--surface);border-radius:6px;padding:6px 8px;margin-top:6px;font-size:13px}
+[data-screen="inbox"] .ib-title{font-size:17px;margin:8px 0 4px}
+[data-screen="inbox"] .ib-opts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+[data-screen="inbox"] .ib-opt{display:flex;gap:8px;align-items:flex-start;border:1px solid var(--border);border-radius:8px;padding:9px 10px;font-size:13.5px}
+[data-screen="inbox"] .ib-opt.is-rec{border-color:var(--accent);background:var(--accent-soft)}
+[data-screen="inbox"] .radio{width:14px;height:14px;border-radius:50%;border:2px solid var(--faint);flex:none;margin-top:4px}
+[data-screen="inbox"] .radio.on{border-color:var(--accent);box-shadow:inset 0 0 0 3px var(--surface);background:var(--accent)}
+[data-screen="inbox"] .ib-meta{border:1px solid var(--border);border-radius:8px;padding:8px 10px;background:var(--surface-2);font-size:13px;min-width:0}
+[data-screen="inbox"] .lbl{font-size:11.5px;font-weight:700;color:var(--muted);margin-bottom:3px}
+[data-screen="inbox"] .ib-link{text-decoration:none;color:var(--accent);white-space:normal}
+[data-screen="inbox"] .ib-ch{background:var(--surface);border:1px solid var(--border);border-radius:7px;padding:6px 9px;margin-top:6px}
+[data-screen="inbox"] .ib-ta{min-height:56px;color:var(--text)}
+[data-screen="inbox"] .ib-steps{display:flex;gap:6px;margin:12px 0 10px;flex-wrap:wrap}
+[data-screen="inbox"] .ib-step{font-size:12px;padding:2px 10px;border-radius:999px;border:1px solid var(--border);color:var(--faint)}
+[data-screen="inbox"] .ib-step.done{color:var(--ok);border-color:var(--ok)}
+[data-screen="inbox"] .ib-step.on{color:var(--accent-text);background:var(--accent);border-color:var(--accent);font-weight:600}
+[data-screen="inbox"] .list>li{align-items:baseline}
+[data-screen="inbox"] .ib-layout .list>li>.badge{white-space:nowrap;flex:none}
+[data-screen="inbox"] .ib-layout .card h4{flex-wrap:wrap}
+[data-screen="inbox"] .ib-quote{margin:0 0 10px;padding:6px 10px;border-left:3px solid var(--border);color:var(--muted);font-size:13px;background:var(--surface-2);border-radius:0 6px 6px 0}
+[data-screen="inbox"] .ib-refl>div{border:1px solid var(--border);border-radius:8px;padding:8px 10px;min-width:0}
+@media (max-width:1100px){[data-screen="inbox"] .ib-layout{grid-template-columns:minmax(0,1fr)}}
+[data-screen="inbox"] .ib-layout .badge,[data-screen="inbox"] .ib-layout .chip{white-space:normal;max-width:100%}
+[data-screen="inbox"] .ib-layout code{overflow-wrap:anywhere}
+@media (max-width:860px){[data-screen="inbox"] .ib-refl{grid-template-columns:1fr}}
+@media (max-width:520px){[data-screen="inbox"] .ib-opts{grid-template-columns:1fr}}
+</style>

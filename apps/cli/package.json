@@ -1,0 +1,25 @@
+{
+  "name": "@ncs/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "ncs": "./dist/main.js"
+  },
+  "scripts": {
+    "dev": "tsx --conditions=@ncs/source src/main.ts",
+    "build": "tsc -b",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json",
+    "test": "vitest run --project cli"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.8.1",
+    "@ncs/db": "workspace:*",
+    "@ncs/server": "workspace:*",
+    "@ncs/shared": "workspace:*",
+    "commander": "^15.0.0"
+  },
+  "devDependencies": {
+    "@ncs/test-kit": "workspace:*"
+  }
+}
