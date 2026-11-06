@@ -75,7 +75,7 @@ export interface StartedServerLike {
 export interface ServerApi {
   APP_VERSION: string;
   startServer(config?: unknown): Promise<StartedServerLike>;
-  createServerCore(o: { config: unknown; appVersion: string; db: unknown; log: unknown; databaseMode: "embedded" | "external" }): ServerCoreLike;
+  createServerCore(o: { config: unknown; appVersion: string; db: unknown; log: unknown; databaseMode: "embedded" | "external"; database?: unknown }): ServerCoreLike;
   createLogger(level: string, opts?: { pretty?: boolean }): unknown;
   /** present once the integration exports it from @ncs/server */
   backupEngine?: BackupEngineApi;

@@ -5,6 +5,7 @@
  */
 import type { Platform, ServerModule } from "../platform/index.js";
 import type { Runtime } from "../runtime/index.js";
+import type { DbConnection } from "@ncs/db";
 import { createAuditModule, type AuditService } from "../modules/audit/index.js";
 import { createSystemModule, type SystemService } from "../modules/system/index.js";
 import { createNovelModule, type NovelService } from "../modules/novel/index.js";
@@ -49,14 +50,15 @@ export interface BuildModulesOptions {
   platform: Platform;
   runtime: Runtime;
   databaseMode: "embedded" | "external";
+  database?: DbConnection;
   /** extra LLM adapters (test seam; production uses only the built-in provider adapters) */
   llmAdapters?: LlmAdapter[];
 }
 
-export function buildModules({ platform, runtime, databaseMode, llmAdapters }: BuildModulesOptions): Modules {
+export function buildModules({ platform, runtime, databaseMode, database, llmAdapters }: BuildModulesOptions): Modules {
   const audit = createAuditModule({ platform });
   const a = audit.service;
-  const system = createSystemModule({ platform, audit: a, databaseMode });
+  const system = createSystemModule({ platform, audit: a, databaseMode, database });
   const novel = createNovelModule({ platform, audit: a });
   const n = novel.service;
   system.service.setNovelLister(async () => (await n.listNovels()).map((x) => x.id));

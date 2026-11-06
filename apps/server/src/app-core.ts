@@ -5,6 +5,7 @@
 import type { Express } from "express";
 import type { LlmAdapter } from "./modules/llm/index.js";
 import { sql } from "@ncs/db/orm";
+import type { DbConnection } from "@ncs/db";
 import { DEFAULTS, type InstallConfig } from "@ncs/shared";
 import { createApp } from "./http/app.js";
 import { createPlatform, type Clock, type Db, type IdGenerator, type Logger, type Platform, type StorageProvider, type SecretCipher } from "./platform/index.js";
@@ -32,6 +33,8 @@ export interface CreateServerCoreOptions {
   db: Db;
   log: Logger;
   databaseMode: "embedded" | "external";
+  /** resolved DB connection (provider, schema, TLS) — system info and the pg_dump backup engine use it */
+  database?: DbConnection;
   clock?: Clock;
   ids?: IdGenerator;
   storage?: StorageProvider;
@@ -43,7 +46,7 @@ export interface CreateServerCoreOptions {
 export function createServerCore(o: CreateServerCoreOptions): ServerCore {
   const platform = createPlatform(o);
   const runtime = createRuntime({ log: o.log, workSignal: platform.workSignal, concurrency: o.config.run.max_concurrent_global });
-  const modules = buildModules({ platform, runtime, databaseMode: o.databaseMode, llmAdapters: o.llmAdapters });
+  const modules = buildModules({ platform, runtime, databaseMode: o.databaseMode, database: o.database, llmAdapters: o.llmAdapters });
   const list = moduleList(modules);
   let ownerId: string | null = null;
 

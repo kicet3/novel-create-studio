@@ -49,6 +49,31 @@ export const installConfigSchema = z
         /** Defaults to `<home>/data/pg` (see resolveEmbeddedDataDir). */
         embedded_data_dir: z.string().optional(),
         auto_migrate: z.boolean().default(true),
+        /**
+         * External DB hosting. Not set → detected from the URL host (`*.supabase.co`, `*.supabase.com`) else "postgres".
+         * "supabase": TLS required, transaction pooler (6543) refused, app tables isolated in `schema` (default `ncs`).
+         */
+        provider: z.enum(ENUMS.database_provider).optional(),
+        /**
+         * Dedicated schema for every app object (tables, functions, `app_migrations`), applied via the connection
+         * `search_path` (app schema first, then the extensions schema). Supabase default `ncs`; other external DBs
+         * default to the server's search_path (public). Never add it to Supabase's "Exposed schemas".
+         */
+        schema: z
+          .string()
+          .regex(/^[a-z_][a-z0-9_]{0,62}$/, "스키마 이름은 소문자·숫자·밑줄만 쓸 수 있습니다.")
+          .optional(),
+        /** schema where btree_gist / pg_trgm are created when missing (Supabase: `extensions`) */
+        extensions_schema: z
+          .string()
+          .regex(/^[a-z_][a-z0-9_]{0,62}$/, "스키마 이름은 소문자·숫자·밑줄만 쓸 수 있습니다.")
+          .default("extensions"),
+        /** Supabase only: allow `schema=public` (refused by default — public is exposed through the Data API) */
+        allow_public_schema: z.boolean().default(false),
+        /** postgres.js pool size (default 10; Supabase 5 — shared pooler/connection limits) */
+        pool_max: z.number().int().min(1).max(100).optional(),
+        /** PEM CA bundle for TLS verify-full (e.g. Supabase "Download certificate") */
+        ssl_ca_file: z.string().min(1).optional(),
       })
       .prefault({}),
     storage: z
@@ -223,7 +248,7 @@ export function crossValidateInstallConfig(cfg: {
   deployment_mode: string;
   exposure: string;
   server: { host: string; public_base_url?: string | undefined; trusted_proxies?: string[] | undefined };
-  database: { mode: string; url?: string | undefined };
+  database: { mode: string; url?: string | undefined; provider?: string | undefined; schema?: string | undefined; allow_public_schema?: boolean | undefined };
   messaging: { telegram_receive_mode?: string | undefined };
   auth: { session_secret_id?: string | undefined };
 }): ConfigIssue[] {
@@ -264,7 +289,31 @@ export function crossValidateInstallConfig(cfg: {
   if (cfg.database.mode === "external" && !cfg.database.url) {
     issues.push({ id: "CFG-5", message: "database.mode=external 은 database.url(또는 DATABASE_URL)이 필요합니다.", path: ["database", "url"] });
   }
+  if (cfg.database.mode === "external" && cfg.database.url) {
+    const sb = cfg.database.provider === "supabase" || (!cfg.database.provider && isSupabaseHost(databaseUrlHost(cfg.database.url)));
+    if (sb && cfg.database.schema === "public" && !cfg.database.allow_public_schema) {
+      issues.push({
+        id: "CFG-7",
+        message: "Supabase 에서는 public 스키마를 쓰지 않습니다(Data API로 노출됨). database.schema 를 비우거나(기본 ncs) 다른 이름을 쓰세요.",
+        path: ["database", "schema"],
+      });
+    }
+  }
   return issues;
+}
+
+/** host of a postgres URL (lower-case, no brackets) or null when unparsable */
+export function databaseUrlHost(url: string): string | null {
+  try {
+    return new URL(url).hostname.replace(/^\[|\]$/g, "").toLowerCase() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Supabase-managed Postgres hosts: direct `db.<ref>.supabase.co`, Supavisor `*.pooler.supabase.com` */
+export function isSupabaseHost(host: string | null): boolean {
+  return !!host && /(^|\.)supabase\.(co|com)$/.test(host);
 }
 
 /** Effective Telegram receive mode (CFG-4): webhook only for self_hosted + public, else polling. */
@@ -292,6 +341,13 @@ export function installConfigFromEnv(env: Record<string, string | undefined>): I
     set("database", "mode", "external");
     set("database", "url", env.DATABASE_URL);
   }
+  if (env.NCS_DB_PROVIDER) set("database", "provider", env.NCS_DB_PROVIDER.trim().toLowerCase());
+  if (env.NCS_DB_SCHEMA) set("database", "schema", env.NCS_DB_SCHEMA.trim());
+  if (env.NCS_DB_EXTENSIONS_SCHEMA) set("database", "extensions_schema", env.NCS_DB_EXTENSIONS_SCHEMA.trim());
+  if (env.NCS_DB_ALLOW_PUBLIC_SCHEMA !== undefined && env.NCS_DB_ALLOW_PUBLIC_SCHEMA !== "")
+    set("database", "allow_public_schema", /^(1|true|yes|on)$/i.test(env.NCS_DB_ALLOW_PUBLIC_SCHEMA.trim()));
+  if (env.NCS_DB_POOL_MAX) set("database", "pool_max", Number(env.NCS_DB_POOL_MAX));
+  if (env.NCS_DB_SSL_CA_FILE) set("database", "ssl_ca_file", env.NCS_DB_SSL_CA_FILE);
   if (env.NCS_PG_PORT) set("database", "embedded_port", Number(env.NCS_PG_PORT));
   if (env.NCS_PG_DATA_DIR) set("database", "embedded_data_dir", env.NCS_PG_DATA_DIR);
   if (env.NCS_TELEGRAM_API_BASE_URL) set("messaging", "telegram_api_base_url", env.NCS_TELEGRAM_API_BASE_URL);

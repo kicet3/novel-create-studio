@@ -16,8 +16,9 @@ export function registerRestoreCommand(program: Command): void {
     .option("--skip-pre-restore", "복원 전 현재 상태 백업을 건너뜀")
     .option("--force", "pre_restore 백업이 실패해도 진행")
     .option("--target-url <url>", "외부 DB 모드: 복원할 새 빈 DB URL")
+    .option("--target-schema <name>", "외부 DB 모드: 같은(또는 --target-url) DB의 새 빈 스키마로 복원 (Supabase 권장)")
     .option("--json", "JSON 출력")
-    .action(async (target: string, o: { yes?: boolean; skipPreRestore?: boolean; force?: boolean; targetUrl?: string; json?: boolean }) => {
+    .action(async (target: string, o: { yes?: boolean; skipPreRestore?: boolean; force?: boolean; targetUrl?: string; targetSchema?: string; json?: boolean }) => {
       const { config } = loadConfig();
       const s = await detectServer(config);
       if (s.running) fail(`서버가 실행 중입니다(${s.url}). \`ncs service stop\` 또는 \`ncs run\` 프로세스를 멈춘 뒤 다시 실행하세요.`);
@@ -38,6 +39,7 @@ export function registerRestoreCommand(program: Command): void {
         skipPreRestore: o.skipPreRestore,
         force: o.force,
         targetUrl: o.targetUrl,
+        targetSchema: o.targetSchema,
         log: (msg) => process.stderr.write(`  ${msg}\n`),
       });
       if (o.json) return printJson(report);

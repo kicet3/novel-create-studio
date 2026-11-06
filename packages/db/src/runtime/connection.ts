@@ -12,6 +12,9 @@ import * as schema from "../schema/index.js";
 import { EmbeddedPostgresRuntime } from "./embedded.js";
 import { runMigrations, type RunMigrationsResult } from "../migrate/runner.js";
 import { postgresJsTarget } from "../migrate/targets.js";
+import type { MigrationTarget } from "../migrate/runner.js";
+import { asConnection, plainConnection, postgresJsOptions, resolveExternalConnection, type DbConnection } from "./provider.js";
+import { assertAppSchemaUsable, hardenAppSchema, prepareAppSchema, type AppSchemaInspection } from "./app-schema.js";
 
 export type Schema = typeof schema;
 /** Driver-agnostic drizzle type: works with both postgres.js (runtime) and PGlite (tests). */
@@ -21,7 +24,9 @@ export type NcsPostgresDb = PostgresJsDatabase<Schema>;
 export interface DbHandle {
   db: NcsPostgresDb;
   sql: Sql;
+  /** carries the password: never log it (use `connection.display`) */
   url: string;
+  connection: DbConnection;
   close(): Promise<void>;
 }
 
@@ -32,11 +37,15 @@ export interface CreateDbOptions {
   onNotice?: (msg: string) => void;
 }
 
-export function createDb(url: string, opts: CreateDbOptions = {}): DbHandle {
-  const sql = postgres(url, {
-    max: opts.max ?? 10,
+/** `target`: a URL (server defaults) or a resolved connection (TLS, app-schema search_path, pool size). */
+export function createDb(target: string | DbConnection, opts: CreateDbOptions = {}): DbHandle {
+  const conn = asConnection(target);
+  const pg = postgresJsOptions(conn);
+  const sql = postgres(conn.url, {
+    max: opts.max ?? conn.poolMax,
     onnotice: (n) => opts.onNotice?.(String(n.message ?? n)),
-    connection: opts.statementTimeoutMs ? { statement_timeout: opts.statementTimeoutMs } : {},
+    ...(pg.ssl !== undefined ? { ssl: pg.ssl } : {}),
+    connection: { ...pg.connection, ...(opts.statementTimeoutMs ? { statement_timeout: opts.statementTimeoutMs } : {}) },
   });
   const db = drizzle(sql, { schema });
   // drizzle makes the date/time serializers transparent (columns map Date → string themselves), so a Date
@@ -48,7 +57,8 @@ export function createDb(url: string, opts: CreateDbOptions = {}): DbHandle {
   return {
     db,
     sql,
-    url,
+    url: conn.url,
+    connection: conn,
     close: () => sql.end({ timeout: 5 }),
   };
 }
@@ -63,14 +73,39 @@ export interface OpenedDatabase extends DbHandle {
   mode: "embedded" | "external";
   embedded: EmbeddedPostgresRuntime | null;
   migrations: RunMigrationsResult | null;
+  /** external DBs: target-schema inspection done at open (search_path applied, schema empty or the app's) */
+  schemaInspection: AppSchemaInspection | null;
+}
+
+/** The configured DB's connection (external: resolved + validated; embedded: needs the runtime's URL). */
+export function resolveDatabaseConnection(config: InstallConfig, embeddedUrl?: string): DbConnection {
+  if (config.database.mode === "external") return resolveExternalConnection(config.database);
+  if (!embeddedUrl) throw new Error("embedded database URL is required");
+  return plainConnection(embeddedUrl, config.database.pool_max ?? 10);
+}
+
+export interface MigrateDatabaseOptions {
+  appVersion: string;
+  log?: (msg: string) => void;
+  /** runs after the app schema exists and before migrations (e.g. the `pre_migration` backup) */
+  beforeMigrations?: () => Promise<void>;
+}
+
+/** prepare the app schema (external) → migrations → privileges hardening. The one migration path for every caller. */
+export async function migrateDatabase(target: MigrationTarget, conn: DbConnection, opts: MigrateDatabaseOptions): Promise<RunMigrationsResult> {
+  const isolated = !!conn.schema;
+  if (isolated) await prepareAppSchema(target, conn, opts.log);
+  await opts.beforeMigrations?.();
+  const result = await runMigrations(target, { appVersion: opts.appVersion, requireExtensions: ["btree_gist"], log: opts.log });
+  if (isolated) await hardenAppSchema(target, conn, opts.log);
+  return result;
 }
 
 export async function openDatabase(config: InstallConfig, opts: OpenDatabaseOptions): Promise<OpenedDatabase> {
   let embedded: EmbeddedPostgresRuntime | null = null;
-  let url: string;
+  let conn: DbConnection;
   if (config.database.mode === "external") {
-    if (!config.database.url) throw new Error("database.mode=external requires database.url / DATABASE_URL");
-    url = config.database.url;
+    conn = resolveDatabaseConnection(config);
   } else {
     embedded = new EmbeddedPostgresRuntime({
       dataDir: resolveEmbeddedDataDir(config),
@@ -79,17 +114,16 @@ export async function openDatabase(config: InstallConfig, opts: OpenDatabaseOpti
       onError: (m) => opts.log?.(`[pg:err] ${String(m)}`.trimEnd()),
     });
     await embedded.start();
-    url = embedded.url;
+    conn = resolveDatabaseConnection(config, embedded.url);
   }
-  const handle = createDb(url, { statementTimeoutMs: 30_000 });
+  const handle = createDb(conn, { statementTimeoutMs: 30_000 });
   let migrations: RunMigrationsResult | null = null;
+  let schemaInspection: AppSchemaInspection | null = null;
   try {
+    const target = postgresJsTarget(handle.sql);
+    if (config.database.mode === "external") schemaInspection = await assertAppSchemaUsable(target, conn);
     if (opts.migrate ?? config.database.auto_migrate) {
-      migrations = await runMigrations(postgresJsTarget(handle.sql), {
-        appVersion: opts.appVersion,
-        requireExtensions: ["btree_gist"],
-        log: opts.log,
-      });
+      migrations = await migrateDatabase(target, conn, { appVersion: opts.appVersion, log: opts.log });
     }
   } catch (err) {
     await handle.close();
@@ -101,6 +135,7 @@ export async function openDatabase(config: InstallConfig, opts: OpenDatabaseOpti
     mode: embedded ? "embedded" : "external",
     embedded,
     migrations,
+    schemaInspection,
     async close() {
       await handle.close();
       await embedded?.stop();

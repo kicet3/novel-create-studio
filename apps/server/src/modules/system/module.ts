@@ -1,3 +1,4 @@
+import type { DbConnection } from "@ncs/db";
 import type { Platform, ServerModule } from "../../platform/index.js";
 import type { AuditService } from "../audit/index.js";
 import type { SystemService } from "./index.js";
@@ -9,6 +10,8 @@ export interface SystemModuleDeps {
   platform: Platform;
   audit: AuditService;
   databaseMode: "embedded" | "external";
+  /** resolved DB connection (provider / schema / TLS); absent in PGlite tests */
+  database?: DbConnection;
   /** wired by the composition root after `novel` exists (novel-scoped checks) */
   listNovelIds?: () => Promise<string[]>;
 }

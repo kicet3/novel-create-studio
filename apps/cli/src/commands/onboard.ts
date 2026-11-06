@@ -6,7 +6,7 @@
 import type { Command } from "commander";
 import { cancel, confirm, intro, isCancel, log, note, outro, password, select, spinner, text } from "@clack/prompts";
 import { join } from "node:path";
-import { expandHome } from "@ncs/db";
+import { expandHome, redactDatabaseSecrets, resolveDatabaseConnection } from "@ncs/db";
 import { INSTALL_DEFAULTS } from "@ncs/shared";
 import { ensureDir, loadConfig, readConfigFile, writeConfigFile } from "../lib/config.js";
 import { buildOnboardConfig, DEFAULT_PORT, hostWarning, parsePort, tailscaleHostnames, type OnboardAnswers } from "../lib/onboard-plan.js";
@@ -14,6 +14,7 @@ import { detectTailscale, isTailscaleIPv4 } from "../lib/net.js";
 import { api, detectServer, serverBaseUrl } from "../lib/http.js";
 import { ownerActor, withCore } from "../lib/core.js";
 import { installService } from "./service.js";
+import { describeExternalTarget } from "../lib/doctor.js";
 
 interface OnboardFlags {
   yes?: boolean;
@@ -133,7 +134,19 @@ export function registerOnboardCommand(program: Command): void {
 
       const { config } = loadConfig();
       const notes: string[] = [];
-      if (flags.init) {
+      let dbUsable = true;
+      if (config.database.mode === "external") {
+        // DATABASE_URL (env only — the password never goes into config.json): Supabase / external PostgreSQL
+        try {
+          const t = describeExternalTarget(resolveDatabaseConnection(config));
+          (t.status === "pass" ? log.info : log.warn)(`외부 DB: ${t.message}`);
+        } catch (err) {
+          dbUsable = false;
+          log.error(redactDatabaseSecrets((err as Error).message, config.database.url));
+          notes.push("DATABASE_URL 을 고친 뒤 `ncs doctor` 로 확인하세요(Supabase: Direct 또는 Session pooler 5432).");
+        }
+      }
+      if (flags.init && dbUsable) {
         const s = spinner();
         s.start("데이터베이스 초기화·마이그레이션");
         try {
@@ -176,7 +189,7 @@ export function registerOnboardCommand(program: Command): void {
           s.stop("데이터베이스 준비 완료");
         } catch (err) {
           s.stop("데이터베이스 초기화 실패");
-          log.error((err as Error).message);
+          log.error(redactDatabaseSecrets((err as Error).message, config.database.url));
           notes.push("`ncs doctor` 로 원인을 확인하세요.");
         }
       }

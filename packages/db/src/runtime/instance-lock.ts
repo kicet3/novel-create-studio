@@ -8,6 +8,7 @@
 import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import postgres from "postgres";
+import { asConnection, postgresJsOptions, type DbConnection } from "./provider.js";
 
 export interface ServerLockInfo {
   pid: number;
@@ -109,8 +110,11 @@ export interface HeldAdvisoryLock {
  * Hold `pg_try_advisory_lock(instance_lock)` on a dedicated connection (its own one-connection client)
  * for the process lifetime. Retries briefly so a crashed predecessor's backend can notice its closed socket.
  */
-export async function acquireInstanceAdvisoryLock(url: string, opts: { retries?: number; delayMs?: number } = {}): Promise<HeldAdvisoryLock> {
-  const conn = postgres(url, { max: 1, idle_timeout: 0, onnotice: () => {} });
+export async function acquireInstanceAdvisoryLock(target: string | DbConnection, opts: { retries?: number; delayMs?: number } = {}): Promise<HeldAdvisoryLock> {
+  const c = asConnection(target);
+  const pg = postgresJsOptions(c);
+  // session-level lock: needs a real session (direct connection / Supavisor session mode; 6543 is refused earlier)
+  const conn = postgres(c.url, { max: 1, idle_timeout: 0, onnotice: () => {}, ...(pg.ssl !== undefined ? { ssl: pg.ssl } : {}), connection: pg.connection });
   const retries = opts.retries ?? 10;
   try {
     for (let i = 0; ; i++) {

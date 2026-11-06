@@ -519,6 +519,8 @@ export const ENUMS = {
   ],
   /** InstallConfig database.mode (08 5.2) */
   database_mode: ["embedded", "external"],
+  /** InstallConfig database.provider: hosting of an external DB ("supabase" = Supabase Postgres, schema isolation + TLS) */
+  database_provider: ["postgres", "supabase"],
   /** InstallConfig backup.mode (08 5.2) */
   backup_mode: ["full", "files_only"],
   /** InstallConfig storage.provider (08 5.2) */

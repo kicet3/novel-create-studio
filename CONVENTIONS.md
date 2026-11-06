@@ -35,7 +35,7 @@ NCS_HOME=/tmp/ncs-x pnpm --filter @ncs/server dev   # 임시 홈(데이터·키 
 pnpm --filter @ncs/server build && node apps/server/dist/main.js
 ```
 
-환경 변수: `NCS_DEV_MODE`(`1`/`true` = 개발 모드: 구독·OAuth 연결 방식 허용, `pnpm dev`가 설정. 없으면 운영 모드 = API 키만), `NCS_HOME`, `NCS_HOST`, `NCS_PORT`, `NCS_ALLOWED_HOSTNAMES`(Tailscale MagicDNS 이름 등), `DATABASE_URL`(external PG), `NCS_PG_PORT`, `NCS_PG_DATA_DIR`, `NCS_LLM_PROVIDER`(`anthropic` 기본 / `openai` / `xai` / `google`), `NCS_ANTHROPIC_BASE_URL`(Claude API 주소, 프록시·mock), `NCS_TELEGRAM_API_BASE_URL`(Bot API 주소, 로컬 Bot API 서버·mock), `NCS_SECRETS_MASTER_KEY`(base64 32바이트, `secrets/master.key`보다 우선), `NCS_LOG_LEVEL`, `NCS_LOG_PRETTY=1`.
+환경 변수: `NCS_DEV_MODE`(`1`/`true` = 개발 모드: 구독·OAuth 연결 방식 허용, `pnpm dev`가 설정. 없으면 운영 모드 = API 키만), `NCS_HOME`, `NCS_HOST`, `NCS_PORT`, `NCS_ALLOWED_HOSTNAMES`(Tailscale MagicDNS 이름 등), `DATABASE_URL`(external PG·Supabase), `NCS_DB_PROVIDER`·`NCS_DB_SCHEMA`·`NCS_DB_EXTENSIONS_SCHEMA`·`NCS_DB_ALLOW_PUBLIC_SCHEMA`·`NCS_DB_POOL_MAX`·`NCS_DB_SSL_CA_FILE`(README "Supabase 사용"), `NCS_PG_PORT`, `NCS_PG_DATA_DIR`, `NCS_LLM_PROVIDER`(`anthropic` 기본 / `openai` / `xai` / `google`), `NCS_ANTHROPIC_BASE_URL`(Claude API 주소, 프록시·mock), `NCS_TELEGRAM_API_BASE_URL`(Bot API 주소, 로컬 Bot API 서버·mock), `NCS_SECRETS_MASTER_KEY`(base64 32바이트, `secrets/master.key`보다 우선), `NCS_LOG_LEVEL`, `NCS_LOG_PRETTY=1`.
 
 단일 인스턴스(02 §2.3): 서버는 `$NCS_HOME/run/server.lock`(PID·host·port)과 DB advisory lock `instance_lock`을 잡습니다. 같은 홈·같은 DB로 두 번째 서버를 띄우면 바로 종료하고, `ncs restore`·`ncs migrate apply`·`ncs doctor`는 잠금 파일로 실행 중인 서버(환경 변수로만 지정한 host·port 포함)를 판단합니다.
 

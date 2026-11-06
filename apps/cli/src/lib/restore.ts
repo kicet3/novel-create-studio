@@ -12,7 +12,16 @@
  */
 import { existsSync } from "node:fs";
 import { rename, rm } from "node:fs/promises";
-import { acquireInstanceAdvisoryLock, createDb, postgresJsTarget, readLiveServerLock } from "@ncs/db";
+import {
+  acquireInstanceAdvisoryLock,
+  createDb,
+  plainConnection,
+  postgresJsTarget,
+  readLiveServerLock,
+  resolveDatabaseConnection,
+  resolveExternalConnection,
+  type DbConnection,
+} from "@ncs/db";
 import type { InstallConfig } from "@ncs/shared";
 import { embeddedDataDir, masterKeyFile, storageRoot } from "./config.js";
 import { embeddedRuntime, qi, withAdmin, withDatabase } from "./db.js";
@@ -24,6 +33,8 @@ export interface RestoreOptions {
   force?: boolean;
   /** external DB mode: URL of a fresh, empty database to restore into */
   targetUrl?: string;
+  /** external DB mode: a new, empty (or missing) schema to restore into — only that schema is written */
+  targetSchema?: string;
   log?: (msg: string) => void;
 }
 
@@ -46,8 +57,8 @@ export function restoreStamp(d = new Date()): string {
   return d.toISOString().replace(/[-:T]/g, "").replace(/\.\d{3}Z$/, "").toLowerCase();
 }
 
-async function restoreInto(engine: BackupEngineApi, url: string, bundleDir: string, config: InstallConfig, appVersion: string, log: (m: string) => void) {
-  const h = createDb(url, { max: 2 });
+async function restoreInto(engine: BackupEngineApi, conn: DbConnection, bundleDir: string, config: InstallConfig, appVersion: string, log: (m: string) => void) {
+  const h = createDb(conn, { max: 2 });
   try {
     return await engine.restoreBundle({
       target: postgresJsTarget(h.sql),
@@ -55,7 +66,8 @@ async function restoreInto(engine: BackupEngineApi, url: string, bundleDir: stri
       storageRoot: storageRoot(config),
       appVersion,
       requireExtensions: ["btree_gist"],
-      databaseUrl: url,
+      databaseUrl: conn.url,
+      connection: conn,
       log,
     });
   } finally {
@@ -71,8 +83,8 @@ export function assertNoLiveServerLock(config: InstallConfig): void {
   const holder = readLiveServerLock(config.home);
   if (holder) throw new Error(`서버가 실행 중입니다(pid ${holder.pid}, ${holder.host}:${holder.port}). 서버를 멈춘 뒤 다시 실행하세요.`);
 }
-export async function assertNoInstanceLock(url: string): Promise<void> {
-  const lock = await acquireInstanceAdvisoryLock(url, { retries: 0 }).catch(() => null);
+export async function assertNoInstanceLock(target: string | DbConnection): Promise<void> {
+  const lock = await acquireInstanceAdvisoryLock(target, { retries: 0 }).catch(() => null);
   if (!lock) throw new Error("다른 서버 프로세스가 이 데이터베이스를 쓰고 있습니다(instance_lock). 서버를 멈춘 뒤 다시 실행하세요.");
   await lock.release();
 }
@@ -112,13 +124,22 @@ export async function runRestore(config: InstallConfig, bundleDir: string, engin
   };
 
   if (config.database.mode === "external") {
-    if (!o.targetUrl) throw new Error("외부 DB 모드는 --target-url <새 빈 DB URL> 이 필요합니다. 복원 후 DATABASE_URL 을 그 DB로 바꾸세요.");
+    if (!o.targetUrl && !o.targetSchema) {
+      throw new Error("외부 DB 모드는 --target-url <새 빈 DB URL> 또는 --target-schema <새 빈 스키마> 가 필요합니다. 현재 DB·스키마는 덮어쓰지 않습니다.");
+    }
     mode = "external";
-    if (config.database.url) await assertNoInstanceLock(config.database.url);
+    const current = resolveDatabaseConnection(config);
+    const targetDb = { ...config.database, url: o.targetUrl ?? config.database.url, schema: o.targetSchema ?? config.database.schema };
+    const targetConn = resolveExternalConnection(targetDb);
+    if (targetConn.url === current.url && (targetConn.schema ?? "public") === (current.schema ?? "public")) {
+      throw new Error("복원 대상이 현재 DB·스키마와 같습니다. 새 빈 DB(--target-url) 또는 새 빈 스키마(--target-schema)를 지정하세요.");
+    }
+    await assertNoInstanceLock(current);
     await preRestore();
-    restored = await restoreInto(engine, o.targetUrl, bundleDir, config, server.APP_VERSION, log);
-    postConfig = { ...config, database: { ...config.database, url: o.targetUrl } };
-    warnings.push(`DATABASE_URL(또는 database.url)을 복원한 DB로 바꾼 뒤 서버를 시작하세요.`);
+    restored = await restoreInto(engine, targetConn, bundleDir, config, server.APP_VERSION, log);
+    postConfig = { ...config, database: targetDb };
+    if (o.targetUrl) warnings.push(`DATABASE_URL(또는 database.url)을 복원한 DB로 바꾼 뒤 서버를 시작하세요.`);
+    if (o.targetSchema) warnings.push(`NCS_DB_SCHEMA(또는 database.schema)를 ${o.targetSchema} 로 바꾼 뒤 서버를 시작하세요. 이전 스키마는 그대로 남아 있습니다.`);
   } else {
     const rt = embeddedRuntime(config);
     let clusterOk = true;
@@ -138,7 +159,7 @@ export async function runRestore(config: InstallConfig, bundleDir: string, engin
         await withAdmin(rt.url, (sql) => sql.unsafe(`CREATE DATABASE ${qi(newDb)} ENCODING 'UTF8'`));
         const newUrl = withDatabase(rt.url, newDb);
         try {
-          restored = await restoreInto(engine, newUrl, bundleDir, config, server.APP_VERSION, log);
+          restored = await restoreInto(engine, plainConnection(newUrl), bundleDir, config, server.APP_VERSION, log);
         } catch (err) {
           await withAdmin(rt.url, (sql) => sql.unsafe(`DROP DATABASE IF EXISTS ${qi(newDb)}`)).catch(() => {});
           throw err;
@@ -162,7 +183,7 @@ export async function runRestore(config: InstallConfig, bundleDir: string, engin
       const rt2 = embeddedRuntime(config, { dataDir: newDir });
       await rt2.start();
       try {
-        restored = await restoreInto(engine, rt2.url, bundleDir, config, server.APP_VERSION, log);
+        restored = await restoreInto(engine, plainConnection(rt2.url), bundleDir, config, server.APP_VERSION, log);
       } catch (err) {
         await rt2.stop().catch(() => {});
         await rm(newDir, { recursive: true, force: true });

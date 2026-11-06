@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { DEFAULTS } from "@ncs/shared";
 import { sql } from "@ncs/db/orm";
+import { describeConnection, type DbConnection } from "@ncs/db";
 import {
   actors,
   createSecretProvider,
@@ -17,6 +18,7 @@ export interface SystemServiceDeps {
   platform: Platform;
   audit: AuditService;
   databaseMode: "embedded" | "external";
+  database?: DbConnection;
   /** non-archived novel ids for novel-scoped checks */
   listNovelIds?: () => Promise<string[]>;
 }
@@ -171,6 +173,9 @@ export function createSystemService(deps: SystemServiceDeps): SystemService & { 
       devMode: platform.config.dev_mode,
       exposure: platform.config.exposure,
       databaseMode: deps.databaseMode,
+      database: deps.database
+        ? describeConnection(deps.database)
+        : { provider: "postgres", host: null, port: null, schema: null, pooler: null, sslMode: null, poolMax: 0 },
       llmProvider: platform.config.llm.provider,
       server: { host: platform.config.server.host, port: platform.config.server.port },
       home: platform.config.home,

@@ -8,7 +8,7 @@ export async function withCore<T>(config: InstallConfig, fn: (core: ServerCoreLi
   const log = server.createLogger(opts.logLevel ?? process.env.NCS_CLI_LOG_LEVEL ?? "error", { pretty: false });
   const database = await openDatabase(config, { appVersion: server.APP_VERSION });
   try {
-    const core = server.createServerCore({ config, appVersion: server.APP_VERSION, db: database.db, log, databaseMode: database.mode });
+    const core = server.createServerCore({ config, appVersion: server.APP_VERSION, db: database.db, log, databaseMode: database.mode, database: database.connection });
     await core.start({ background: false });
     try {
       return await fn(core);

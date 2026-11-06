@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:live": "vitest run --config vitest.live.config.ts",
+    "test:supabase": "vitest run --config vitest.supabase.config.ts",
     "lint": "pnpm -r run typecheck",
     "db:check-embedded": "pnpm --filter @ncs/db run check-embedded",
     "ncs": "pnpm --filter @ncs/cli dev --"

@@ -590,6 +590,7 @@ export const LABELS_KO = {
   deployment_mode: labels("deployment_mode", { local_trusted: "로컬 신뢰(로그인 없음)", self_hosted: "자체 호스팅" }),
   exposure: labels("exposure", { private: "비공개", public: "공개" }),
   database_mode: labels("database_mode", { embedded: "내장 PostgreSQL", external: "외부 PostgreSQL" }),
+  database_provider: labels("database_provider", { postgres: "PostgreSQL", supabase: "Supabase" }),
   telegram_receive_mode: labels("telegram_receive_mode", { polling: "롱 폴링", webhook: "웹훅" }),
   backup_trigger: labels("backup_trigger", { scheduled: "예약", pre_migration: "마이그레이션 전", pre_restore: "복원 전", manual: "수동" }),
   backup_mode: labels("backup_mode", { full: "전체", files_only: "파일만" }),

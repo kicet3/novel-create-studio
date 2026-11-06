@@ -11,7 +11,7 @@ import { mountBackupRoutes } from "../adapters/http/backup-routes.js";
 import { BACKUP_LOOP_INTERVAL_MS, createBackupService, type BackupServiceImpl } from "./backup-service.js";
 
 export function attachBackups<M extends ServerModule<SystemService>>(mod: M, deps: SystemModuleDeps): M {
-  const backups: BackupServiceImpl = createBackupService({ platform: deps.platform, audit: deps.audit });
+  const backups: BackupServiceImpl = createBackupService({ platform: deps.platform, audit: deps.audit, connection: deps.database });
   (mod.service as { backups: SystemService["backups"] }).backups = backups;
   mod.service.registerHealthCheck(backups.healthCheck);
   const loop: BackgroundLoop = {

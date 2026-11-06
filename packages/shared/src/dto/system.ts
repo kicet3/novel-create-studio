@@ -34,6 +34,18 @@ export const systemInfoDtoSchema = z.object({
   devMode: z.boolean(),
   exposure: z.enum(ENUMS.exposure),
   databaseMode: z.enum(ENUMS.database_mode),
+  /** password-free: provider, masked host, app schema, Supavisor mode, TLS mode */
+  database: z
+    .object({
+      provider: z.enum(ENUMS.database_provider),
+      host: z.string().nullable(),
+      port: z.number().int().nullable(),
+      schema: z.string().nullable(),
+      pooler: z.enum(["direct", "session", "transaction"]).nullable(),
+      sslMode: z.string().nullable(),
+      poolMax: z.number().int(),
+    })
+    .optional(),
   llmProvider: z.enum(["anthropic", "claude_code", "openai", "xai", "google"]),
   server: z.object({ host: z.string(), port: z.number().int() }),
   home: z.string(),

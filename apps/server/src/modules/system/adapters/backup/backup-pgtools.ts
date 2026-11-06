@@ -4,6 +4,7 @@
  * locations (Homebrew `postgresql@N`, Postgres.app, Debian `/usr/lib/postgresql/N/bin`) and pick the
  * highest major that is ≥ the server major (pg_dump refuses older-than-server).
  */
+import { libpqEnv, redactDatabaseSecrets, type DbConnection } from "@ncs/db";
 import { execFile, execFileSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { delimiter, join } from "node:path";
@@ -79,21 +80,26 @@ export function connectionArgs(url: string): { dbname: string; env: Record<strin
   return { dbname: u.toString(), env: password ? { PGPASSWORD: password } : {} };
 }
 
-function run(tool: PgTool, args: string[], env: Record<string, string>): Promise<void> {
+function run(tool: PgTool, args: string[], env: Record<string, string>, url: string): Promise<void> {
   return new Promise((res, rej) => {
     execFile(tool.path, args, { env: { ...process.env, ...env }, maxBuffer: 16 << 20 }, (err, _out, stderr) => {
-      if (err) rej(new Error(`${tool.path} 실패: ${String(stderr || err.message).trim().slice(0, 500)}`));
+      // err.message contains the command line (--dbname=…): never surface it raw
+      if (err) rej(new Error(`${tool.path} 실패: ${redactDatabaseSecrets(String(stderr || `exit ${err.code ?? "?"}`).trim(), url).slice(0, 500)}`));
       else res();
     });
   });
 }
 
-export async function runPgDump(tool: PgTool, o: { url: string; snapshot: string; file: string }): Promise<void> {
+/** `schema`: dump only the app schema (a shared Supabase project has auth/storage/other apps' schemas too) */
+export async function runPgDump(tool: PgTool, o: { url: string; snapshot: string; file: string; schema?: string | null; connection?: DbConnection }): Promise<void> {
   const c = connectionArgs(o.url);
-  await run(tool, ["-Fc", "--no-owner", "--no-privileges", `--snapshot=${o.snapshot}`, "-f", o.file, `--dbname=${c.dbname}`], c.env);
+  const args = ["-Fc", "--no-owner", "--no-privileges", `--snapshot=${o.snapshot}`, "-f", o.file];
+  if (o.schema) args.push(`--schema=${o.schema}`);
+  args.push(`--dbname=${c.dbname}`);
+  await run(tool, args, { ...(o.connection ? libpqEnv(o.connection) : {}), ...c.env }, o.url);
 }
 
-export async function runPgRestore(tool: PgTool, o: { url: string; file: string }): Promise<void> {
+export async function runPgRestore(tool: PgTool, o: { url: string; file: string; connection?: DbConnection }): Promise<void> {
   const c = connectionArgs(o.url);
-  await run(tool, ["--no-owner", "--no-privileges", "--exit-on-error", `--dbname=${c.dbname}`, o.file], c.env);
+  await run(tool, ["--no-owner", "--no-privileges", "--exit-on-error", `--dbname=${c.dbname}`, o.file], { ...(o.connection ? libpqEnv(o.connection) : {}), ...c.env }, o.url);
 }

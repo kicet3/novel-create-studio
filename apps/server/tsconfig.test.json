@@ -16,6 +16,7 @@
     "src/**/*.ts",
     "test/**/*.ts",
     "test-live/**/*.ts",
+    "test-supabase/**/*.ts",
     "scripts/**/*.ts"
   ]
 }

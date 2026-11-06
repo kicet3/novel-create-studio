@@ -255,7 +255,13 @@ MVP-α 안에서 아직 덜 된 것:
 | `NCS_HOME` | 설치 홈 | `~/.ncs` |
 | `NCS_HOST` / `NCS_PORT` | HTTP 바인드 주소 (루프백·Tailscale·사설 IP. `local_trusted`는 `0.0.0.0`·`::`·공인 IP 불가, CFG-1) | `127.0.0.1` / `3100` |
 | `NCS_ALLOWED_HOSTNAMES` | Host 헤더 허용 이름(쉼표 구분, 예: MagicDNS 짧은 이름과 전체 이름). `ncs onboard`·`ncs run`은 Tailscale IP 바인드면 둘 다 자동 추가 | — |
-| `DATABASE_URL` | 외부 PostgreSQL (설정 시 embedded 대신 사용) | — |
+| `DATABASE_URL` | 외부 PostgreSQL·Supabase (설정 시 embedded 대신 사용). 로그·오류·doctor 출력에는 비밀번호를 가린 형태만 나옵니다 | — |
+| `NCS_DB_PROVIDER` | `postgres` / `supabase` (설정 `database.provider`). 호스트가 `*.supabase.co`·`*.supabase.com`이면 자동 `supabase` | 자동 |
+| `NCS_DB_SCHEMA` | 앱 전용 스키마(설정 `database.schema`). 모든 앱 객체·`app_migrations`가 여기에만 생김 | Supabase `ncs`, 그 외 서버 기본(public) |
+| `NCS_DB_EXTENSIONS_SCHEMA` | 없는 btree_gist·pg_trgm을 만들 스키마(search_path 두 번째) | `extensions` |
+| `NCS_DB_ALLOW_PUBLIC_SCHEMA` | Supabase에서 `NCS_DB_SCHEMA=public`을 허용(권장하지 않음) | 꺼짐 |
+| `NCS_DB_POOL_MAX` | DB 연결 풀 크기 | Supabase `5`, 그 외 `10` |
+| `NCS_DB_SSL_CA_FILE` | TLS CA 파일(PEM) → `verify-full` | — (Supabase는 `require`) |
 | `NCS_PG_PORT` / `NCS_PG_DATA_DIR` | embedded PG 포트 / 데이터 디렉터리 | `54329` / `$NCS_HOME/data/pg` |
 | `NCS_DEV_MODE` | `1`/`true`면 개발 모드(설정 `dev_mode`): 구독·OAuth 연결 방식 사용 가능. `pnpm dev`가 자동 설정 | 꺼짐(운영 모드, API 키만) |
 | `NCS_LLM_PROVIDER` | 새 작품 역할의 기본 공급자: `anthropic`·`claude_code`(Claude 구독, 개발 모드만 — 운영 모드에서는 `anthropic`)·`openai`·`xai`·`google` (알 수 없는 값·미설정은 자동 선택, 위 참고) | 자동(`anthropic`, 개발 모드에서는 `claude_code`일 수 있음) |
@@ -264,6 +270,39 @@ MVP-α 안에서 아직 덜 된 것:
 | `NCS_WEB_DIST` | 정적 제공할 web 빌드 디렉터리 | `apps/web/dist` 자동 탐지 |
 | `NCS_SECRETS_MASTER_KEY` | 비밀 암호화 마스터 키(base64 32바이트). 없으면 `$NCS_HOME/secrets/master.key` | — |
 | `NCS_LOG_LEVEL` | pino 로그 레벨 | `info` |
+
+## Supabase 사용
+
+Supabase Postgres 를 외부 DB로 씁니다(운영 권장). 개발은 기본이 내장 PostgreSQL 이고, 원하면 Supabase 를 가리킬 수 있습니다.
+이미 다른 테이블이 있는 기존 Supabase 프로젝트에 넣어도 되도록 **앱 전용 스키마로 격리**합니다.
+
+1. Supabase 대시보드 → 프로젝트 → **Connect** 에서 주소를 복사합니다.
+   - **Session pooler** `postgresql://postgres.<ref>:<pw>@aws-0-<region>.pooler.supabase.com:5432/postgres` (IPv4, 권장)
+   - **Direct connection** `postgresql://postgres:<pw>@db.<ref>.supabase.co:5432/postgres` (IPv6 — IPv4 애드온이 없으면 IPv6 네트워크 필요)
+   - **Transaction pooler(포트 6543)는 쓸 수 없습니다.** 서버가 세션 advisory lock(`instance_lock`)·prepared statement 를 쓰므로
+     시작할 때 한국어 안내와 함께 거부합니다. 비밀번호의 특수 문자는 퍼센트 인코딩하세요.
+2. `.env.live` 에 `DATABASE_URL`, `NCS_DB_SCHEMA=ncs`(기본값), `NCS_DB_POOL_MAX=5` 를 적고(`.env.live.example` 참고)
+   `pnpm build && pnpm start:live`. 비밀번호는 `config.json` 에 저장하지 말고 환경 변수로만 둡니다.
+3. `ncs doctor` 로 확인합니다: 공급자·가린 호스트·풀러 방식·TLS·스키마 상태와 "만들 것" 목록이 나옵니다.
+
+동작 방식:
+
+- **스키마 격리**: 연결의 `search_path` 를 정확히 `"ncs", "extensions"` 로 보냅니다(public 없음). 테이블·인덱스·함수(`ncs_forbid_update`)·
+  트리거·`app_migrations` 는 모두 `ncs` 에만 생깁니다. 대상 스키마가 비어 있지 않은데 `app_migrations` 가 없으면(남의 스키마) 마이그레이션을 거부합니다.
+  풀러가 `search_path` 를 적용하지 않은 경우도 시작을 거부합니다. Supabase 에서 `public` 은 기본 거부(`NCS_DB_ALLOW_PUBLIC_SCHEMA=1` 로만 허용).
+- **확장**: btree_gist(필수)·pg_trgm 이 이미 있으면 그대로 재사용하고, 없으면 `CREATE EXTENSION … WITH SCHEMA extensions` 로만 만듭니다.
+  만들 수 없으면 public 에 만들지 않고 "대시보드 Database → Extensions 에서 켜라"는 메시지로 멈춥니다.
+- **Data API 차단**: 매 시작마다 `ncs` 스키마와 그 안 객체에서 `PUBLIC`·`anon`·`authenticated` 권한을 회수하고(역할이 있을 때만),
+  앱 테이블에 RLS 를 켭니다(정책 없음 — 앱이 접속하는 소유자 역할은 영향 없음). **대시보드 API 설정의 "Exposed schemas" 에 `ncs` 를 넣지 마세요.**
+  다른 스키마(public 등)의 객체·권한은 만들거나 바꾸지 않습니다.
+- **TLS**: 기본 `sslmode=require`. 서버 인증서 검증은 대시보드 Database Settings 의 CA 인증서를 받아 `NCS_DB_SSL_CA_FILE` 로(verify-full).
+  URL 의 `sslmode=disable` 은 로컬 `supabase start` 스택용으로만 존중합니다.
+- **백업**: `auto` 엔진은 호환되는 `pg_dump`(서버 메이저 이상)가 있으면 `--schema=ncs` 로 앱 스키마만 덤프하고, 없거나 실패하면 JSON 엔진으로 자동 전환합니다
+  (JSON 도 앱 스키마만 읽습니다). 복원은 현재 스키마를 덮어쓰지 않고 **새 빈 스키마**(`ncs restore <백업> --target-schema ncs_restore`) 또는 새 DB(`--target-url`)로만 합니다.
+  복원 후 `NCS_DB_SCHEMA` 를 바꿔 시작하세요.
+- **풀 크기**: Supabase 기본 5(+ `instance_lock` 1). 플랜의 연결 한도에 맞춰 `NCS_DB_POOL_MAX` 로 조정합니다.
+- **opt-in 실 DB 검사**: `NCS_TEST_SUPABASE_URL=… pnpm test:supabase` — 빌드된 서버를 그 DB(전용 임시 스키마)로 띄워 마이그레이션·헬스·작품 생성·재시작을 확인하고
+  끝나면 그 임시 스키마를 지웁니다(다른 스키마는 건드리지 않음).
 
 ## 서버 모듈과 작업 규칙
 

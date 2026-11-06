@@ -9,6 +9,7 @@
  *   writes `system.health_check_failed`.
  * - Backups/restore (MA-6): `BackupService` (application/backup-service.ts, wired by backup-wiring.ts); restore is `ncs restore`.
  */
+import type { DatabaseDescription } from "@ncs/db";
 import type { HealthCheckKind, HealthStatus, BackupTrigger, DatabaseMode } from "@ncs/shared";
 import type { HealthCheckResultsRow, BackupRecordsRow } from "@ncs/db/schema";
 import type { ActorRef, Ref, SecretProvider } from "../../platform/index.js";
@@ -54,6 +55,8 @@ export interface SystemInfo {
   devMode: boolean;
   exposure: "private" | "public";
   databaseMode: DatabaseMode;
+  /** password-free DB description (host masked) */
+  database: DatabaseDescription;
   llmProvider: "anthropic" | "claude_code" | "openai" | "xai" | "google";
   server: { host: string; port: number };
   home: string;

@@ -8,7 +8,7 @@ import { createHash } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { access, mkdir, readFile, rm, statfs, constants as fsc } from "node:fs/promises";
 import { join } from "node:path";
-import { expandHome } from "@ncs/db";
+import { expandHome, type DbConnection } from "@ncs/db";
 import type { BackupRecordsRow } from "@ncs/db/schema";
 import { actors, ConflictError, NotFoundError, type ActorRef, type Platform } from "../../../platform/index.js";
 import type { AuditService } from "../../audit/index.js";
@@ -37,6 +37,8 @@ export interface BackupServiceDeps {
   engine?: BackupEngineChoice;
   /** tests: force tool discovery result */
   pgDumpTool?: PgTool | null;
+  /** resolved DB connection (pg_dump engine: URL, TLS, app schema); absent → derived from the client, public schema */
+  connection?: DbConnection;
 }
 
 export interface RunBackupOptions {
@@ -128,7 +130,8 @@ export function createBackupService(deps: BackupServiceDeps): BackupServiceImpl 
         appVersion: platform.appVersion,
         now: startedAt,
         engine: opts.engine ?? deps.engine ?? "auto",
-        databaseUrl: databaseUrlOf(platform.uow.db),
+        databaseUrl: deps.connection?.url ?? databaseUrlOf(platform.uow.db),
+        connection: deps.connection,
         pgDumpTool: deps.pgDumpTool,
         log: (m) => platform.log.debug({ backupId: id }, m),
       });

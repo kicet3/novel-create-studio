@@ -1,11 +1,25 @@
 /** Raw DB access for CLI commands that must not boot the full server core (migrate, restore). */
-import { createDb, EmbeddedPostgresRuntime, postgresJsTarget, type DbHandle, type MigrationTarget } from "@ncs/db";
+import {
+  assertAppSchemaUsable,
+  createDb,
+  EmbeddedPostgresRuntime,
+  postgresJsTarget,
+  resolveDatabaseConnection,
+  type AppSchemaInspection,
+  type DbConnection,
+  type DbHandle,
+  type MigrationTarget,
+} from "@ncs/db";
 import type { InstallConfig } from "@ncs/shared";
 import { embeddedDataDir } from "./config.js";
 
 export interface RawDb {
   mode: "embedded" | "external";
+  /** carries the password: never print it (use `connection.display`) */
   url: string;
+  connection: DbConnection;
+  /** external DBs: target schema checked (search_path applied, schema empty or the app's) */
+  schemaInspection: AppSchemaInspection | null;
   handle: DbHandle;
   target: MigrationTarget;
   embedded: EmbeddedPostgresRuntime | null;
@@ -30,21 +44,34 @@ export function databaseNameOf(url: string): string {
 /** Open the configured DB without migrating. Embedded PG is started (or attached) as needed. */
 export async function openRawDb(config: InstallConfig, opts: { start?: boolean } = {}): Promise<RawDb> {
   let embedded: EmbeddedPostgresRuntime | null = null;
-  let url: string;
+  let conn: DbConnection;
   if (config.database.mode === "external") {
     if (!config.database.url) throw new Error("database.mode=external 인데 database.url(DATABASE_URL)이 없습니다.");
-    url = config.database.url;
+    conn = resolveDatabaseConnection(config);
   } else {
     embedded = embeddedRuntime(config);
     if (opts.start ?? true) await embedded.start();
-    url = embedded.url;
+    conn = resolveDatabaseConnection(config, embedded.url);
   }
-  const handle = createDb(url, { max: 2 });
+  const handle = createDb(conn, { max: 2 });
+  const target = postgresJsTarget(handle.sql);
+  let schemaInspection: AppSchemaInspection | null = null;
+  if (config.database.mode === "external") {
+    try {
+      schemaInspection = await assertAppSchemaUsable(target, conn);
+    } catch (err) {
+      await handle.close();
+      await embedded?.stop();
+      throw err;
+    }
+  }
   return {
     mode: embedded ? "embedded" : "external",
-    url,
+    url: conn.url,
+    connection: conn,
+    schemaInspection,
     handle,
-    target: postgresJsTarget(handle.sql),
+    target,
     embedded,
     async close() {
       await handle.close();

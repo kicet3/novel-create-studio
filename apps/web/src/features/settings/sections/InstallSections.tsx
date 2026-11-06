@@ -61,7 +61,22 @@ export function SystemInfoCard() {
                 ),
               },
               { key: "exp", label: "노출 범위", value: labelKo("exposure", i.exposure) },
-              { key: "db", label: "데이터베이스", value: labelKo("database_mode", i.databaseMode) },
+              {
+                key: "db",
+                label: "데이터베이스",
+                value:
+                  i.databaseMode === "external" && i.database
+                    ? [
+                        labelKo("database_provider", i.database.provider),
+                        i.database.host,
+                        i.database.schema ? `스키마 ${i.database.schema}` : null,
+                        i.database.pooler === "session" ? "Session pooler" : i.database.pooler === "direct" ? "직접 연결" : null,
+                        i.database.sslMode ? `TLS ${i.database.sslMode}` : null,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")
+                    : labelKo("database_mode", i.databaseMode),
+              },
               {
                 key: "llm",
                 label: "LLM 공급자",

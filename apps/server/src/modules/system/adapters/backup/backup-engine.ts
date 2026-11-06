@@ -29,6 +29,9 @@ import {
   pgliteTarget,
   postgresJsTarget,
   runMigrations,
+  prepareAppSchema,
+  hardenAppSchema,
+  type DbConnection,
   type MigrationFile,
   type MigrationTarget,
 } from "@ncs/db";
@@ -56,6 +59,8 @@ export const backupManifestSchema = z.object({
   lastMigrationId: z.string().nullable(),
   pgVersion: z.string().nullable(),
   pgVersionNum: z.number().int().nullable(),
+  /** schema the app tables were read from (absent in older bundles = public) */
+  dbSchema: z.string().optional(),
   createdAt: z.string(),
   novelIds: z.array(z.string()),
   db: z
@@ -126,6 +131,7 @@ export function bundleDirName(backupId: string, trigger: string, at: Date): stri
 // ── snapshot reads ────────────────────────────────────────────────────────────
 
 interface SnapshotInfo {
+  schema: string;
   pgVersion: string | null;
   pgVersionNum: number | null;
   lastMigrationId: string | null;
@@ -133,10 +139,12 @@ interface SnapshotInfo {
   fileKeys: string[];
 }
 
-async function listTables(q: MigrationTarget): Promise<string[]> {
+/** app tables: in `schema` when given (isolated app schema), else the session's current_schema() */
+async function listTables(q: MigrationTarget, schema?: string | null): Promise<string[]> {
   const rows = await q.query<{ relname: string }>(
     `SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE n.nspname = 'public' AND c.relkind = 'r' ORDER BY c.relname`,
+      WHERE n.nspname = COALESCE($1::text, current_schema()) AND c.relkind = 'r' ORDER BY c.relname`,
+    [schema ?? null],
   );
   return rows.map((r) => r.relname);
 }
@@ -144,7 +152,7 @@ async function listTables(q: MigrationTarget): Promise<string[]> {
 async function columnsOf(q: MigrationTarget, table: string): Promise<string[]> {
   const rows = await q.query<{ attname: string }>(
     `SELECT a.attname FROM pg_attribute a
-      WHERE a.attrelid = ('public.' || quote_ident($1))::regclass AND a.attnum > 0 AND NOT a.attisdropped
+      WHERE a.attrelid = (quote_ident(current_schema()) || '.' || quote_ident($1))::regclass AND a.attnum > 0 AND NOT a.attisdropped
       ORDER BY a.attnum`,
     [table],
   );
@@ -152,7 +160,9 @@ async function columnsOf(q: MigrationTarget, table: string): Promise<string[]> {
 }
 
 async function readSnapshotInfo(q: MigrationTarget, tables: string[]): Promise<SnapshotInfo> {
-  const [ver] = await q.query<{ v: string; n: string | number }>(`SELECT current_setting('server_version') AS v, current_setting('server_version_num') AS n`);
+  const [ver] = await q.query<{ v: string; n: string | number; s: string | null }>(
+    `SELECT current_setting('server_version') AS v, current_setting('server_version_num') AS n, current_schema() AS s`,
+  );
   let lastMigrationId: string | null = null;
   if (tables.includes("app_migrations")) {
     const [m] = await q.query<{ id: string | null }>(`SELECT max(id) AS id FROM app_migrations`);
@@ -161,7 +171,7 @@ async function readSnapshotInfo(q: MigrationTarget, tables: string[]): Promise<S
   const novelIds = tables.includes("novels") ? (await q.query<{ id: string }>(`SELECT id FROM novels ORDER BY id`)).map((r) => r.id) : [];
   const keyCols = await q.query<{ table_name: string; column_name: string }>(
     `SELECT table_name, column_name FROM information_schema.columns
-      WHERE table_schema = 'public' AND column_name LIKE '%storage_key' ORDER BY table_name, column_name`,
+      WHERE table_schema = current_schema() AND column_name LIKE '%storage_key' ORDER BY table_name, column_name`,
   );
   const keys = new Set<string>();
   for (const c of keyCols) {
@@ -170,6 +180,7 @@ async function readSnapshotInfo(q: MigrationTarget, tables: string[]): Promise<S
     for (const r of rows) keys.add(r.k);
   }
   return {
+    schema: ver?.s ?? "public",
     pgVersion: ver?.v ?? null,
     pgVersionNum: ver ? Number(ver.n) : null,
     lastMigrationId,
@@ -246,6 +257,8 @@ export interface WriteBundleOptions {
   engine?: BackupEngineChoice;
   /** connection URL (needed by the pg_dump engine; absent for PGlite) */
   databaseUrl?: string | null;
+  /** resolved connection: pg_dump gets its TLS mode and is limited to the app schema (`--schema`) */
+  connection?: DbConnection;
   /** override tool discovery (tests) */
   pgDumpTool?: PgTool | null;
   log?: (msg: string) => void;
@@ -279,9 +292,10 @@ export async function writeBundle(o: WriteBundleOptions): Promise<WriteBundleRes
   await mkdir(join(partial, "files"), { recursive: true, mode: 0o700 });
   try {
     const { engine, tool } = o.mode === "full" ? await resolveEngine(o.target, o.engine ?? "auto", o.databaseUrl, o.pgDumpTool) : { engine: null, tool: null };
+    let engineUsed: BackupEngineKind | null = engine;
     let db: BackupManifest["db"] = null;
     const info = await inSnapshot(o.target, async (q) => {
-      const tables = await listTables(q);
+      const tables = await listTables(q, o.connection?.schema);
       const snap = await readSnapshotInfo(q, tables);
       if (engine === "json") {
         const file = join(partial, JSON_DUMP_FILE);
@@ -291,14 +305,26 @@ export async function writeBundle(o: WriteBundleOptions): Promise<WriteBundleRes
       } else if (engine === "pg_dump") {
         const [s] = await q.query<{ id: string }>(`SELECT pg_export_snapshot() AS id`);
         const file = join(partial, PG_DUMP_FILE);
-        // the transaction stays open until pg_dump has finished with the exported snapshot
-        await runPgDump(tool!, { url: o.databaseUrl!, snapshot: s!.id, file });
-        const h = await sha256File(file);
-        db = { file: PG_DUMP_FILE, sha256: h.sha256, sizeBytes: h.size, pgDumpVersion: tool!.version };
+        try {
+          // the transaction stays open until pg_dump has finished with the exported snapshot
+          await runPgDump(tool!, { url: o.databaseUrl!, snapshot: s!.id, file, schema: o.connection?.schema ?? null, connection: o.connection });
+          const h = await sha256File(file);
+          db = { file: PG_DUMP_FILE, sha256: h.sha256, sizeBytes: h.size, pgDumpVersion: tool!.version };
+        } catch (err) {
+          // "auto": a pg_dump that cannot talk to this server (version, TLS, pooler, permissions) → JSON engine, same snapshot
+          if ((o.engine ?? "auto") !== "auto") throw err;
+          log(`pg_dump failed, falling back to the json engine: ${(err as Error).message.slice(0, 300)}`);
+          await rm(file, { force: true });
+          engineUsed = "json";
+          const jf = join(partial, JSON_DUMP_FILE);
+          const counts = await dumpJson(q, tables, jf);
+          const h = await sha256File(jf);
+          db = { file: JSON_DUMP_FILE, sha256: h.sha256, sizeBytes: h.size, tables: counts };
+        }
       }
       return snap;
     });
-    log(`backup db dump done (engine=${engine ?? "none"})`);
+    log(`backup db dump done (engine=${engineUsed ?? "none"}, schema=${info.schema})`);
     const { files, missingFiles } = await copyReferencedFiles(o.storageRoot, info.fileKeys, partial);
     const totalSizeBytes = (db as BackupManifest["db"])?.sizeBytes ?? 0;
     const manifest: BackupManifest = {
@@ -307,11 +333,12 @@ export async function writeBundle(o: WriteBundleOptions): Promise<WriteBundleRes
       backupId: o.backupId,
       trigger: o.trigger,
       mode: o.mode,
-      engine,
+      engine: engineUsed,
       appVersion: o.appVersion,
       lastMigrationId: info.lastMigrationId,
       pgVersion: info.pgVersion,
       pgVersionNum: info.pgVersionNum,
+      dbSchema: info.schema,
       createdAt: o.now.toISOString(),
       novelIds: info.novelIds,
       db,
@@ -376,6 +403,8 @@ export interface RestoreBundleOptions {
   requireExtensions?: string[];
   /** pg_dump bundles: URL of the target + pg_restore tool override */
   databaseUrl?: string | null;
+  /** resolved target connection: app schema prepared/hardened (isolated schema), TLS for pg_restore */
+  connection?: DbConnection;
   pgRestoreTool?: PgTool | null;
   log?: (msg: string) => void;
 }
@@ -403,9 +432,10 @@ async function fkOrder(q: MigrationTarget, tables: string[]): Promise<string[]> 
   const edges = await q.query<{ child: string; parent: string }>(
     `SELECT c.conrelid::regclass::text AS child, c.confrelid::regclass::text AS parent
        FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace
-      WHERE c.contype = 'f' AND n.nspname = 'public'`,
+      WHERE c.contype = 'f' AND n.nspname = current_schema()`,
   );
-  const strip = (s: string) => s.replace(/^public\./, "").replace(/^"|"$/g, "");
+  // regclass::text is unqualified for relations on the search_path (the app schema)
+  const strip = (s: string) => s.replace(/^("[^"]+"|[^."]+)\./, "").replace(/^"|"$/g, "");
   const deps = new Map<string, Set<string>>(tables.map((t) => [t, new Set<string>()]));
   for (const e of edges) {
     const c = strip(e.child);
@@ -494,13 +524,13 @@ async function restoreJsonRows(q: MigrationTarget, file: string, manifest: Backu
   // identity sequences follow the restored max values
   const idents = await q.query<{ table_name: string; column_name: string }>(
     `SELECT table_name, column_name FROM information_schema.columns
-      WHERE table_schema = 'public' AND (is_identity = 'YES' OR column_default LIKE 'nextval(%')`,
+      WHERE table_schema = current_schema() AND (is_identity = 'YES' OR column_default LIKE 'nextval(%')`,
   );
   for (const c of idents) {
     await q.query(
       `SELECT setval(pg_get_serial_sequence($1, $2), COALESCE((SELECT max(${qi(c.column_name)}) FROM ${qi(c.table_name)}), 1),
                (SELECT max(${qi(c.column_name)}) FROM ${qi(c.table_name)}) IS NOT NULL)`,
-      [`public.${qi(c.table_name)}`, c.column_name],
+      [qi(c.table_name), c.column_name],
     );
   }
   if (superuser) await q.exec(`SET LOCAL session_replication_role = origin`);
@@ -543,7 +573,7 @@ export async function restoreBundle(o: RestoreBundleOptions): Promise<RestoreBun
   if (manifest.lastMigrationId && (!latestKnown || manifest.lastMigrationId > latestKnown)) {
     throw new RestoreError("newer_backup", `더 새 버전 앱에서 만든 백업입니다(마이그레이션 ${manifest.lastMigrationId} > ${latestKnown ?? "없음"}). 앱을 업그레이드한 뒤 복원하세요.`);
   }
-  const existing = (await listTables(o.target)).filter((t) => t !== "app_migrations");
+  const existing = (await listTables(o.target, o.connection?.schema)).filter((t) => t !== "app_migrations");
   if (existing.length) {
     const nonEmpty: string[] = [];
     for (const t of existing) {
@@ -555,7 +585,10 @@ export async function restoreBundle(o: RestoreBundleOptions): Promise<RestoreBun
 
   let restoredRows: Record<string, number> = {};
   const runOpts = { appVersion: o.appVersion, requireExtensions: o.requireExtensions, log };
+  const isolated = !!o.connection?.schema;
   if (manifest.engine === "json") {
+    // dedicated app schema: create it (+ missing extensions in the extensions schema); never touches other schemas
+    if (isolated) await prepareAppSchema(o.target, o.connection!, log);
     const upTo = manifest.lastMigrationId;
     const prefix = upTo ? migrations.filter((m) => m.id <= upTo) : [];
     if (prefix.length) await runMigrations(o.target, { ...runOpts, migrations: prefix });
@@ -563,12 +596,24 @@ export async function restoreBundle(o: RestoreBundleOptions): Promise<RestoreBun
   } else {
     if (existing.length) throw new RestoreError("not_empty", "pg_dump 백업은 스키마가 없는 새 DB에만 복원할 수 있습니다.");
     if (!o.databaseUrl) throw new RestoreError("no_tool", "pg_dump 백업 복원에는 대상 DB 연결 URL이 필요합니다.");
+    const dumped = manifest.dbSchema ?? "public";
+    const wanted = o.connection?.schema ?? "public";
+    if (dumped !== wanted) {
+      throw new RestoreError("schema_mismatch", `pg_dump 백업은 스키마 ${dumped} 의 덤프라 스키마 ${wanted} 로 복원할 수 없습니다. JSON 엔진 백업(\`ncs backup --engine json\`)을 쓰세요.`);
+    }
+    if (isolated) {
+      // the dump recreates the schema itself: it must not exist yet; extensions must (the dump references them)
+      const [ns] = await o.target.query<{ x: number }>(`SELECT 1 AS x FROM pg_namespace WHERE nspname = $1`, [wanted]);
+      if (ns) throw new RestoreError("not_empty", `pg_dump 백업은 아직 없는 스키마로만 복원합니다. 스키마 ${wanted} 가 이미 있습니다. 새 스키마 이름(--target-schema)을 쓰세요.`);
+      await prepareAppSchema(o.target, o.connection!, log, { createSchema: false });
+    }
     const major = Math.floor((manifest.pgVersionNum ?? 0) / 10_000);
     const tool = o.pgRestoreTool !== undefined ? o.pgRestoreTool : findPgTool("pg_restore", major);
     if (!tool) throw new RestoreError("no_tool", `호환되는 pg_restore(PostgreSQL ${major} 이상)를 찾지 못했습니다.`);
-    await runPgRestore(tool, { url: o.databaseUrl, file: join(o.bundleDir, manifest.db.file) });
+    await runPgRestore(tool, { url: o.databaseUrl, file: join(o.bundleDir, manifest.db.file), connection: o.connection });
   }
   const migrated = await runMigrations(o.target, { ...runOpts, migrations });
+  if (isolated) await hardenAppSchema(o.target, o.connection!, log);
   const restoredFiles = o.storageRoot ? await restoreFiles(o.bundleDir, manifest, o.storageRoot) : 0;
   return {
     manifest,

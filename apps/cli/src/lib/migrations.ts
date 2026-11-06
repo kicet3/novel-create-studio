@@ -11,7 +11,7 @@ export interface MigrationStatus {
 }
 
 export async function migrationStatus(target: MigrationTarget, migrations: MigrationFile[] = loadMigrations()): Promise<MigrationStatus> {
-  const [t] = await target.query<{ r: string | null }>(`SELECT to_regclass('public.app_migrations')::text AS r`);
+  const [t] = await target.query<{ r: string | null }>(`SELECT to_regclass('app_migrations')::text AS r`);
   const rows = t?.r
     ? await target.query<{ id: string; name: string; checksum: string; applied_at: Date | string | null; app_version: string | null }>(
         `SELECT id, name, checksum, applied_at, app_version FROM app_migrations ORDER BY id`,

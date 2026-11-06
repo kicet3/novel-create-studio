@@ -15,10 +15,13 @@ import {
   acquireInstanceAdvisoryLock,
   acquireServerLock,
   expandHome,
+  describeConnection,
   loadMigrations,
+  migrateDatabase,
   openDatabase,
   postgresJsTarget,
-  runMigrations,
+  redactDatabaseSecrets,
+  type DbConnection,
   type HeldAdvisoryLock,
   type HeldServerLock,
   type MigrationTarget,
@@ -72,28 +75,35 @@ export async function startServer(config: InstallConfig = loadInstallConfig(), o
     database = await openDatabase(config, { appVersion: APP_VERSION, migrate: false, log: dbLog });
   } catch (err) {
     fileLock.release();
-    throw err;
+    throw scrubDbError(err, config.database.url);
   }
+  const dbInfo = describeConnection(database.connection);
+  if (database.schemaInspection) log.info({ db: dbInfo, plan: database.schemaInspection.plan }, "database target schema checked");
   let applied: string[] = [];
   try {
     // step 2 (both modes): session advisory lock `instance_lock` on a dedicated connection
-    dbLock = await acquireInstanceAdvisoryLock(database.url);
+    dbLock = await acquireInstanceAdvisoryLock(database.connection);
     if (config.database.auto_migrate) {
       const target = postgresJsTarget(database.sql);
-      await preMigrationBackup(config, target, database.url, dbLog);
-      applied = (await runMigrations(target, { appVersion: APP_VERSION, requireExtensions: ["btree_gist"], log: dbLog })).applied;
+      applied = (
+        await migrateDatabase(target, database.connection, {
+          appVersion: APP_VERSION,
+          log: dbLog,
+          beforeMigrations: () => preMigrationBackup(config, target, database.connection, dbLog),
+        })
+      ).applied;
     }
   } catch (err) {
     await dbLock?.release();
     await database.close();
     fileLock.release();
-    throw err;
+    throw scrubDbError(err, config.database.url);
   }
-  log.info({ mode: database.mode, applied }, "database ready");
+  log.info({ mode: database.mode, db: dbInfo, applied }, "database ready");
 
   let core: ServerCore;
   try {
-    core = createServerCore({ config, appVersion: APP_VERSION, db: database.db, log, databaseMode: database.mode, llmAdapters: opts.llmAdapters });
+    core = createServerCore({ config, appVersion: APP_VERSION, db: database.db, log, databaseMode: database.mode, database: database.connection, llmAdapters: opts.llmAdapters });
     await core.start({ background: false });
   } catch (err) {
     await dbLock?.release();
@@ -143,8 +153,9 @@ export async function startServer(config: InstallConfig = loadInstallConfig(), o
 }
 
 /** when an already-initialised DB has pending migrations, write a `pre_migration` bundle (JSON/pg_dump engine) and record it */
-async function preMigrationBackup(config: InstallConfig, target: MigrationTarget, databaseUrl: string, log: (m: string) => void): Promise<void> {
-  const [reg] = await target.query<{ r: string | null }>(`SELECT to_regclass('public.app_migrations')::text AS r`);
+async function preMigrationBackup(config: InstallConfig, target: MigrationTarget, connection: DbConnection, log: (m: string) => void): Promise<void> {
+  // unqualified: resolved through the connection's search_path (app schema on Supabase, public otherwise)
+  const [reg] = await target.query<{ r: string | null }>(`SELECT to_regclass('app_migrations')::text AS r`);
   if (!reg?.r) return; // fresh database
   const applied = new Set((await target.query<{ id: string }>(`SELECT id FROM app_migrations`)).map((r) => r.id));
   if (applied.size === 0) return;
@@ -165,7 +176,8 @@ async function preMigrationBackup(config: InstallConfig, target: MigrationTarget
     mode: config.backup.mode,
     appVersion: APP_VERSION,
     now,
-    databaseUrl,
+    databaseUrl: connection.url,
+    connection,
     log,
   });
   await target.query(
@@ -175,11 +187,20 @@ async function preMigrationBackup(config: InstallConfig, target: MigrationTarget
   );
 }
 
+/** errors bubbling out of DB setup must never carry the connection string / password */
+function scrubDbError(err: unknown, url: string | undefined): unknown {
+  if (!(err instanceof Error) || !url) return err;
+  const message = redactDatabaseSecrets(err.message, url);
+  if (message !== err.message) err.message = message;
+  if (err.stack) err.stack = redactDatabaseSecrets(err.stack, url);
+  return err;
+}
+
 const isEntry = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isEntry) {
   const started = await startServer().catch((err: unknown) => {
     // 02 §2.3: a second instance exits with a readable message (no stack trace)
-    if (err instanceof Error && err.name === "InstanceLockError") {
+    if (err instanceof Error && (err.name === "InstanceLockError" || err.name === "DatabaseConfigError")) {
       console.error(err.message);
       process.exit(1);
     }

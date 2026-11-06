@@ -2,7 +2,7 @@
 import type { Command } from "commander";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { runMigrations } from "@ncs/db";
+import { migrateDatabase } from "@ncs/db";
 import { ulid } from "@ncs/shared";
 import { backupsDir, loadConfig, storageRoot } from "../lib/config.js";
 import { openRawDb } from "../lib/db.js";
@@ -53,6 +53,8 @@ export function registerMigrateCommands(program: Command): void {
         if (!st.ok) fail(`마이그레이션 상태가 올바르지 않습니다: ${[...st.unknown, ...st.checksumMismatch].join(", ")}`, 2);
         if (!st.pending.length) return void process.stdout.write("적용할 마이그레이션이 없습니다.\n");
         const server = await loadServer();
+        if (db.schemaInspection) for (const line of db.schemaInspection.plan) process.stdout.write(`  · ${line}\n`);
+        const backup = async () => {
         if (st.applied.length && !o.skipBackup) {
           const engine = await loadBackupEngine();
           const now = new Date();
@@ -70,6 +72,7 @@ export function registerMigrateCommands(program: Command): void {
             appVersion: server.APP_VERSION,
             now,
             databaseUrl: db.url,
+            connection: db.connection,
           });
           await db.target.query(
             `INSERT INTO backup_records (id, status, trigger, mode, started_at, finished_at, storage_key, size_bytes, app_version, last_migration_id, details)
@@ -78,7 +81,12 @@ export function registerMigrateCommands(program: Command): void {
           );
           process.stdout.write(`pre_migration 백업: ${id} (${join(dir, name)})\n`);
         }
-        const r = await runMigrations(db.target, { appVersion: server.APP_VERSION, requireExtensions: ["btree_gist"], log: (m) => process.stdout.write(`  ${m}\n`) });
+        };
+        const r = await migrateDatabase(db.target, db.connection, {
+          appVersion: server.APP_VERSION,
+          log: (m) => process.stdout.write(`  ${m}\n`),
+          beforeMigrations: backup,
+        });
         process.stdout.write(`적용 완료: ${r.applied.join(", ") || "없음"}\n`);
       } finally {
         await db.close();
