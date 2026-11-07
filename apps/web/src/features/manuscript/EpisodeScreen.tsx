@@ -40,6 +40,7 @@ import {
 } from "./api.js";
 import { DiffView, versionLabel } from "./DiffView.js";
 import { EditPanel } from "./EditPanel.js";
+import { EpisodeActionBar } from "./EpisodeActionBar.js";
 import { PublishDialog, RevisionDialog, UnpublishDialog } from "./EpisodeDialogs.js";
 import { ExportDialog } from "./ExportDialog.js";
 import { RevisionChat } from "../revision/RevisionChatPanel.js";
@@ -191,7 +192,7 @@ export function EpisodeScreen({ novelId, episodeNo }: { novelId: string; episode
 
       {ep.status === "awaiting_approval" && mode !== "chat" && (
         <Callout tone="info" title={`${ep.episodeNo}화를 읽고 승인해 주세요`} className="mt-3" actions={<Button size="sm" onClick={() => setMode("chat")}>수정 대화</Button>}>
-          이상한 부분은 [수정 대화]에서 묻고 고칠 수 있습니다. 승인·반려는 인박스에서 합니다.
+          이상한 부분은 [수정 대화]에서 묻고 고칠 수 있고, 대화 아래에서 바로 승인·공개할 수 있습니다. 반려는 인박스에서 합니다.
         </Callout>
       )}
 
@@ -201,6 +202,7 @@ export function EpisodeScreen({ novelId, episodeNo }: { novelId: string; episode
           <div className="mt-3">
             <RevisionChat novelId={novelId} episodeNo={episodeNo} timezone={tz} content={currentDetail.data ? { versionId: currentDetail.data.id, text: currentDetail.data.content } : null} />
           </div>
+          <EpisodeActionBar novelId={novelId} episode={ep} />
         </div>
       ) : (
       <div className="mt-3 grid grid-cols-1 gap-3 min-[1100px]:grid-cols-[minmax(0,1fr)_340px]">
