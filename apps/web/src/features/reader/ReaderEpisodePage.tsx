@@ -1,6 +1,6 @@
 /**
  * 읽기 — 뷰어 (/novels/:novelId/read/:episodeNo): immersive web-novel viewer.
- * Bars hidden by default (tap the center to toggle), 스크롤 보기 / 페이지 넘김, 보기 설정 sheet, 목차 drawer,
+ * Bars hidden by default (tap the center to toggle), 페이지 넘김 (default) / 스크롤 보기, 보기 설정 sheet, 목차 drawer,
  * end card, read history and 이어 읽기 (paragraph anchor) — all per device (localStorage).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -16,8 +16,10 @@ import { ReaderRoot, browserStore, isReaderPanelOpen, lastInputWasKeyboard, useR
 import { BottomBar, Dimmer, SettingsSheet, TapHint, TocDrawer, TopBar } from "./ReaderOverlays.js";
 import { PageView, ScrollView, createProgressStore, type EndActions, type InitialPosition, type ViewEvents, type ViewHandle } from "./ReaderViews.js";
 import {
+  READER_LINE_HEIGHT,
   READER_MARGIN_PX,
   READER_MAX_EM,
+  READER_PAGE_CHAR_COUNT,
   episodeLabel,
   fontPxOf,
   hintSeen,
@@ -30,6 +32,7 @@ import {
   type ReadingAnchor,
 } from "./reader-model.js";
 import { keyAction, pageGeometry } from "./reader-layout.js";
+import { leaveTarget } from "./reader-pages.js";
 
 function useEpisodeNo(): number {
   const { episodeNo } = useParams();
@@ -97,9 +100,12 @@ export function ReaderEpisodePage() {
     setChain(activeChain);
   }
 
+  /** 페이지 넘김 flipped into an episode: where it opens (page 1 going forward, the last page going back) */
+  const enterAt = useRef<{ no: number; at: "start" | "end" } | null>(null);
   const go = useCallback(
-    (no: number | null | undefined) => {
+    (no: number | null | undefined, at?: "start" | "end") => {
       if (!no) return;
+      enterAt.current = at ? { no, at } : null;
       setPanel(null);
       setChain([no]);
       navigate(novelPath(novelId, `read/${no}`));
@@ -115,6 +121,7 @@ export function ReaderEpisodePage() {
     if (search.has("resume")) setSearch((s) => (s.delete("resume"), s), { replace: true });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const initialFor = (no: number): InitialPosition => {
+    if (view === "page" && enterAt.current?.no === no) return enterAt.current.at === "end" ? { at: "end" } : null;
     if (live.current && live.current.no === no && live.current.mode === mode) return { anchor: live.current.anchor };
     const saved = loadResume(browserStore(), novelId);
     const r = resumeAnchorFor(saved, no, mode, no === explicitNo.current);
@@ -143,10 +150,11 @@ export function ReaderEpisodePage() {
         mark(no, "open");
         navigate(novelPath(novelId, `read/${no}`), { replace: true });
       },
-      // page view edges: 이전화 / 다음화 (or show the bars when there is none)
+      // page view edges: past the end card → next episode at page 1; back from page 1 → previous episode's last page.
+      // None (latest / first episode): the end card stays; show the bars (이전 화 · 목차 · 다음 화)
       onLeave: (dir) => {
-        const target = dir === "next" ? epRef.current?.next : epRef.current?.prev;
-        if (target) go(target.episodeNo);
+        const t = leaveTarget(dir, epRef.current);
+        if (t) go(t.episodeNo, t.at);
         else setBars(true);
       },
     }),
@@ -161,10 +169,11 @@ export function ReaderEpisodePage() {
     if (ep) mark(ep.episodeNo, "open");
   }, [ep?.episodeNo]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // warm the next episode
+  // warm the neighbours (flipping either way opens them)
   useEffect(() => {
     if (ep?.next) prefetch(ep.next.episodeNo, mode);
-  }, [ep?.next?.episodeNo, mode]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (ep?.prev && view === "page") prefetch(ep.prev.episodeNo, mode);
+  }, [ep?.next?.episodeNo, ep?.prev?.episodeNo, mode, view]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // keyboard (registered once; reads the latest state through a ref)
   const keyState = useRef({ view, ep, go, bars, hint: false });
@@ -261,6 +270,9 @@ export function ReaderEpisodePage() {
             geometry={geometry}
             initial={initialPage}
             typoKey={typoKey}
+            maxChars={READER_PAGE_CHAR_COUNT[settings.pageChars]}
+            fontPx={fontPxOf(settings.fontStep)}
+            lineHeight={READER_LINE_HEIGHT[settings.lineHeight]}
             handleRef={handleRef}
             events={events}
             store={store}

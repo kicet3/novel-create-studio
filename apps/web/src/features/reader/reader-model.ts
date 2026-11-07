@@ -5,10 +5,16 @@
 import { READER_SCENE_BREAK, type ReaderMode, type ReaderTocDto, type ReaderTocEpisodeDto } from "@ncs/shared";
 
 // ── settings ────────────────────────────────────────────────────────────
-/** 스크롤 보기 (vertical, continuous) / 페이지 넘김 (paginated, CSS columns) */
-export const READER_VIEWS = ["scroll", "page"] as const;
+/** 페이지 넘김 (default: pages of about N characters, flipped sideways) / 스크롤 보기 (vertical, continuous) */
+export const READER_VIEWS = ["page", "scroll"] as const;
 export type ReaderView = (typeof READER_VIEWS)[number];
 export const READER_VIEW_LABELS: Record<ReaderView, string> = { scroll: "스크롤 보기", page: "페이지 넘김" };
+
+/** 페이지 넘김: characters per page (a page that would overflow the screen is cut shorter) */
+export const READER_PAGE_CHARS = ["few", "normal", "many"] as const;
+export type ReaderPageChars = (typeof READER_PAGE_CHARS)[number];
+export const READER_PAGE_CHARS_LABELS: Record<ReaderPageChars, string> = { few: "적게", normal: "보통", many: "많이" };
+export const READER_PAGE_CHAR_COUNT: Record<ReaderPageChars, number> = { few: 400, normal: 700, many: 1000 };
 
 /** 글자 크기 slider steps (px) */
 export const READER_FONT_STEPS_PX = [14, 15, 16, 17, 18, 19, 20, 22, 24, 27] as const;
@@ -46,6 +52,8 @@ export const BRIGHTNESS_MIN = 0.3;
 
 export interface ReaderSettings {
   view: ReaderView;
+  /** 페이지 넘김: about how many characters one page holds */
+  pageChars: ReaderPageChars;
   /** 스크롤 보기: append the next episode at the end (다음 화 이어 보기) */
   continuous: boolean;
   /** index into READER_FONT_STEPS_PX */
@@ -66,7 +74,8 @@ export interface ReaderSettings {
 }
 
 export const DEFAULT_READER_SETTINGS: ReaderSettings = {
-  view: "scroll",
+  view: "page",
+  pageChars: "normal",
   continuous: false,
   fontStep: DEFAULT_FONT_STEP,
   font: "gothic",
@@ -79,7 +88,9 @@ export const DEFAULT_READER_SETTINGS: ReaderSettings = {
   keepAwake: false,
   mode: "approved",
 };
-export const READER_SETTINGS_KEY = "ncs.reader.settings";
+/** v2: 페이지 넘김 became the default (settings saved under the v1 key are migrated with view reset to "page") */
+export const READER_SETTINGS_KEY = "ncs.reader.settings.v2";
+export const LEGACY_READER_SETTINGS_KEY = "ncs.reader.settings";
 
 /** minimal Storage subset (localStorage or a test double) */
 export interface KeyValueStore {
@@ -110,6 +121,7 @@ export function parseReaderSettings(raw: string | null | undefined): ReaderSetti
   const theme = typeof o.theme === "string" && LEGACY_THEME[o.theme] ? LEGACY_THEME[o.theme]! : pick(READER_THEMES, o.theme, d.theme);
   return {
     view: pick(READER_VIEWS, o.view, d.view),
+    pageChars: pick(READER_PAGE_CHARS, o.pageChars, d.pageChars),
     continuous: bool(o.continuous, d.continuous),
     fontStep: typeof o.fontStep === "number" ? clampStep(o.fontStep) : (legacyStep ?? d.fontStep),
     font: pick(READER_FONTS, o.font, d.font),
@@ -126,7 +138,13 @@ export function parseReaderSettings(raw: string | null | undefined): ReaderSetti
 
 export function loadReaderSettings(store: KeyValueStore | null): ReaderSettings {
   try {
-    return parseReaderSettings(store?.getItem(READER_SETTINGS_KEY));
+    const raw = store?.getItem(READER_SETTINGS_KEY);
+    if (raw == null) {
+      // first run after 페이지 넘김 became the default: keep the old typography, switch the view
+      const legacy = store?.getItem(LEGACY_READER_SETTINGS_KEY);
+      if (legacy != null) return { ...parseReaderSettings(legacy), view: DEFAULT_READER_SETTINGS.view };
+    }
+    return parseReaderSettings(raw);
   } catch {
     return { ...DEFAULT_READER_SETTINGS };
   }

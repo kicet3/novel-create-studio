@@ -152,21 +152,28 @@
 .rv-scroll { padding-top: max(28px, env(safe-area-inset-top)); padding-bottom: 96px; cursor: default; }
 @media (min-width: 640px) { .rv-scroll { padding-top: 64px; } }
 
-/* page view: one fixed page box, the text flows in CSS columns and slides by one column per page */
+/* page view: pages of about N characters side by side on a track that slides one page per turn */
 .rv-pages { position: fixed; inset: 0; overflow: hidden; touch-action: pinch-zoom; user-select: none; -webkit-user-select: none; }
 .rv-page-frame { position: absolute; overflow: hidden; }
-.rv-columns {
-  column-fill: auto;
-  height: 100%;
+.rv-track {
+  position: absolute;
+  inset: 0;
   will-change: transform;
   transition: transform 280ms cubic-bezier(0.22, 0.7, 0.2, 1);
 }
-.rv-columns[data-dragging="true"] { transition: none; }
-.rv-columns .reader-column { max-width: none; padding-inline: 0; }
-.rv-columns .reader-figure img { max-height: calc(var(--page-h) - 3em); width: auto; }
-.rv-page-end { break-before: column; break-inside: avoid; height: var(--page-h); display: flex; flex-direction: column; justify-content: center; }
+.rv-track[data-dragging="true"] { transition: none; }
+.rv-page { position: absolute; top: 0; height: 100%; overflow: hidden; }
+.rv-page .reader-column, .rv-measure .reader-column { max-width: none; padding-inline: 0; }
+/* contain margins so a page measures (hidden twin) exactly as it renders */
+.rv-page .reader-prose, .rv-measure .reader-prose, .rv-flow { display: flow-root; }
+.reader-prose p.rv-cont { text-indent: 0; }
+.rv-page .reader-figure img { max-height: calc(var(--page-h) - 3em); width: auto; }
+.rv-page-image, .rv-page-end { display: flex; flex-direction: column; justify-content: safe center; }
+.rv-page-end { overflow-y: auto; }
+.rv-page-image .reader-figure { margin: 0; }
 /* full page width (a flex item with margin-inline:auto would shrink to its content) */
-.rv-page-end > .reader-column { width: 100%; box-sizing: border-box; }
+.rv-page-end > .reader-column, .rv-page-image > .reader-column { width: 100%; box-sizing: border-box; }
+.rv-measure { position: absolute; top: 0; left: -100000px; visibility: hidden; pointer-events: none; contain: layout style; }
 .rv-page-meta { position: fixed; inset-inline: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 12px; line-height: 1; color: var(--muted); pointer-events: none; font-variant-numeric: tabular-nums; }
 
 /* sheets & drawers */
@@ -212,6 +219,6 @@
 @keyframes rv-in { from { transform: translateX(32px); opacity: 0; } }
 
 @media (prefers-reduced-motion: reduce) {
-  .reader-bar, .rv-bar, .rv-bar[data-hidden="true"], .rv-columns { transition: none; }
+  .reader-bar, .rv-bar, .rv-bar[data-hidden="true"], .rv-track { transition: none; }
   .rv-backdrop, .rv-sheet, .rv-drawer, .rv-hint { animation: none; }
 }

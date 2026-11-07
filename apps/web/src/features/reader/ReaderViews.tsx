@@ -1,9 +1,9 @@
 /**
- * 읽기 viewer bodies: 스크롤 보기 (ScrollView, optional 다음 화 이어 보기) and 페이지 넘김 (PageView, CSS columns).
- * The text (EpisodeArticle) is memoised and never re-renders on scroll / page turns: positions go to a small
- * external store (bars subscribe to it) and page turns write the transform directly.
+ * 읽기 viewer bodies: 페이지 넘김 (PageView, pages of about N characters, flipped sideways) and 스크롤 보기
+ * (ScrollView, optional 다음 화 이어 보기). Positions go to a small external store (bars subscribe to it);
+ * the scroll text never re-renders on scroll, and page turns write the track transform directly.
  */
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { labelKo, type ReaderEpisodeDto, type ReaderMode } from "@ncs/shared";
 import { Badge, QueryError, formatNumber } from "../../components/ui/index.js";
 import { cx } from "../../lib/cx.js";
@@ -24,25 +24,8 @@ import {
   type ReadingAnchor,
   type ReadingBlock,
 } from "./reader-model.js";
-import {
-  anchorOffsetInPage,
-  clampPage,
-  dragOffset,
-  firstIndex,
-  pageCountFor,
-  pageFinished,
-  pageForAnchorOffset,
-  pageForRatio,
-  pageLabel,
-  pageOf,
-  pageRatio,
-  pageStep,
-  pageStride,
-  swipeAction,
-  tapZone,
-  type BlockFragment,
-  type PageGeometry,
-} from "./reader-layout.js";
+import { clampPage, dragOffset, firstIndex, pageFinished, pageForRatio, pageRatio, pageStep, swipeAction, tapZone, type PageGeometry } from "./reader-layout.js";
+import { anchorForPage, estimatePageChars, pageCounter, pageForAnchor, paginateBlocks, type PageItem, type ReaderPage } from "./reader-pages.js";
 
 // ── progress store (bars subscribe; the text does not) ──────────────────
 export interface ProgressState {
@@ -93,7 +76,8 @@ export interface ViewEvents {
 }
 
 /** initial position of a view: anchor, a ratio (older resume records) or the start */
-export type InitialPosition = { anchor: ReadingAnchor } | { ratio: number } | null;
+/** `at: "end"`: 페이지 넘김 entered backwards from the next episode → its last text page */
+export type InitialPosition = { anchor: ReadingAnchor } | { ratio: number } | { at: "end" } | null;
 
 const INTERACTIVE = "a,button,input,select,textarea,label,summary,[role=dialog],[data-no-tap]";
 const isInteractive = (t: EventTarget | null) => t instanceof Element && !!t.closest(INTERACTIVE);
@@ -122,34 +106,41 @@ function Block({ b, p }: { b: ReadingBlock; p: number | null }) {
   }
 }
 
+/** title block at the top of an episode (scroll view: above the text; page view: top of page 1) */
+function EpisodeHeader({ ep, titleId }: { ep: ReaderEpisodeDto; titleId?: string }) {
+  const badge = KIND_BADGE[ep.source];
+  return (
+    <header className="mb-10 pt-2 text-center sm:mb-12">
+      {ep.title?.trim() && <p className="mb-2 text-[0.8em] font-semibold tracking-wide text-muted tabular">{ep.episodeNo}화</p>}
+      <h1 id={titleId} className="reader-title text-[1.4em] leading-snug font-bold text-balance">
+        {ep.title?.trim() || `${ep.episodeNo}화`}
+      </h1>
+      <p className="mt-3 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-[13px] text-muted">
+        <span className="tabular">
+          {formatNumber(ep.charCount)}자 ({labelKo("count_basis", ep.countBasis)})
+        </span>
+        <span aria-hidden="true">·</span>
+        <span>약 {readingMinutes(ep.charCount)}분</span>
+        <Badge tone={badge.tone} glyph={ep.source === "draft"}>
+          {badge.label}
+        </Badge>
+      </p>
+      {ep.source === "draft" && (
+        <p className="mx-auto mt-4 max-w-[30em] rounded-[10px] border border-violet/40 bg-violet-soft px-3 py-2 text-[13px] text-text">
+          승인 전 초안입니다 ({labelKo("episode_status", ep.status)}). 내용이 바뀔 수 있습니다.
+        </p>
+      )}
+    </header>
+  );
+}
+
 /** `blocksOf`: extension point for illustrations (paragraphs | scene breaks | images); keep it referentially stable */
 export const EpisodeArticle = memo(function EpisodeArticle({ ep, titleId, blocksOf = textBlocks }: { ep: ReaderEpisodeDto; titleId?: string; blocksOf?: BlocksOf }) {
   const blocks = useMemo(() => blocksOf(ep), [ep, blocksOf]);
   const paras = useMemo(() => paragraphIndexes(blocks), [blocks]);
-  const badge = KIND_BADGE[ep.source];
   return (
     <article className="reader-column" aria-labelledby={titleId}>
-      <header className="mb-10 pt-2 text-center sm:mb-12">
-        {ep.title?.trim() && <p className="mb-2 text-[0.8em] font-semibold tracking-wide text-muted tabular">{ep.episodeNo}화</p>}
-        <h1 id={titleId} className="reader-title text-[1.4em] leading-snug font-bold text-balance">
-          {ep.title?.trim() || `${ep.episodeNo}화`}
-        </h1>
-        <p className="mt-3 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-[13px] text-muted">
-          <span className="tabular">
-            {formatNumber(ep.charCount)}자 ({labelKo("count_basis", ep.countBasis)})
-          </span>
-          <span aria-hidden="true">·</span>
-          <span>약 {readingMinutes(ep.charCount)}분</span>
-          <Badge tone={badge.tone} glyph={ep.source === "draft"}>
-            {badge.label}
-          </Badge>
-        </p>
-        {ep.source === "draft" && (
-          <p className="mx-auto mt-4 max-w-[30em] rounded-[10px] border border-violet/40 bg-violet-soft px-3 py-2 text-[13px] text-text">
-            승인 전 초안입니다 ({labelKo("episode_status", ep.status)}). 내용이 바뀔 수 있습니다.
-          </p>
-        )}
-      </header>
+      <EpisodeHeader ep={ep} titleId={titleId} />
       {blocks.length ? (
         <div className="reader-prose">
           {blocks.map((b, i) => (
@@ -171,7 +162,8 @@ export interface EndActions {
   moreLater(episodeNo: number): boolean;
 }
 
-export function EndCard({ ep, actions }: { ep: ReaderEpisodeDto; actions: EndActions }) {
+/** end of an episode. `paged`: 페이지 넘김's last page (one more flip opens the next episode) */
+export function EndCard({ ep, actions, paged = false }: { ep: ReaderEpisodeDto; actions: EndActions; paged?: boolean }) {
   const skipped = skippedLabel(ep.next?.skipped);
   return (
     <div className="reader-column rv-end-card py-12 text-center">
@@ -185,15 +177,17 @@ export function EndCard({ ep, actions }: { ep: ReaderEpisodeDto; actions: EndAct
             className="flex min-h-[64px] w-full flex-col items-center justify-center rounded-[14px] bg-accent px-4 py-2.5 text-accent-text shadow-card hover:brightness-110 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           >
             <span className="flex items-center gap-1 text-[16px] font-bold">
-              다음화 보기 <ReaderIcon name="next" size={18} />
+              다음 화 보기 <ReaderIcon name="next" size={18} />
             </span>
             <span className="mt-0.5 block max-w-full truncate text-[13px] font-medium opacity-90">{episodeLabel(ep.next.episodeNo, ep.next.title)}</span>
           </button>
         ) : (
           <div className="rounded-[14px] border border-dashed border-border px-4 py-5 text-[14px] text-muted">
-            {actions.moreLater(ep.episodeNo) ? "다음 화는 아직 읽을 수 없습니다" : "마지막 화입니다"}
+            <p className="m-0 font-semibold text-text">지금 읽을 수 있는 최신 화입니다</p>
+            {actions.moreLater(ep.episodeNo) && <p className="m-0 mt-1 text-[13px]">다음 화는 아직 읽을 수 없습니다</p>}
           </div>
         )}
+        {paged && ep.next && <p className="m-0 text-[12.5px] text-muted">한 번 더 넘기면 다음 화로 넘어갑니다</p>}
         {skipped && (
           <p className="rounded-[10px] bg-warn-soft px-3 py-2 text-[13px] font-semibold text-warn">
             {skipped}는 아직 읽을 수 있는 원고가 없어 건너뜁니다
@@ -206,7 +200,7 @@ export function EndCard({ ep, actions }: { ep: ReaderEpisodeDto; actions: EndAct
             onClick={() => ep.prev && actions.onGo(ep.prev.episodeNo)}
             className="flex min-h-12 items-center justify-center gap-1 rounded-[12px] border border-border bg-surface text-[14px] font-semibold text-text hover:bg-surface-2 disabled:opacity-50"
           >
-            <ReaderIcon name="back" size={17} /> 이전화
+            <ReaderIcon name="back" size={17} /> 이전 화
           </button>
           <button
             type="button"
@@ -473,11 +467,69 @@ export function ScrollView({ novelId, mode, chain, onAppend, continuous, initial
 }
 
 // ── page view ───────────────────────────────────────────────────────────
-export function PageView({ ep, geometry: g, initial, typoKey, handleRef, events, store, actions, reducedMotion, blocksOf }: {
+/** one paginated item (a paragraph piece keeps `data-p`; a continued piece has no first-line indent) */
+function PageItemView({ it, blocks }: { it: PageItem; blocks: readonly ReadingBlock[] }) {
+  if (it.type === "text") return <p data-p={it.para} className={it.start > 0 ? "rv-cont" : undefined}>{it.text}</p>;
+  const b = blocks[it.block];
+  return b ? <Block b={b} p={null} /> : null;
+}
+
+const PageBody = memo(function PageBody({ page, index, ep, blocks }: { page: ReaderPage; index: number; ep: ReaderEpisodeDto; blocks: readonly ReadingBlock[] }) {
+  return (
+    <div className="reader-column">
+      {index === 0 && (
+        <div className="rv-flow">
+          <EpisodeHeader ep={ep} titleId="reader-title" />
+        </div>
+      )}
+      {page.items.length ? (
+        <div className="reader-prose">
+          {page.items.map((it, k) => (
+            <PageItemView key={k} it={it} blocks={blocks} />
+          ))}
+        </div>
+      ) : (
+        index === 0 && <p className="text-center text-muted">본문이 비어 있습니다.</p>
+      )}
+    </div>
+  );
+});
+
+/** DOM twin of PageItemView for the hidden measurer */
+function itemNode(it: PageItem): HTMLElement {
+  if (it.type === "text") {
+    const p = document.createElement("p");
+    if (it.start > 0) p.className = "rv-cont";
+    p.textContent = it.text;
+    return p;
+  }
+  const d = document.createElement("div");
+  if (it.type === "break") {
+    d.className = "reader-break";
+    const s = document.createElement("span");
+    s.textContent = "◆";
+    d.append(s);
+  }
+  return d;
+}
+
+const EMPTY_PAGES: ReaderPage[] = [{ items: [], chars: 0 }];
+
+/**
+ * 페이지 넘김: the episode is cut into pages of about `maxChars` characters (reader-pages.ts), each also checked
+ * against the screen with a hidden measurer of the same width and typography. Pages sit side by side on a
+ * track that slides by one page per turn; the page after the last one is the end card.
+ */
+export function PageView({ ep, geometry: g, initial, typoKey, maxChars, fontPx, lineHeight, handleRef, events, store, actions, reducedMotion, blocksOf = textBlocks }: {
   ep: ReaderEpisodeDto;
   geometry: PageGeometry;
   initial: InitialPosition;
   typoKey: string;
+  /** target characters per page (보기 설정 → 글자 수) */
+  maxChars: number;
+  /** font size (px) and line-height factor: estimate fallback when nothing can be measured */
+  fontPx: number;
+  lineHeight: number;
   handleRef: RefObject<ViewHandle | null>;
   events: ViewEvents;
   store: ProgressStore;
@@ -486,43 +538,57 @@ export function PageView({ ep, geometry: g, initial, typoKey, handleRef, events,
   /** illustrations extension point (default: the text alone) */
   blocksOf?: BlocksOf;
 }) {
-  const colsRef = useRef<HTMLDivElement>(null);
+  const blocks = useMemo(() => blocksOf(ep), [ep, blocksOf]);
+  const trackRef = useRef<HTMLDivElement>(null);
+  const measureRef = useRef<HTMLDivElement>(null);
+  const headRef = useRef<HTMLDivElement>(null);
+  const proseRef = useRef<HTMLDivElement>(null);
   const ev = useRef(events);
   ev.current = events;
-  const pos = useRef({ page: 0, count: 1, laidOut: false });
+  const [pages, setPages] = useState<ReaderPage[] | null>(null);
+  const [current, setCurrent] = useState(0);
+  const [fontsTick, setFontsTick] = useState(0);
+  const pagesRef = useRef<ReaderPage[]>(EMPTY_PAGES);
+  const pos = useRef({ page: 0, count: 2, laidOut: false });
   const anchorRef = useRef<ReadingAnchor | null>(initial && "anchor" in initial ? initial.anchor : null);
   const geo = useRef(g);
   geo.current = g;
+  const stride = () => geo.current.width + geo.current.gap;
   const saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const mountedAt = useRef(0);
 
-  const colsLeft = () => colsRef.current?.getBoundingClientRect().left ?? 0;
-  const fragsOf = (el: Element, left: number): BlockFragment[] => [...el.getClientRects()].map((r) => ({ page: pageOf(r.left - left, geo.current), height: r.height }));
-  const blocks = () => colsRef.current?.querySelectorAll<HTMLElement>(PARA) ?? ([] as unknown as NodeListOf<HTMLElement>);
-
-  const anchorForPage = (page: number): ReadingAnchor => {
-    const bs = blocks();
-    if (page <= 0 || !bs.length) return START_ANCHOR;
-    const left = colsLeft();
-    const lastPage = (el: Element) => {
-      const rs = el.getClientRects();
-      const r = rs[rs.length - 1];
-      return r ? pageOf(r.left - left, geo.current) : 0;
+  // paginate (before paint): text + typography + screen size + 글자 수
+  useLayoutEffect(() => {
+    const prose = proseRef.current;
+    const head = headRef.current;
+    const measurable = !!prose && !!head && prose.getBoundingClientRect().width > 0;
+    const headH = measurable ? head.getBoundingClientRect().height : 0;
+    const estimate = estimatePageChars({ width: g.width, height: g.height, fontPx, lineHeight });
+    const fits = (items: readonly PageItem[], index: number) => {
+      if (!measurable) return items.reduce((n, i) => n + (i.type === "text" ? i.end - i.start : 0), 0) <= (index === 0 ? estimate * 0.6 : estimate);
+      prose.replaceChildren(...items.map(itemNode));
+      return prose.getBoundingClientRect().height <= g.height - (index === 0 ? headH : 0) + 0.5;
     };
-    const i = firstIndex(bs.length, (k) => lastPage(bs[k]!) >= page);
-    if (i >= bs.length) return { para: bs.length - 1, offset: 1 };
-    return { para: i, offset: anchorOffsetInPage(fragsOf(bs[i]!, left), page) };
-  };
-  const pageForAnchor = (a: ReadingAnchor): number => {
-    const bs = blocks();
-    if (isStartAnchor(a) || !bs.length) return 0;
-    const el = bs[Math.min(a.para, bs.length - 1)]!;
-    return pageForAnchorOffset(fragsOf(el, colsLeft()), a.offset);
-  };
+    const next = paginateBlocks(blocks, { maxChars, fits });
+    prose?.replaceChildren();
+    setPages(next.length ? next : EMPTY_PAGES);
+  }, [blocks, g.width, g.height, typoKey, maxChars, fontPx, lineHeight, fontsTick]);
+
+  useEffect(() => {
+    mountedAt.current = performance.now();
+    let alive = true;
+    void document.fonts?.ready.then(() => {
+      if (alive) setFontsTick((t) => t + 1);
+    });
+    return () => {
+      alive = false;
+      clearTimeout(saveTimer.current);
+    };
+  }, []);
 
   const publish = (page: number) => {
     const { count } = pos.current;
-    const ratio = pageRatio(page, count);
-    store.set({ episodeNo: ep.episodeNo, page, pageCount: count, ratio });
+    store.set({ episodeNo: ep.episodeNo, page, pageCount: count, ratio: pageRatio(page, count) });
     if (pageFinished(page, count)) ev.current.onFinished(ep.episodeNo);
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
@@ -530,24 +596,27 @@ export function PageView({ ep, geometry: g, initial, typoKey, handleRef, events,
     }, 200);
   };
 
+  const place = (x: number, animate: boolean) => {
+    const track = trackRef.current;
+    if (!track) return;
+    if (!animate || reducedMotion) {
+      track.style.transition = "none";
+      track.style.transform = `translate3d(${x}px,0,0)`;
+      void track.offsetWidth;
+      track.style.transition = "";
+    } else track.style.transform = `translate3d(${x}px,0,0)`;
+  };
+
   /**
-   * show a page. `user`: the reader moved (turn / seek / focus) → the anchor becomes the start of that page.
-   * Re-pagination passes false and keeps the anchor: re-deriving it from the new page start would pull the
-   * position back a little on every resize / font change, and that adds up.
+   * show a page. `user`: the reader moved (turn / seek) → the anchor becomes the start of that page.
+   * Re-pagination passes false and keeps the anchor, so repeated font / size changes do not drift.
    */
   const apply = (page: number, animate: boolean, user = true) => {
-    const cols = colsRef.current;
-    if (!cols) return;
     const p = clampPage(page, pos.current.count);
     pos.current.page = p;
-    if (user || !anchorRef.current) anchorRef.current = anchorForPage(p);
-    const x = -p * pageStride(geo.current);
-    if (!animate || reducedMotion) {
-      cols.style.transition = "none";
-      cols.style.transform = `translate3d(${x}px,0,0)`;
-      void cols.offsetWidth;
-      cols.style.transition = "";
-    } else cols.style.transform = `translate3d(${x}px,0,0)`;
+    if (user || !anchorRef.current) anchorRef.current = anchorForPage(pagesRef.current, p);
+    place(-p * stride(), animate);
+    setCurrent(p);
     publish(p);
   };
 
@@ -564,31 +633,18 @@ export function PageView({ ep, geometry: g, initial, typoKey, handleRef, events,
     step: doStep,
   };
 
-  // (re)paginate: count pages, then put the anchored paragraph back on screen
-  const layout = () => {
-    const cols = colsRef.current;
-    const end = cols?.querySelector(".rv-page-end");
-    if (!cols || !end) return;
-    const r = end.getClientRects()[0];
-    pos.current.count = r ? pageCountFor(r.left - colsLeft(), geo.current) : 1;
+  // new pages: put the anchored paragraph back on screen
+  useLayoutEffect(() => {
+    if (!pages) return;
+    pagesRef.current = pages;
+    pos.current.count = pages.length + 1;
     let page: number;
     if (!pos.current.laidOut) {
       pos.current.laidOut = true;
-      page = initial && "anchor" in initial ? pageForAnchor(initial.anchor) : initial && "ratio" in initial ? pageForRatio(initial.ratio, Math.max(1, pos.current.count - 1)) : 0;
-    } else page = anchorRef.current ? pageForAnchor(anchorRef.current) : pos.current.page;
+      page = !initial ? 0 : "at" in initial ? pages.length - 1 : "anchor" in initial ? pageForAnchor(pages, initial.anchor) : pageForRatio(initial.ratio, pages.length);
+    } else page = anchorRef.current ? pageForAnchor(pages, anchorRef.current) : pos.current.page;
     apply(page, false, false);
-  };
-  useLayoutEffect(layout, [g.width, g.height, g.gap, typoKey]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    let alive = true;
-    void document.fonts?.ready.then(() => {
-      if (alive) layout();
-    });
-    return () => {
-      alive = false;
-      clearTimeout(saveTimer.current);
-    };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pages]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // the document must not scroll behind the fixed page box
   useEffect(() => {
@@ -601,8 +657,7 @@ export function PageView({ ep, geometry: g, initial, typoKey, handleRef, events,
     };
   }, []);
 
-  // focus (Tab, screen-reader virtual cursor) inside an off-screen page: the browser scrolls the clipped frame
-  // itself, which desynchronises it from the page counter → undo that scroll and turn to the focused page
+  // focus inside the clipped frame (Tab, screen-reader cursor) must not scroll it out of sync with the track
   const pageFrameRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const frame = pageFrameRef.current;
@@ -613,22 +668,11 @@ export function PageView({ ep, geometry: g, initial, typoKey, handleRef, events,
         frame.scrollTop = 0;
       }
     };
-    const onFocusIn = (e: FocusEvent) => {
-      reset();
-      if (!(e.target instanceof Element) || !colsRef.current?.contains(e.target)) return;
-      const r = e.target.getBoundingClientRect();
-      const page = pageOf(r.left + r.width / 2 - colsLeft(), geo.current);
-      if (page !== pos.current.page) apply(page, false);
-    };
     frame.addEventListener("scroll", reset, { passive: true });
-    frame.addEventListener("focusin", onFocusIn);
-    return () => {
-      frame.removeEventListener("scroll", reset);
-      frame.removeEventListener("focusin", onFocusIn);
-    };
-  }); // eslint-disable-line react-hooks/exhaustive-deps
+    return () => frame.removeEventListener("scroll", reset);
+  }, []);
 
-  // mouse wheel / trackpad: one page per gesture
+  // mouse wheel / trackpad: one page per gesture (ignored right after an episode change: trackpad inertia)
   const frameRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = frameRef.current;
@@ -637,8 +681,9 @@ export function PageView({ ep, geometry: g, initial, typoKey, handleRef, events,
     const onWheel = (e: WheelEvent) => {
       if (isInteractive(e.target)) return;
       const d = Math.abs(e.deltaY) > Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
-      if (Math.abs(d) < 12 || e.timeStamp - lastAt < 380) return;
-      lastAt = e.timeStamp;
+      const now = performance.now();
+      if (Math.abs(d) < 12 || now - lastAt < 380 || now - mountedAt.current < 600) return;
+      lastAt = now;
       doStep(d > 0 ? "next" : "prev");
     };
     el.addEventListener("wheel", onWheel, { passive: true });
@@ -653,28 +698,29 @@ export function PageView({ ep, geometry: g, initial, typoKey, handleRef, events,
   };
   const onPointerMove = (e: ReactPointerEvent) => {
     const d = drag.current;
-    const cols = colsRef.current;
-    if (!d || e.pointerId !== d.id || !cols) return;
+    const track = trackRef.current;
+    if (!d || e.pointerId !== d.id || !track) return;
     const dx = e.clientX - d.x;
     if (!d.active && Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(e.clientY - d.y)) {
       d.active = true;
-      cols.dataset.dragging = "true";
+      track.dataset.dragging = "true";
       e.currentTarget.setPointerCapture(e.pointerId);
     }
-    if (d.active) cols.style.transform = `translate3d(${-pos.current.page * pageStride(geo.current) + dragOffset(dx, pos.current.page, pos.current.count)}px,0,0)`;
+    if (d.active) track.style.transform = `translate3d(${-pos.current.page * stride() + dragOffset(dx, pos.current.page, pos.current.count)}px,0,0)`;
   };
   const onPointerUp = (e: ReactPointerEvent) => {
     const d = drag.current;
     drag.current = null;
-    const cols = colsRef.current;
-    if (!d || e.pointerId !== d.id || !cols) return;
+    const track = trackRef.current;
+    if (!d || e.pointerId !== d.id || !track) return;
     const dx = e.clientX - d.x;
     const dy = e.clientY - d.y;
     if (d.active) {
-      cols.dataset.dragging = "false";
+      track.dataset.dragging = "false";
       const act = swipeAction(dx, dy, e.timeStamp - d.t, geo.current.width);
+      // snap back first: leaving the episode keeps this page in place until the next one mounts
+      if (!act || !("page" in pageStep(pos.current.page, pos.current.count, act))) place(-pos.current.page * stride(), true);
       if (act) doStep(act);
-      else apply(pos.current.page, true);
     } else if (Math.abs(dx) < 10 && Math.abs(dy) < 10) {
       const zone = tapZone(e.clientX, window.innerWidth, "page");
       if (zone === "menu") ev.current.onMenu();
@@ -682,48 +728,65 @@ export function PageView({ ep, geometry: g, initial, typoKey, handleRef, events,
     }
   };
   const onPointerCancel = () => {
-    if (drag.current?.active && colsRef.current) {
-      colsRef.current.dataset.dragging = "false";
-      apply(pos.current.page, true);
+    if (drag.current?.active && trackRef.current) {
+      trackRef.current.dataset.dragging = "false";
+      place(-pos.current.page * stride(), true);
     }
     drag.current = null;
   };
 
-  const style = {
-    "--page-h": `${g.height}px`,
-    width: g.width,
-    columnWidth: `${g.width}px`,
-    columnGap: `${g.gap}px`,
-  } as CSSProperties;
-
+  const shown = pages ?? EMPTY_PAGES;
+  const count = shown.length + 1;
+  const pageStyle = (i: number): CSSProperties => ({ left: i * (g.width + g.gap), width: g.width });
+  const off = (i: number) => (i !== current ? { "aria-hidden": true, inert: true } : {});
   return (
     <main ref={frameRef} className="rv-pages" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel}>
-      <div ref={pageFrameRef} className="rv-page-frame" style={{ left: g.left, top: g.top, width: g.width, height: g.height }}>
-        <div ref={colsRef} className="rv-columns" style={style}>
-          <EpisodeArticle ep={ep} titleId="reader-title" blocksOf={blocksOf} />
-          <div className="rv-page-end">
-            <EndCard ep={ep} actions={actions} />
-          </div>
+      <div ref={pageFrameRef} className="rv-page-frame" style={{ left: g.left, top: g.top, width: g.width, height: g.height, "--page-h": `${g.height}px` } as CSSProperties}>
+        <div ref={trackRef} className={cx("rv-track", !pages && "invisible")}>
+          {shown.map((pg, i) => (
+            <section
+              key={i}
+              className={cx("rv-page", pg.items[0]?.type === "image" && pg.items.length === 1 && "rv-page-image")}
+              style={pageStyle(i)}
+              aria-label={`${i + 1}쪽`}
+              {...off(i)}
+            >
+              {Math.abs(i - current) <= 2 && <PageBody page={pg} index={i} ep={ep} blocks={blocks} />}
+            </section>
+          ))}
+          <section className="rv-page rv-page-end" style={pageStyle(shown.length)} aria-label={`${ep.episodeNo}화 끝`} {...off(shown.length)}>
+            <EndCard ep={ep} actions={actions} paged />
+          </section>
         </div>
       </div>
-      <PageMeta ep={ep} g={g} store={store} />
+      {/* hidden measurer: same width + typography as a page */}
+      <div ref={measureRef} className="rv-measure" style={{ width: g.width }} aria-hidden="true">
+        <div className="reader-column">
+          <div ref={headRef} className="rv-flow">
+            <EpisodeHeader ep={ep} />
+          </div>
+          <div ref={proseRef} className="reader-prose" />
+        </div>
+      </div>
+      <PageMeta ep={ep} g={g} page={current} count={count} />
     </main>
   );
 }
 
-/** faint running header (episode) and page counter, always visible in 페이지 넘김 */
-function PageMeta({ ep, g, store }: { ep: ReaderEpisodeDto; g: PageGeometry; store: ProgressStore }) {
-  const p = useProgress(store);
+/** faint running header (episode) and page counter, always visible in 페이지 넘김; announces page turns */
+function PageMeta({ ep, g, page, count }: { ep: ReaderEpisodeDto; g: PageGeometry; page: number; count: number }) {
+  const label = pageCounter(page, count);
   return (
     <>
       <div className="rv-page-meta" style={{ top: Math.max(8, (g.top - 12) / 2), paddingInline: g.left }} aria-hidden="true">
         <span className="min-w-0 truncate">{episodeLabel(ep.episodeNo, ep.title)}</span>
       </div>
-      <div className="rv-page-meta" style={{ bottom: Math.max(8, (g.top - 12) / 2), paddingInline: g.left }}>
-        <span className="sr-only">페이지</span>
-        <span className={cx("ml-auto tabular")}>{p.pageCount ? pageLabel(p.page, p.pageCount) : ""}</span>
+      <div className="rv-page-meta" style={{ bottom: Math.max(8, (g.top - 12) / 2), paddingInline: g.left }} aria-hidden="true">
+        <span className="ml-auto tabular">{label}</span>
       </div>
+      <p className="sr-only" aria-live="polite" aria-atomic="true">
+        {label === "끝" ? `${ep.episodeNo}화 끝` : `${label} 페이지`}
+      </p>
     </>
   );
 }
-

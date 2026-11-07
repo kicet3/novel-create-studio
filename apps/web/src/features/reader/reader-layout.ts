@@ -1,5 +1,5 @@
 /**
- * 읽기(reader) — pure viewer math: page geometry / pagination (CSS columns), reading anchors,
+ * 읽기(reader) — pure viewer math: page geometry, page index / ratio, scroll anchors,
  * tap zones, swipes and keyboard mapping. No DOM access: callers pass measured numbers.
  */
 import { clamp01, type ReaderView, type ReadingAnchor } from "./reader-model.js";
@@ -35,22 +35,11 @@ export function pageGeometry({ viewportWidth, viewportHeight, fontPx, maxEm, sid
   return { width, height, gap: Math.max(32, 2 * sidePad), left: Math.max(0, Math.floor((viewportWidth - width) / 2)), top: topPad };
 }
 
-export const pageStride = (g: Pick<PageGeometry, "width" | "gap">) => g.width + g.gap;
-
-/** page index of a horizontal layout offset inside the column box (tolerates sub-pixel rounding) */
-export function pageOf(offsetX: number, g: Pick<PageGeometry, "width" | "gap">): number {
-  return Math.max(0, Math.floor((offsetX + 1) / pageStride(g)));
-}
-
-/** number of pages given the offset of the last thing laid out (the end card, which starts its own page) */
-export const pageCountFor = (lastOffsetX: number, g: Pick<PageGeometry, "width" | "gap">) => pageOf(lastOffsetX, g) + 1;
-
 export const clampPage = (page: number, count: number) => Math.min(Math.max(0, count - 1), Math.max(0, Math.round(Number.isFinite(page) ? page : 0)));
 
 /** 0..1 for the slider / resume; a single page counts as fully read */
 export const pageRatio = (page: number, count: number) => (count <= 1 ? 1 : clamp01(page / (count - 1)));
 export const pageForRatio = (ratio: number, count: number) => clampPage(clamp01(ratio) * (count - 1), count);
-export const pageLabel = (page: number, count: number) => `${clampPage(page, count) + 1} / ${Math.max(1, count)}`;
 export const percentLabel = (ratio: number) => `${Math.round(clamp01(ratio) * 100)}%`;
 
 /** the last page is the end card: reaching it (or the last text page before it) finishes the episode */
@@ -62,34 +51,7 @@ export function pageStep(page: number, count: number, dir: "prev" | "next"): { p
   return page <= 0 ? { episode: "prev" } : { page: page - 1 };
 }
 
-// ── anchors ─────────────────────────────────────────────────────────────
-/** one rendered fragment of a block (a paragraph split over pages has several) */
-export interface BlockFragment {
-  page: number;
-  height: number;
-}
-
-/** fraction of the block that lies before `page` (0 when the block starts on it or later) */
-export function anchorOffsetInPage(frags: readonly BlockFragment[], page: number): number {
-  const total = frags.reduce((n, f) => n + f.height, 0);
-  if (total <= 0) return 0;
-  const before = frags.filter((f) => f.page < page).reduce((n, f) => n + f.height, 0);
-  return clamp01(before / total);
-}
-
-/** page showing the anchored point of a block */
-export function pageForAnchorOffset(frags: readonly BlockFragment[], offset: number): number {
-  if (!frags.length) return 0;
-  const total = frags.reduce((n, f) => n + f.height, 0);
-  const target = clamp01(offset) * total;
-  let acc = 0;
-  for (const f of frags) {
-    acc += f.height;
-    if (target < acc - 0.5) return f.page;
-  }
-  return frags[frags.length - 1]!.page;
-}
-
+// ── anchors (scroll view; 페이지 넘김 maps anchors in reader-pages.ts) ──────
 /**
  * Index of the first item for which `isAfter(i)` is true, assuming it is monotonic (false…false, true…true);
  * `count` when none is. Used to find the first block that reaches a page / the viewport top in O(log n) measurements.
@@ -118,8 +80,8 @@ export const scrollYForAnchor = (block: { top: number; height: number }, offset:
 // ── input ───────────────────────────────────────────────────────────────
 export type TapAction = "prev" | "next" | "menu";
 
-/** page view: left / right edge = 이전 / 다음 페이지, center = 메뉴; scroll view: everywhere = 메뉴 */
-export function tapZone(x: number, width: number, view: ReaderView, edge = 0.3): TapAction {
+/** page view: left / right third = 이전 / 다음 페이지, center = 메뉴; scroll view: everywhere = 메뉴 */
+export function tapZone(x: number, width: number, view: ReaderView, edge = 1 / 3): TapAction {
   if (view === "scroll" || width <= 0) return "menu";
   const e = Math.min(0.45, Math.max(0.1, edge));
   if (x < width * e) return "prev";

@@ -1,20 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
-  anchorOffsetInPage,
   clampPage,
   dragOffset,
   firstIndex,
   keyAction,
-  pageCountFor,
   pageFinished,
-  pageForAnchorOffset,
   pageForRatio,
   pageGeometry,
-  pageLabel,
-  pageOf,
   pageRatio,
   pageStep,
-  pageStride,
   percentLabel,
   scrollAnchorAt,
   scrollYForAnchor,
@@ -46,23 +40,6 @@ describe("page geometry", () => {
 });
 
 describe("pagination math", () => {
-  const g = { width: 346, gap: 44 }; // stride 390
-  it("maps column offsets to pages, tolerating sub-pixel rounding", () => {
-    expect(pageStride(g)).toBe(390);
-    expect(pageOf(0, g)).toBe(0);
-    expect(pageOf(345, g)).toBe(0);
-    expect(pageOf(389.4, g)).toBe(1); // 390 rounded down by layout
-    expect(pageOf(390, g)).toBe(1);
-    expect(pageOf(390 * 47 + 120, g)).toBe(47);
-    expect(pageOf(-3, g)).toBe(0);
-  });
-
-  it("counts pages from the end card (which starts its own page)", () => {
-    expect(pageCountFor(0, g)).toBe(1);
-    expect(pageCountFor(390 * 47, g)).toBe(48);
-    expect(pageCountFor(390 * 47 - 0.4, g)).toBe(48);
-  });
-
   it("converts between pages, ratios and labels", () => {
     expect(clampPage(-2, 48)).toBe(0);
     expect(clampPage(60, 48)).toBe(47);
@@ -73,8 +50,6 @@ describe("pagination math", () => {
     expect(pageRatio(0, 1)).toBe(1);
     expect(pageForRatio(0.5, 49)).toBe(24);
     expect(pageForRatio(2, 48)).toBe(47);
-    expect(pageLabel(11, 48)).toBe("12 / 48");
-    expect(pageLabel(0, 0)).toBe("1 / 1");
     expect(percentLabel(0.374)).toBe("37%");
   });
 
@@ -90,40 +65,11 @@ describe("pagination math", () => {
 });
 
 describe("anchors (resume across views / re-pagination)", () => {
-  // a paragraph split over pages 4 (60px) and 5 (40px)
-  const split = [
-    { page: 4, height: 60 },
-    { page: 5, height: 40 },
-  ];
-  it("page → anchor → page round-trips", () => {
-    expect(anchorOffsetInPage(split, 4)).toBe(0);
-    expect(anchorOffsetInPage(split, 5)).toBe(0.6);
-    expect(pageForAnchorOffset(split, 0)).toBe(4);
-    expect(pageForAnchorOffset(split, 0.6)).toBe(5);
-    expect(pageForAnchorOffset(split, 0.59)).toBe(4);
-    expect(pageForAnchorOffset(split, 1)).toBe(5);
-    expect(pageForAnchorOffset([], 0.5)).toBe(0);
-    expect(anchorOffsetInPage([{ page: 2, height: 0 }], 3)).toBe(0);
-  });
-
-  it("an anchor taken in scroll view lands on the page holding that point after re-pagination", () => {
-    // scroll view: block 7 is 200px tall, the reading line is 150px into it → offset 0.75
+  it("an anchor taken in scroll view is the paragraph + share of it at the reading line", () => {
     const blocks = Array.from({ length: 12 }, (_, i) => ({ top: 100 + i * 200, height: 200 }));
     const a = scrollAnchorAt(blocks, 100 + 7 * 200 + 150);
     expect(a).toEqual({ para: 7, offset: 0.75 });
     expect(scrollYForAnchor(blocks[7]!, a.offset)).toBe(100 + 7 * 200 + 150);
-    // page view after a font change: block 7 now spans pages 9 (30px), 10 (90px)
-    expect(pageForAnchorOffset([{ page: 9, height: 30 }, { page: 10, height: 90 }], a.offset)).toBe(10);
-  });
-
-  it("re-paginating with the kept anchor does not drift (anchor → page → same anchor)", () => {
-    // a paragraph split over pages 4 (60px) / 5 (40px); the user is on page 5 → anchor offset 0.6
-    const before = [{ page: 4, height: 60 }, { page: 5, height: 40 }];
-    const a = anchorOffsetInPage(before, 5);
-    // bigger font, then back: the same anchor is restored every time (no page-start re-derivation in between)
-    const bigger = [{ page: 7, height: 50 }, { page: 8, height: 70 }, { page: 9, height: 30 }];
-    expect(pageForAnchorOffset(bigger, a)).toBe(8);
-    expect(pageForAnchorOffset(before, a)).toBe(5);
   });
 
   it("finds the paragraph at the reading line in O(log n)", () => {

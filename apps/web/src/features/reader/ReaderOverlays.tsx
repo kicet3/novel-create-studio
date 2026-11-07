@@ -6,7 +6,8 @@ import { QueryError, formatNumber } from "../../components/ui/index.js";
 import { cx } from "../../lib/cx.js";
 import { ICON_BTN, READER_PANEL_ATTR, ReaderIcon, ReaderSettingsPanel, SettingsGlyph, useDialogFocus, type UpdateSettings } from "./ReaderShell.js";
 import { dimOpacity, episodeLabel, groupToc, partLabel, readableEpisodes, skippedLabel, type ReadHistory, type ReaderSettings, type ReaderView, type TocRow } from "./reader-model.js";
-import { pageLabel, pageRatio, percentLabel } from "./reader-layout.js";
+import { pageRatio, percentLabel } from "./reader-layout.js";
+import { pageCounter } from "./reader-pages.js";
 import { useProgress, type ProgressStore, type ViewHandle } from "./ReaderViews.js";
 
 const panelAttr = { [READER_PANEL_ATTR]: "" };
@@ -66,13 +67,13 @@ export function BottomBar({ shown, store, view, ep, handle, onGo, onToc, onSetti
     <nav className="rv-bar rv-bar-bottom" data-hidden={!shown} aria-label="읽기 메뉴" aria-hidden={!shown || undefined} inert={!shown || undefined}>
       <div className="mx-auto max-w-[760px] px-2 pt-1.5 sm:px-4">
         <div className="flex items-center gap-1">
-          <button type="button" className={BAR_BTN} disabled={!ep?.prev} onClick={() => ep?.prev && onGo(ep.prev.episodeNo)} title={navTitle("이전화", ep?.prev)}>
+          <button type="button" className={BAR_BTN} disabled={!ep?.prev} onClick={() => ep?.prev && onGo(ep.prev.episodeNo)} title={navTitle("이전 화", ep?.prev)}>
             <ReaderIcon name="back" size={18} />
-            이전화
+            이전 화
           </button>
           <ProgressSlider store={store} view={view} episodeNo={ep?.episodeNo} handle={handle} />
-          <button type="button" className={BAR_BTN} disabled={!ep?.next} onClick={() => ep?.next && onGo(ep.next.episodeNo)} title={navTitle("다음화", ep?.next)}>
-            다음화
+          <button type="button" className={BAR_BTN} disabled={!ep?.next} onClick={() => ep?.next && onGo(ep.next.episodeNo)} title={navTitle("다음 화", ep?.next)}>
+            다음 화
             <ReaderIcon name="next" size={18} />
           </button>
         </div>
@@ -100,14 +101,14 @@ export function BottomBar({ shown, store, view, ep, handle, onGo, onToc, onSetti
   );
 }
 
-/** progress of the current episode: 스크롤 = %, 페이지 = "12 / 48"; dragging seeks live */
+/** progress of the current episode: 스크롤 = %, 페이지 = "12 / 48" (the end card = "끝"); dragging seeks live */
 function ProgressSlider({ store, view, episodeNo, handle }: { store: ProgressStore; view: ReaderView; episodeNo: number | undefined; handle: RefObject<ViewHandle | null> }) {
   const p = useProgress(store);
   const paged = view === "page" && p.pageCount > 0;
   const max = paged ? Math.max(1, p.pageCount - 1) : 1000;
   const value = paged ? p.page : Math.round(p.ratio * 1000);
   const ratio = paged ? pageRatio(p.page, p.pageCount) : p.ratio;
-  const label = paged ? pageLabel(p.page, p.pageCount) : percentLabel(p.ratio);
+  const label = paged ? pageCounter(p.page, p.pageCount) : percentLabel(p.ratio);
   return (
     <div className="flex min-w-0 flex-1 items-center gap-2 px-1">
       <input
@@ -119,7 +120,7 @@ function ProgressSlider({ store, view, episodeNo, handle }: { store: ProgressSto
         value={value}
         disabled={!episodeNo}
         aria-label={paged ? "페이지 이동" : "읽은 위치"}
-        aria-valuetext={paged ? `${label} 페이지` : `${label} 읽음`}
+        aria-valuetext={paged ? (label === "끝" ? "화 끝" : `${label} 페이지`) : `${label} 읽음`}
         style={{ "--fill": `${ratio * 100}%` } as CSSProperties}
         onChange={(e) => {
           const v = Number(e.target.value);
@@ -334,8 +335,8 @@ export function TapHint({ view, onClose }: { view: ReaderView; onClose: () => vo
         <p className="m-0 text-[13.5px] leading-relaxed opacity-90">
           {view === "page"
             ? touch
-              ? "화면을 좌우로 밀어서 넘길 수도 있습니다."
-              : "←/→·스페이스 키나 마우스 휠로도 넘길 수 있습니다. Enter 키로 메뉴를 엽니다."
+              ? "화면을 좌우로 밀어서 넘길 수도 있습니다. 마지막 쪽에서 더 넘기면 다음 화로 넘어갑니다."
+              : "←/→·PageDown·스페이스 키나 마우스 휠로도 넘길 수 있습니다. 마지막 쪽에서 더 넘기면 다음 화로 넘어갑니다. Enter 키로 메뉴를 엽니다."
             : touch
               ? "화 끝에서 다음화로 바로 넘어갈 수 있습니다."
               : "←/→ 키로 이전화·다음화로, Enter 키로 메뉴를 엽니다."}

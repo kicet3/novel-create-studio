@@ -13,6 +13,9 @@ import {
   READER_MARGIN_PX,
   READER_MAX_EM,
   READER_MODE_LABELS,
+  READER_PAGE_CHARS,
+  READER_PAGE_CHARS_LABELS,
+  READER_PAGE_CHAR_COUNT,
   READER_PARA_SPACING_EM,
   READER_SETTINGS_KEY,
   READER_STEPS3,
@@ -476,6 +479,14 @@ export function ReaderSettingsPanel({ settings, onChange, viewer = true }: { set
               </span>
             )}
           />
+          {settings.view === "page" && (
+            <div className="grid gap-1">
+              <Segmented label="글자 수" values={READER_PAGE_CHARS} labels={READER_PAGE_CHARS_LABELS} value={settings.pageChars} onChange={(pageChars) => onChange({ pageChars })} />
+              <p className="m-0 pl-[5rem] text-[12px] text-muted">
+                한 페이지에 약 {READER_PAGE_CHAR_COUNT[settings.pageChars].toLocaleString("ko-KR")}자 · 화면을 넘치면 그만큼 줄여 나눕니다
+              </p>
+            </div>
+          )}
           {settings.view === "scroll" && (
             <Switch label="다음 화 이어 보기" hint="화 끝에서 다음 화를 이어서 불러옵니다" checked={settings.continuous} onChange={(continuous) => onChange({ continuous })} />
           )}
@@ -505,7 +516,7 @@ export function ReaderSettingsPanel({ settings, onChange, viewer = true }: { set
         <button
           type="button"
           className="min-h-10 rounded-[8px] px-3 text-[13px] font-semibold text-muted hover:bg-surface-2 hover:text-text"
-          onClick={() => onChange({ ...DEFAULT_READER_SETTINGS, view: settings.view, mode: settings.mode, continuous: settings.continuous })}
+          onClick={() => onChange({ ...DEFAULT_READER_SETTINGS, view: settings.view, pageChars: settings.pageChars, mode: settings.mode, continuous: settings.continuous })}
         >
           글자·배경 초기화
         </button>

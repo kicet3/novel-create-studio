@@ -3,6 +3,7 @@ import type { ReaderTocDto, ReaderTocEpisodeDto } from "@ncs/shared";
 import {
   DEFAULT_READER_SETTINGS,
   READER_SETTINGS_KEY,
+  LEGACY_READER_SETTINGS_KEY,
   effectiveReaderTheme,
   groupToc,
   headerVisible,
@@ -156,9 +157,21 @@ describe("reader settings persistence", () => {
 
   it("migrates settings saved by the first reader version", () => {
     const v1 = parseReaderSettings('{"fontSize":"xl","font":"myeongjo","width":"narrow","theme":"sepia","mode":"draft"}');
-    expect(v1).toMatchObject({ fontStep: 7, font: "myeongjo", margin: "wide", theme: "ivory", mode: "draft", view: "scroll" });
+    expect(v1).toMatchObject({ fontStep: 7, font: "myeongjo", margin: "wide", theme: "ivory", mode: "draft", view: "page" });
     expect(parseReaderSettings('{"theme":"dark","width":"wide","fontSize":"sm"}')).toMatchObject({ theme: "black", margin: "narrow", fontStep: 2 });
     expect(parseReaderSettings('{"theme":"light"}').theme).toBe("white");
+  });
+
+  it("페이지 넘김 is the default: settings saved before it (v1 key) keep typography but switch to pages", () => {
+    expect(DEFAULT_READER_SETTINGS.view).toBe("page");
+    expect(DEFAULT_READER_SETTINGS.pageChars).toBe("normal");
+    const old = memory({ [LEGACY_READER_SETTINGS_KEY]: JSON.stringify({ ...DEFAULT_READER_SETTINGS, view: "scroll", fontStep: 8, theme: "black" }) });
+    expect(loadReaderSettings(old)).toMatchObject({ view: "page", fontStep: 8, theme: "black" });
+    // choosing 스크롤 보기 after the change is kept
+    saveReaderSettings(old, { ...loadReaderSettings(old), view: "scroll" });
+    expect(loadReaderSettings(old).view).toBe("scroll");
+    expect(parseReaderSettings('{"pageChars":"many"}').pageChars).toBe("many");
+    expect(parseReaderSettings('{"pageChars":"huge"}').pageChars).toBe("normal");
   });
 
   it("theme auto follows the app override, then the OS", () => {
