@@ -417,6 +417,7 @@ export const LABELS_KO = {
     safety_real_person: "실존 인물",
     plan_deviation: "기획 이탈",
     opening_continuity: "직전 화와 이어짐",
+    pending_canon_changed: "앞 화 미확정 설정 변경",
   }),
   issue_severity: labels("issue_severity", { high: "높음", medium: "중간", low: "낮음" }),
   continuity_issue_status: labels("continuity_issue_status", {

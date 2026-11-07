@@ -6,7 +6,7 @@ import { and, eq, inArray, isNull, or, sql } from "@ncs/db/orm";
 import { entities, entityNames, facts, factVersions, identityDecisions, mentions } from "@ncs/db/schema";
 import type { CanonStatus, FactChangeReason } from "@ncs/shared";
 import { ConflictError, NotFoundError, type ActorRef, type NovelScope, type Tx } from "../../../../platform/index.js";
-import type { CandidateFactDraft, CandidateFactResult, EpisodeFact, Fact, FactRetirement } from "../../index.js";
+import type { CandidateFactDraft, CandidateFactResult, EpisodeFact, Fact, FactRetirement, FactVersionUsage } from "../../index.js";
 import { lookupPredicate, type OntologySchemaData } from "../../domain/base-schema.js";
 import {
   canonicalOrientation,
@@ -642,6 +642,56 @@ export async function listEpisodeFacts(db: Tx["db"], scope: NovelScope, episodeI
       supersedes: c.supersedes ?? null,
       reconcilePending: c.reconcilePending === true,
       reconcileKeptBy: c.reconcileKeptBy ?? null,
+    };
+  });
+}
+
+/**
+ * 설계 추가(미확정 사실 선행 집필): what became of fact versions a run read (context snapshot refs). `changed` = the fact
+ * is no longer live (rejected / retracted / superseded) or its current version says something else (subject,
+ * predicate, object, value, negation) than the version the run saw; marker-only versions (hold, kept-by) do not count.
+ */
+export async function factVersionUsage(db: Tx["db"], scope: NovelScope, versionIds: string[]): Promise<FactVersionUsage[]> {
+  const ids = [...new Set(versionIds.filter(Boolean))];
+  if (!ids.length) return [];
+  const used = await db.select({ id: factVersions.id, factId: factVersions.factId, content: factVersions.content }).from(factVersions).where(and(eq(factVersions.novelId, scope.novelId), inArray(factVersions.id, ids)));
+  if (!used.length) return [];
+  const factIds = [...new Set(used.map((u) => u.factId))];
+  const rows = await db.select({ id: facts.id, canonStatus: facts.canonStatus }).from(facts).where(and(eq(facts.novelId, scope.novelId), inArray(facts.id, factIds)));
+  const status = new Map(rows.map((r) => [r.id, r.canonStatus]));
+  const cur = await db
+    .select({ id: factVersions.id, factId: factVersions.factId, content: factVersions.content })
+    .from(factVersions)
+    .where(and(eq(factVersions.novelId, scope.novelId), inArray(factVersions.factId, factIds), isNull(factVersions.supersededAt)));
+  const current = new Map(cur.map((c) => [c.factId, c]));
+  const sig = (c: unknown) => {
+    const x = (c ?? {}) as Partial<FactContent>;
+    return JSON.stringify([x.subjectEntityId ?? null, x.predicate ?? null, x.objectEntityId ?? null, x.objectFactId ?? null, x.value ?? null, x.isNegation ?? false]);
+  };
+  // a retired fact replaced by a successor that says the same (re-extraction under a new id) is not a change
+  const succIds = [...new Set(cur.map((c) => ((c.content ?? {}) as FactContent).supersededByFactId).filter((x): x is string => !!x))];
+  const succ = new Map<string, unknown>();
+  if (succIds.length) {
+    const live = await db.select({ id: facts.id }).from(facts).where(and(eq(facts.novelId, scope.novelId), inArray(facts.id, succIds), inArray(facts.canonStatus, LIVE)));
+    const liveIds = live.map((r) => r.id);
+    if (liveIds.length) {
+      const sv = await db.select({ factId: factVersions.factId, content: factVersions.content }).from(factVersions).where(and(eq(factVersions.novelId, scope.novelId), inArray(factVersions.factId, liveIds), isNull(factVersions.supersededAt)));
+      for (const v of sv) succ.set(v.factId, v.content);
+    }
+  }
+  return used.map((u) => {
+    const st = status.get(u.factId) ?? "rejected";
+    const c = current.get(u.factId);
+    const successor = ((c?.content ?? {}) as FactContent).supersededByFactId ?? null;
+    const live = LIVE.includes(st) || (!!successor && succ.has(successor) && sig(succ.get(successor)) === sig(u.content));
+    return {
+      factVersionId: u.id,
+      factId: u.factId,
+      episodeId: ((u.content ?? {}) as FactContent).episodeId ?? null,
+      canonStatus: st,
+      isCurrent: c?.id === u.id,
+      currentVersionId: c?.id ?? null,
+      changed: !live || (!!c && c.id !== u.id && sig(c.content) !== sig(u.content)),
     };
   });
 }

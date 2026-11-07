@@ -20,10 +20,12 @@ export type ContinuityManuscriptPort = Pick<
   | "registerIssueSink"
   | "registerVersionAnnotator"
   | "getEpisodeEnd"
+  | "listEpisodes"
+  | "listPendingPriorFacts"
 >;
 export type ContinuityOntologyPort = Pick<
   OntologyService,
-  "listMentions" | "findIdentityLeaks" | "findSchemaViolations" | "getCanonAt" | "getConstraints" | "knowledgeOf" | "resolveEntityIds"
+  "listMentions" | "findIdentityLeaks" | "findSchemaViolations" | "getCanonAt" | "getConstraints" | "knowledgeOf" | "resolveEntityIds" | "factVersionUsage"
 >;
 
 export interface ContinuityPorts {
@@ -33,8 +35,8 @@ export interface ContinuityPorts {
   ontology: ContinuityOntologyPort;
   manuscript: ContinuityManuscriptPort;
   foreshadow: Pick<ForeshadowService, "registerIssueSink">;
-  orchestration: Pick<OrchestrationService, "registerTaskKind">;
-  agents: Pick<AgentsService, "defineAgentTask">;
+  orchestration: Pick<OrchestrationService, "registerTaskKind" | "createTask" | "listTasks" | "listRuns" | "getTaskKind">;
+  agents: Pick<AgentsService, "defineAgentTask" | "getContextSnapshot">;
   hitl: Pick<HitlService, "getApproval">;
 }
 

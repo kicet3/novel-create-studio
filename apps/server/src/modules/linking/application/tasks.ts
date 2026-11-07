@@ -268,7 +268,7 @@ export function extractFactsHandler(deps: TaskDeps): AgentTaskHandler<ExtractInp
       const facts = materialized.map((w) => w.factId);
       // the text was read (scenes present): facts of earlier versions the new text no longer supports are reconciled
       if (p.scenes.length) {
-        for (const r of deps.reconcilers ?? []) {
+        for (const r of [...(deps.reconcilers ?? [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))) {
           await r.reconcileEpisode(tx, scope, { episodeId: input.episode_id, manuscriptVersionId: input.manuscript_version_id, writtenFactIds: facts, createdFactIds: materialized.filter((w) => w.diffKind !== "duplicate").map((w) => w.factId) }, actor);
         }
       }

@@ -131,6 +131,7 @@ export function buildModules({ platform, runtime, databaseMode, database, llmAda
     orchestration: o,
     agents: agents.service,
     hitl: hitl.service,
+    linking: linking.service,
   });
   const concept = createConceptModule({
     platform,

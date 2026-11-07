@@ -24,6 +24,9 @@ export const SECTION_RANK: Readonly<Record<ContextSectionKind, number>> = {
   // dropped before canon_1hop but after glossary / 2-hop / candidates / recent_text
   prev_handoff: 2,
   story_so_far: 5,
+  // 설계 추가(미확정 사실 선행 집필): provisional facts of earlier unapproved episodes — dropped after glossary / story so far /
+  // 2-hop / candidates (rank 5–7), before canon_1hop; recent_text / prev_handoff stay (keepSections / rank 2)
+  pending_canon: 4.5,
 };
 
 export const SECTION_TITLE: Readonly<Record<ContextSectionKind, string>> = {
@@ -45,6 +48,7 @@ export const SECTION_TITLE: Readonly<Record<ContextSectionKind, string>> = {
   world: "세계관 온톨로지 (승인된 설정 + 미확정 후보 표시)",
   prev_handoff: "직전 화 끝 상태",
   story_so_far: "지금까지의 줄거리",
+  pending_canon: "미확정 사실 (앞 화 승인 대기 — 확정 설정이 우선)",
 };
 
 /** only ranks 4–7 may be dropped (04 §9.5) */

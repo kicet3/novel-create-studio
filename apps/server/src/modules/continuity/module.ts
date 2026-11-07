@@ -4,6 +4,7 @@ import type { AuditService } from "../audit/index.js";
 import type { AgentsService } from "../agents/index.js";
 import type { ForeshadowService } from "../foreshadow/index.js";
 import type { HitlService } from "../hitl/index.js";
+import type { LinkingService } from "../linking/index.js";
 import type { ManuscriptService } from "../manuscript/index.js";
 import type { NovelService } from "../novel/index.js";
 import type { OntologyService } from "../ontology/index.js";
@@ -13,6 +14,7 @@ import { mountContinuityRoutes } from "./adapters/http/routes.js";
 import { checkContinuityHandler } from "./application/check-continuity.js";
 import { createContinuityService } from "./application/continuity-service.js";
 import { continuityGateContributor, continuityTransitionHook, issuesAnnotator } from "./application/hooks.js";
+import { createPendingDependents } from "./application/pending-dependents.js";
 
 export interface ContinuityModuleDeps {
   platform: Platform;
@@ -24,13 +26,17 @@ export interface ContinuityModuleDeps {
   orchestration: OrchestrationService;
   agents: AgentsService;
   hitl: HitlService;
+  /** 설계 추가(미확정 사실 선행 집필): extract_facts commit hook (pending facts of an earlier episode changed) */
+  linking?: Pick<LinkingService, "registerFactReconciler">;
 }
 
 export function createContinuityModule(deps: ContinuityModuleDeps): ServerModule<ContinuityService> {
   const service = createContinuityService(deps);
 
   deps.manuscript.registerCheckGateContributor(continuityGateContributor(deps));
-  deps.manuscript.onEpisodeTransition(continuityTransitionHook(deps, service));
+  const pending = createPendingDependents(deps, service);
+  deps.manuscript.onEpisodeTransition(continuityTransitionHook(deps, service, pending));
+  deps.linking?.registerFactReconciler(pending.reconciler);
   deps.manuscript.registerIssueSink?.(service.safetyIssueSink);
   deps.manuscript.registerVersionAnnotator?.("issues", issuesAnnotator(deps));
   deps.foreshadow.registerIssueSink(service.setupIssueSink);

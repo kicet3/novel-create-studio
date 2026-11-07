@@ -55,6 +55,8 @@ export interface SceneText {
  * written) so the facts extracted from earlier versions of the episode follow the new text. Registered by `revision`.
  */
 export interface FactReconciler {
+  /** call order (ascending, default 0); 설계 추가: continuity's pending-dependents check (100) runs after revision's reconcile */
+  order?: number;
   reconcileEpisode(
     tx: Tx,
     scope: NovelScope,

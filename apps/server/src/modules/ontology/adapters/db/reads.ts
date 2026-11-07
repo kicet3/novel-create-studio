@@ -20,7 +20,7 @@ import type {
 } from "../../index.js";
 import { editDistance, isCrossScript, jamoKey, normalizedKey, syllableCount, translitKey, valueHash } from "../../domain/normalize.js";
 import { parseRange, rangeContains, renderFactText } from "../../domain/facts.js";
-import { CANON, activeSchema, preferredNames, project, resolveId, type FactContent } from "./common.js";
+import { CANON, activeSchema, currentContents, preferredNames, project, resolveId, type FactContent } from "./common.js";
 import { UNRESOLVED_LINK } from "../../domain/transitions.js";
 
 const isViewerEntity = (v: Viewer) => v !== "narrator" && v !== "reader";
@@ -104,7 +104,14 @@ async function safeCandidateFilter(db: Db, scope: NovelScope, rows: Fact[]): Pro
   const mids = [...new Set(rows.flatMap((r) => r.mentionIds ?? []))];
   const ms = mids.length ? await db.select({ id: mentions.id, s: mentions.linkStatus }).from(mentions).where(and(eq(mentions.novelId, scope.novelId), inArray(mentions.id, mids))) : [];
   const st = new Map(ms.map((m) => [m.id, m.s]));
-  return rows.filter((r) => r.subjectEntityId && !(r.mentionIds ?? []).some((m) => UNRESOLVED_LINK.includes(st.get(m) ?? "ambiguous")));
+  const linked = rows.filter((r) => r.subjectEntityId && !(r.mentionIds ?? []).some((m) => UNRESOLVED_LINK.includes(st.get(m) ?? "ambiguous")));
+  if (!linked.length) return linked;
+  // a candidate in conflict with canon or held for a canon-change decision is not "safe" (설계 추가: 미확정 사실 선행 집필)
+  const contents = await currentContents(db, scope, linked.map((r) => r.id));
+  return linked.filter((r) => {
+    const c = contents.get(r.id)?.content;
+    return !c?.conflictWith && c?.reconcilePending !== true;
+  });
 }
 
 function dedupe(rows: Fact[]): Fact[] {

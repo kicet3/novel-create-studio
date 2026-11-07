@@ -92,6 +92,22 @@ export interface EpisodeFact extends FactAtAnchor {
   reconcileKeptBy: { approvalId: string; rejectedNewText: string | null } | null;
 }
 
+/** 설계 추가(미확정 사실 선행 집필): a fact version a run read, and what became of it (factVersionUsage) */
+export interface FactVersionUsage {
+  factVersionId: string;
+  factId: string;
+  /** episode the version was extracted from (content.episodeId) */
+  episodeId: string | null;
+  /** the fact's canon status now */
+  canonStatus: CanonStatus;
+  /** the version is still the fact's current one */
+  isCurrent: boolean;
+  /** the fact's current version now (the latest one, also for a retired fact) */
+  currentVersionId: string | null;
+  /** the fact is no longer live, or its current version says something else than this one */
+  changed: boolean;
+}
+
 /** one fact to retire after a text edit, optionally replaced by a newer fact of the new text */
 export interface FactRetirement {
   factId: string;
@@ -327,6 +343,8 @@ export interface OntologyRepository {
   demoteEpisodeFacts(tx: Tx, scope: NovelScope, episodeId: string, actor: ActorRef): Promise<{ demoted: number }>;
   /** 설계 추가(수정 반영): live facts extracted from the episode (current content.episodeId) + evidence mentions */
   listEpisodeFacts(scope: NovelScope, episodeId: string, tx?: Tx): Promise<EpisodeFact[]>;
+  /** 설계 추가(미확정 사실 선행 집필): fact versions recorded in context snapshots → source episode + changed since */
+  factVersionUsage(scope: NovelScope, factVersionIds: string[], tx?: Tx): Promise<FactVersionUsage[]>;
   /** canon → retracted / candidate → rejected with an optional successor link (fact.superseded / fact.retracted) */
   retireFacts(
     tx: Tx,

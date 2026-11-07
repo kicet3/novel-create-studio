@@ -25,6 +25,8 @@ export interface ContextBuilderDeps {
 interface Built extends ContextSectionResult {
   section: ContextSectionKind;
   module: string;
+  /** entity_cards: the same cards without the given candidate fact versions (they are shown by `pending_canon`) */
+  without?: (factVersionIds: ReadonlySet<string>) => ContextSectionResult;
 }
 
 interface StoredPack {
@@ -57,26 +59,33 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder &
   const { platform, novel, ontology } = deps;
   const { uow, clock, ids, storage } = platform;
 
-  async function builtin(section: ContextSectionKind, scope: NovelScope, spec: ContextSpec, run: RunHandle, seeds: string[], prior: Built[]): Promise<ContextSectionResult | null> {
+  async function builtin(section: ContextSectionKind, scope: NovelScope, spec: ContextSpec, run: RunHandle, seeds: string[], prior: Built[]): Promise<(ContextSectionResult & Pick<Built, "without">) | null> {
     const a = spec.anchor;
     switch (section) {
       case "entity_cards": {
         if (!seeds.length) return null;
         const cards = await safe(() => ontology.getEntityCards(scope, seeds, a, cardLayer(run.role, !!a.povEntityId)));
         if (!cards?.length) return null;
-        const lines: string[] = [];
-        for (const c of cards) {
-          const primary = c.usableNames[0]?.surface ?? c.displayName;
-          const others = c.usableNames.slice(1).map((n) => n.surface);
-          lines.push(`- {{E:${c.entityId}}} ${primary} (${label("entity_type", c.entityType)})${c.disambiguator ? ` — ${c.disambiguator}` : ""}${others.length ? ` / 다른 표기: ${others.join(", ")}` : ""}`);
-          for (const f of c.facts) lines.push(`  · ${f.canonStatus === "candidate" ? "[미확정] " : ""}${f.text}`);
-          for (const n of c.notes) lines.push(`  ※ ${n}`);
-        }
-        return {
-          text: lines.join("\n"),
-          tokenEstimate: 0,
-          refs: { entityIds: cards.map((c) => c.entityId), entityNameIds: cards.flatMap((c) => c.usableNames.map((n) => n.nameId)), factVersionIds: cards.flatMap((c) => c.facts.map((f) => f.factVersionId)) },
+        const render = (skip: ReadonlySet<string>): ContextSectionResult => {
+          const lines: string[] = [];
+          const shown: string[] = [];
+          for (const c of cards) {
+            const primary = c.usableNames[0]?.surface ?? c.displayName;
+            const others = c.usableNames.slice(1).map((n) => n.surface);
+            lines.push(`- {{E:${c.entityId}}} ${primary} (${label("entity_type", c.entityType)})${c.disambiguator ? ` — ${c.disambiguator}` : ""}${others.length ? ` / 다른 표기: ${others.join(", ")}` : ""}`);
+            const fs = c.facts.filter((f) => !(f.canonStatus === "candidate" && skip.has(f.factVersionId)));
+            for (const f of fs) lines.push(`  · ${f.canonStatus === "candidate" ? "[미확정] " : ""}${f.text}`);
+            shown.push(...fs.map((f) => f.factVersionId));
+            const hasCand = fs.some((f) => f.canonStatus === "candidate");
+            for (const n of c.notes) if (n !== "미확정 사실 포함" || hasCand) lines.push(`  ※ ${n}`);
+          }
+          return {
+            text: lines.join("\n"),
+            tokenEstimate: 0,
+            refs: { entityIds: cards.map((c) => c.entityId), entityNameIds: cards.flatMap((c) => c.usableNames.map((n) => n.nameId)), factVersionIds: shown },
+          };
         };
+        return { ...render(new Set()), without: render };
       }
       case "pov_names": {
         if (!seeds.length || roleDefinition(run.role).contextLayer !== "pov") return null;
@@ -237,6 +246,21 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder &
       throw new TaskFailure("internal", `컨텍스트 상한 초과: 필수 섹션만으로 ${decision.required} 토큰이 필요하지만 상한은 ${decision.max} 토큰입니다.`, false);
     }
     const kept = decision.kept;
+    // 설계 추가(미확정 사실 선행 집필): an earlier episode's candidate fact kept in `pending_canon` (with its source episode)
+    // is not repeated as a bare "[미확정]" line on the entity card
+    const pending = kept.find((b) => b.section === "pending_canon");
+    const shownPending = new Set(pending?.refs.candidateFactVersionIds ?? []);
+    if (shownPending.size) {
+      for (const b of kept) {
+        if (!b.without) continue;
+        const r = b.without(shownPending);
+        const before = b.tokenEstimate;
+        b.text = r.text.replace(/\{\{E:([^}]+)\}\}/g, (_m, id: string) => handleOf(id));
+        b.refs = r.refs;
+        b.tokenEstimate = estimateTokens(b.text) + 8;
+        decision.total -= Math.max(0, before - b.tokenEstimate);
+      }
+    }
     const body = kept.map((b) => `## ${SECTION_TITLE[b.section]}\n${b.text}`).join("\n\n");
     const messages = body ? [{ role: "user" as const, content: `# 컨텍스트\n\n${body}`, cacheBoundary: true }] : [];
 

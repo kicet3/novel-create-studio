@@ -395,6 +395,7 @@ export const ENUMS = {
     "safety_real_person",
     "plan_deviation", // 설계 추가: 전체 구성·플롯·화 계획 이탈
     "opening_continuity", // 설계 추가 0019: 첫 장면이 직전 화 끝과 이어지지 않음
+    "pending_canon_changed", // 설계 추가 0020: 앞 화(승인 대기)의 미확정 설정이 이 화를 쓴 뒤 바뀜
   ],
   issue_severity: ["high", "medium", "low"],
   continuity_issue_status: ["open", "fixing", "resolved", "waived", "false_positive", "superseded"],

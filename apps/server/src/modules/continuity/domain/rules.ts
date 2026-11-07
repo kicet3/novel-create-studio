@@ -57,10 +57,15 @@ export function dedupeKeyOf(episodeId: string, kind: ContinuityIssueKind, ruleId
 }
 
 /** 06 §9 severity adjustment: evidence only from earlier-episode candidate facts → low (not for safety / human edit / answer constraints). */
+/** evidenceCanon marker of a fact from an earlier episode still waiting for approval (pending_canon) */
+export const PENDING_PRIOR_EVIDENCE = "pending_prior";
+
 export function adjustSeverity(kind: ContinuityIssueKind, base: IssueSeverity, evidenceCanon: ReadonlyArray<string | null | undefined>): IssueSeverity {
   if (kind.startsWith("safety_") || kind === "human_edit_conflict" || kind === "answer_constraint") return base;
   const statuses = evidenceCanon.filter((s): s is string => !!s);
   if (statuses.length && statuses.every((s) => s === "candidate")) return "low";
+  // 설계 추가(미확정 사실 선행 집필): a provisional fact of an earlier episode waiting for approval — shown, never blocking
+  if (statuses.length && statuses.every((s) => s === "candidate" || s === PENDING_PRIOR_EVIDENCE)) return base === "high" ? "medium" : base;
   return base;
 }
 

@@ -100,6 +100,7 @@ export function createOntologyService(deps: OntologyModuleDeps): OntologyService
       return { demoted: await F.relockEpisodeFacts(d, tx, scope, episodeId, "published_locked", "approved", actor) };
     },
     listEpisodeFacts: (scope, episodeId, tx) => F.listEpisodeFacts(db(tx), scope, episodeId),
+    factVersionUsage: (scope, versionIds, tx) => F.factVersionUsage(db(tx), scope, versionIds),
     retireFacts: (tx, scope, changes, actor, opts) => F.retireFacts(d, tx, scope, changes, actor, opts),
     pruneFactMentions: (tx, scope, ids, versions) => F.pruneFactMentions(d, tx, scope, ids, versions),
     setFactReconcileHold: (tx, scope, ids, pending, actor) => F.setFactReconcileHold(d, tx, scope, ids, pending, actor),

@@ -16,6 +16,7 @@
 import type { CastCompleteness, CharacterRole, CountBasis, EpisodeBlockReason, EpisodeStatus, IssueFixScope, ManuscriptVersionKind, ReworkFrom, StructureView } from "@ncs/shared";
 import type { EpisodesRow, EpisodeRejectionsRow, ManuscriptVersionsRow, ScenesRow } from "@ncs/db/schema";
 import type { ActorRef, NovelScope, Tx } from "../../platform/index.js";
+import type { EpisodeFact } from "../ontology/index.js";
 
 export type Episode = EpisodesRow;
 export type ManuscriptVersion = ManuscriptVersionsRow;
@@ -281,6 +282,20 @@ export interface ManuscriptService {
   // ── 설계 추가 0019: 화 사이 이어짐 ──
   /** how episode `episodeNo` ends: its latest text version (current, else approved), the end tail and the stored handoff; null without text */
   getEpisodeEnd(scope: NovelScope, episodeNo: number, tx?: Tx): Promise<EpisodeEnd | null>;
+
+  // ── 설계 추가(미확정 사실 선행 집필) ──
+  /**
+   * live candidate facts of episodes before `episodeNo` that are not approved / published yet (drafts written ahead),
+   * not in conflict with canon, not held; relevant to `entityIds` when given; newest source episode first, bounded
+   */
+  listPendingPriorFacts(scope: NovelScope, episodeNo: number, opts?: { entityIds?: string[]; limit?: number }, tx?: Tx): Promise<PendingPriorFact[]>;
+}
+
+/** 설계 추가(미확정 사실 선행 집필): a provisional fact of an earlier episode waiting for approval */
+export interface PendingPriorFact extends EpisodeFact {
+  sourceEpisodeId: string;
+  sourceEpisodeNo: number;
+  sourceEpisodeStatus: EpisodeStatus;
 }
 
 /** 설계 추가 0019: 직전 화 끝 상태 (summarize_episode, episode_recaps.handoff) */

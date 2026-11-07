@@ -15,6 +15,7 @@ import { createTaskRegistrar } from "./application/agent-task.js";
 import { createContextSections } from "./application/context-sections.js";
 import { createHandoff } from "./application/handoff.js";
 import { createManuscriptService } from "./application/manuscript-service.js";
+import { createPendingCanon } from "./application/pending-canon.js";
 import { createPlanning } from "./application/planning.js";
 import { createStructure } from "./application/structure.js";
 import { createPorts, createRegistries } from "./application/support.js";
@@ -51,10 +52,13 @@ export function createManuscriptModule(deps: ManuscriptModuleDeps): ServerModule
   service.requestArcPlanApproval = planning.requestArcPlanApproval;
   service.schedule = planning.schedule;
   service.getEpisodeEnd = handoff.getEpisodeEnd;
+  // 설계 추가(미확정 사실 선행 집필): provisional facts of earlier episodes waiting for approval
+  const pending = createPendingCanon(ports);
+  service.listPendingPriorFacts = pending.listPendingPriorFacts;
   Object.assign(service, structure.service);
 
   // registrations (CONVENTIONS §6): context sections, task kinds, approval handlers, N3 hook
-  const sections = [...createContextSections(ports), ...handoff.sections, structure.section];
+  const sections = [...createContextSections(ports), ...handoff.sections, structure.section, pending.section];
   for (const s of sections) deps.agents.registerContextSection(s);
   const register = createTaskRegistrar(ports, sections);
   for (const h of [...planning.handlers, ...structure.handlers, ...writing.handlers]) register(h);

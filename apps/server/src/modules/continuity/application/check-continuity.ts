@@ -13,7 +13,7 @@ import type { AgentTaskHandler, ContextPack } from "../../agents/index.js";
 import type { LlmMessage } from "../../llm/index.js";
 import type { FactAtAnchor, Mention } from "../../ontology/index.js";
 import { TaskFailure, type RunHandle } from "../../orchestration/index.js";
-import { adjustSeverity, continuityReviewSchema, dedupeKeyOf, RULES, type ContinuityReview } from "../domain/rules.js";
+import { adjustSeverity, continuityReviewSchema, dedupeKeyOf, PENDING_PRIOR_EVIDENCE, RULES, type ContinuityReview } from "../domain/rules.js";
 import { CHECK_CONTINUITY_KINDS } from "../domain/transitions.js";
 import type { IssueEvidenceInput } from "../index.js";
 import type { EpisodeEnd } from "../../manuscript/index.js";
@@ -114,7 +114,8 @@ export const CHECK_INSTRUCTION = `당신은 웹소설의 연속성 편집자(con
 그 밖에 [FACTS]의 캐논과 모순되는 서술(외형·나이·관계·장소 이동·능력 규칙·인물 지식)을 찾으면 issues에 넣고,
 evidence에 근거 사실 핸들(F1, F2 …)을 1개 이상 적으세요. 근거 사실이 없는 의심은 넣지 마세요.
 [작품 구성]의 결말·현재 부 목표·플롯 핵심 사건·이번 화 계획에서 벗어난 전개는 kind=plan_deviation, evidence ["PLAN"]으로 보고하세요(사실 핸들 불필요).
-${OPENING_CHECK_INSTRUCTION}`;
+${OPENING_CHECK_INSTRUCTION}
+[FACTS]에서 "앞 화 승인 대기"로 표시된 사실은 아직 승인 전인 앞 화의 미확정 설정입니다. 이번 화가 그 설정과 모순되면 그 핸들을 근거로 issues에 넣되 severity는 medium 이하로 적으세요. 확정 사실과 미확정 사실이 어긋나면 확정 사실이 우선입니다.`;
 
 /** [PREV_END] block of the review prompt */
 export function prevEndBlock(end: EpisodeEnd): string {
@@ -322,7 +323,19 @@ export function checkContinuityHandler(deps: ContinuityPorts, svc: ContinuityInt
       const k = await orPlaceholder(() => deps.ontology.knowledgeOf(scope, pov, anchorPoint, timelineId), [], skip("CR-07"));
       if (k.length) povKnowledge.push(`- 시점 인물 ${pov}: ${k.map((f) => f.text).join(" / ")}`);
     }
-    return { candidates, facts: [...allFacts.values()], povKnowledge, entityIds };
+    // 설계 추가(미확정 사실 선행 집필): provisional facts of earlier episodes still waiting for approval (drafts written
+    // ahead) — the review may cite them; canon of the same version wins (already in allFacts)
+    const pendingNo = new Map<string, number>();
+    // (a version without linked mentions — e.g. a polished text that was not re-extracted — gets them unfiltered, bounded)
+    if (ctx.ep.episodeNo > 1 && typeof deps.manuscript.listPendingPriorFacts === "function") {
+      const pending = await orPlaceholder(() => deps.manuscript.listPendingPriorFacts(scope, ctx.ep.episodeNo, { entityIds, limit: 30 }), []);
+      for (const f of pending) {
+        if (allFacts.has(f.factVersionId)) continue;
+        allFacts.set(f.factVersionId, f);
+        pendingNo.set(f.factVersionId, f.sourceEpisodeNo);
+      }
+    }
+    return { candidates, facts: [...allFacts.values()], povKnowledge, entityIds, pendingNo };
   }
 
   return {
@@ -349,7 +362,7 @@ export function checkContinuityHandler(deps: ContinuityPorts, svc: ContinuityInt
       const ctx = await load(run, input);
       const scope = ctx.scope;
       const skippedRules: string[] = [];
-      const { candidates, facts, povKnowledge } = await prefilter(scope, ctx, input, skippedRules);
+      const { candidates, facts, povKnowledge, pendingNo } = await prefilter(scope, ctx, input, skippedRules);
       if (skippedRules.length) log.warn({ episodeId: ctx.ep.id, skippedRules }, "check_continuity: ontology port not implemented for some rules");
 
       // 설계 추가 0019: how N-1 ended — always its LATEST text (full_auto may change it after N started); the stored
@@ -365,7 +378,10 @@ export function checkContinuityHandler(deps: ContinuityPorts, svc: ContinuityInt
       const user = [
         `[EPISODE] no=${ctx.ep.episodeNo} version=${ctx.versionId}`,
         "[FACTS]",
-        ...[...handles.entries()].map(([h, f]) => `${h}: ${f.text}${f.canonStatus === "candidate" ? " (미확정)" : ""}`),
+        ...[...handles.entries()].map(([h, f]) => {
+          const prior = pendingNo.get(f.factVersionId);
+          return `${h}: ${f.text}${prior ? ` (${prior}화, 미확정 — 앞 화 승인 대기)` : f.canonStatus === "candidate" ? " (미확정)" : ""}`;
+        }),
         "[/FACTS]",
         povKnowledge.length ? `[POV_KNOWLEDGE]\n${povKnowledge.join("\n")}\n[/POV_KNOWLEDGE]` : "",
         ...candidates.filter((c) => c.needsLlm).map((c) => `[CANDIDATE] id=${c.id} rule=${c.ruleId} ${c.prompt}`),
@@ -527,7 +543,7 @@ export function checkContinuityHandler(deps: ContinuityPorts, svc: ContinuityInt
               charEnd: loc.charEnd,
               evidence: ev.map((f) => ({ factId: f.factId, factVersionId: f.factVersionId, quote: i.quote ?? null })),
               entityIds: [...new Set(ev.map((f) => f.subjectEntityId))],
-              evidenceCanon: ev.map((f) => f.canonStatus),
+              evidenceCanon: ev.map((f) => (pendingNo.has(f.factVersionId) ? PENDING_PRIOR_EVIDENCE : f.canonStatus)),
               prompt: "",
             },
             { suggestion: i.proposed_fix ?? null },

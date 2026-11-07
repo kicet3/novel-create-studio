@@ -9,6 +9,7 @@ import { strongest } from "../domain/rules.js";
 import { formatIssueNo } from "../domain/transitions.js";
 import type { ContinuityInternals } from "./continuity-service.js";
 import type { ContinuityPorts } from "./ports.js";
+import type { createPendingDependents } from "./pending-dependents.js";
 
 export function continuityGateContributor(deps: ContinuityPorts): CheckGateContributor {
   return {
@@ -27,10 +28,12 @@ export function continuityGateContributor(deps: ContinuityPorts): CheckGateContr
   };
 }
 
-export function continuityTransitionHook(deps: ContinuityPorts, svc: ContinuityInternals) {
+export function continuityTransitionHook(deps: ContinuityPorts, svc: ContinuityInternals, pending?: Pick<ReturnType<typeof createPendingDependents>, "onRejected">) {
   return async (ctx: EpisodeTransitionContext): Promise<void> => {
     const { tx, scope, episode, from, to } = ctx;
     const system = actors.system("orchestrator");
+    // 설계 추가(미확정 사실 선행 집필): E10 — later episodes written on this episode's provisional facts are re-checked
+    if (from === "awaiting_approval" && to === "revising") pending?.onRejected(tx, scope, episode.id);
     if (from === "checking" && (to === "drafting" || to === "outlining")) {
       // E4 / E5: the rewrite cycle starts → C2 for the blocking issues
       await svc.markFixing(tx, scope, episode.id, system);

@@ -67,7 +67,12 @@ export type ContextSectionKind =
   /** 설계 추가 0019: where / how the previous episode ended (module manuscript, episode_recaps.handoff) */
   | "prev_handoff"
   /** 설계 추가 0019: rolling story so far — recent episodes in detail, older ones compressed (module manuscript) */
-  | "story_so_far";
+  | "story_so_far"
+  /**
+   * 설계 추가(미확정 사실 선행 집필): live candidate facts of EARLIER episodes still waiting for approval (drafts written
+   * ahead, approved later) — provisional, canon wins (module manuscript)
+   */
+  | "pending_canon";
 
 export interface ContextSpec {
   anchor: StoryAnchor;
