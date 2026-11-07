@@ -6,8 +6,6 @@ import type { Tone } from "../../components/ui/index.js";
 import {
   BRIGHTNESS_MIN,
   DEFAULT_READER_SETTINGS,
-  READER_FONTS,
-  READER_FONT_LABELS,
   READER_FONT_STEPS_PX,
   READER_LINE_HEIGHT,
   READER_MARGIN_PX,
@@ -136,7 +134,7 @@ export function ReaderRoot({ settings, children, className }: { settings: Reader
     };
   }, [theme]);
   return (
-    <div ref={ref} className={cx("reader", className)} data-reader-theme={theme} data-reader-font={settings.font} style={readerStyleVars(settings)}>
+    <div ref={ref} className={cx("reader", className)} data-reader-theme={theme} style={readerStyleVars(settings)}>
       {children}
     </div>
   );
@@ -450,14 +448,6 @@ export function ReaderSettingsPanel({ settings, onChange, viewer = true }: { set
               ))}
             </div>
           </div>
-          <Segmented
-            label="글꼴"
-            values={READER_FONTS}
-            labels={READER_FONT_LABELS}
-            value={settings.font}
-            onChange={(font) => onChange({ font })}
-            renderLabel={(v) => <span style={{ fontFamily: `var(--reader-${v})` }}>{READER_FONT_LABELS[v]}</span>}
-          />
           <Segmented label="줄 간격" values={READER_STEPS3} labels={READER_STEP3_LABELS} value={settings.lineHeight} onChange={(lineHeight) => onChange({ lineHeight })} />
           <Segmented label="문단 간격" values={READER_STEPS3} labels={READER_STEP3_LABELS} value={settings.paraSpacing} onChange={(paraSpacing) => onChange({ paraSpacing })} />
           <Segmented label="좌우 여백" values={READER_STEPS3} labels={READER_STEP3_LABELS} value={settings.margin} onChange={(margin) => onChange({ margin })} />
