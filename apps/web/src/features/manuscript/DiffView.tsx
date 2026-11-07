@@ -144,7 +144,7 @@ function SplitDiff({ rows, full }: { rows: SideBySideRow[]; full: boolean }) {
   const items = full ? rows : withContext(rows, 2);
   return (
     <div role="region" aria-label="나란히 비교" tabIndex={0} className="overflow-x-auto rounded-lg border border-border bg-surface">
-      <table className="w-full table-fixed border-collapse font-serif text-[13.5px] leading-[1.8]">
+      <table className="w-full table-fixed border-collapse text-[13.5px] leading-[1.8]">
         <colgroup>
           <col className="w-10" />
           <col />
@@ -208,7 +208,7 @@ function UnifiedDiff({ lines, full }: { lines: LineDiff[]; full: boolean }) {
   const items = full ? indexed : withContext(indexed, 2);
   return (
     <div role="region" aria-label="통합 비교" tabIndex={0} className="overflow-x-auto rounded-lg border border-border bg-surface">
-      <table className="w-full border-collapse font-serif text-[13.5px] leading-[1.8]">
+      <table className="w-full border-collapse text-[13.5px] leading-[1.8]">
         <thead className="sr-only">
           <tr>
             <th>이전 줄</th>

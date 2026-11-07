@@ -204,9 +204,11 @@ export function EpisodeScreen({ novelId, episodeNo }: { novelId: string; episode
         </div>
       ) : (
       <div className="mt-3 grid grid-cols-1 gap-3 min-[1100px]:grid-cols-[minmax(0,1fr)_340px]">
-        <div className="min-w-0">
+        {/* desktop: the manuscript column is as tall as the info column (down to the 회차 말 훅 card) and scrolls inside */}
+        <div className="min-w-0 min-[1100px]:relative min-[1100px]:min-h-[560px]">
+          <div className="flex flex-col min-[1100px]:absolute min-[1100px]:inset-0">
           <ChatTabs value={mode} onChange={setMode} versionsCount={sortedVersions.length} hasText={!!ep.currentVersionId} />
-          <div className="mt-3">
+          <div className={cx("mt-3 flex min-h-0 flex-1 flex-col", mode !== "read" && "min-[1100px]:overflow-y-auto")}>
             {mode === "diff" ? (
               <QueryView query={versions}>{(vs) => <DiffView novelId={novelId} versions={vs} defaultTargetId={selectedId} me={me} />}</QueryView>
             ) : !selectedId ? (
@@ -224,6 +226,7 @@ export function EpisodeScreen({ novelId, episodeNo }: { novelId: string; episode
             ) : (
               <InlineStatus>본문을 불러오는 중…</InlineStatus>
             )}
+          </div>
           </div>
         </div>
 
@@ -330,7 +333,7 @@ function ReadPane({
     </label>
   );
   return (
-    <div className="grid gap-2">
+    <div className="flex min-h-0 flex-1 flex-col gap-2">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
         <span className="font-semibold text-text">{summary ? versionLabel(summary, me) : `v${detail.versionNo}`}</span>
         <span className="tabular">
@@ -350,7 +353,7 @@ function ReadPane({
           {missing.map((b) => `${setupLabel(b.setupId)} ${labelKo("setup_beat_kind", b.kind)}`).join(", ")} — 누락 비트가 있으면 승인 대기로 넘어가지 않습니다.
         </Callout>
       )}
-      <VersionViewer detail={detail} toggles={toggles} setupLabel={setupLabel} focus={focus} me={me} />
+      <VersionViewer detail={detail} toggles={toggles} setupLabel={setupLabel} focus={focus} me={me} className="min-[1100px]:min-h-0 min-[1100px]:flex-1 min-[1100px]:overflow-y-auto" />
     </div>
   );
 }

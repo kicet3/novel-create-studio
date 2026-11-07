@@ -61,6 +61,7 @@ export function VersionViewer({
   setupLabel,
   focus,
   me,
+  className,
 }: {
   detail: VersionDetail;
   toggles: ViewerToggles;
@@ -68,6 +69,7 @@ export function VersionViewer({
   /** char range to highlight + scroll into view (mention / beat / issue link) */
   focus?: { start: number; end: number } | null;
   me?: { id: string; displayName: string } | null;
+  className?: string;
 }) {
   const markers = useMemo(() => {
     const all = collectMarkers(detail, setupLabel, focus);
@@ -85,7 +87,7 @@ export function VersionViewer({
   const sceneById = new Map((detail.scenes ?? []).map((s) => [s.id, s]));
 
   return (
-    <div className="manuscript-body rounded-lg border border-border bg-surface py-2 font-serif text-[14.5px] leading-[1.9]" lang="ko">
+    <div className={cx("manuscript-body rounded-lg border border-border bg-surface py-2 text-[14.5px] leading-[1.9]", className)} lang="ko">
       {lines.map((ln) => (
         <Line key={ln.no} line={ln} showAuthor={toggles.attribution} sceneById={sceneById} me={me} />
       ))}

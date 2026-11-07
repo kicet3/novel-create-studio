@@ -61,7 +61,7 @@ export function EditPanel({
         onChange={(e) => setText(e.target.value)}
         rows={24}
         disabled={stale || save.isPending}
-        className="font-serif text-[14.5px] leading-[1.9]"
+        className="text-[14.5px] leading-[1.9]"
         lang="ko"
       />
       <div className="flex flex-wrap items-center gap-3 text-xs text-muted">
