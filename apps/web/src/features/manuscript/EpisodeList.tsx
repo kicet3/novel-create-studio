@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { SequentialWaitCallout, sequentialWait } from "../revision/SequentialWait.js";
 import { Link, useNavigate } from "react-router";
 import { ENUMS, labelKo, type EpisodeStatus } from "@ncs/shared";
 import { PageHeader } from "../../components/layout/PageHeader.js";
@@ -43,6 +44,11 @@ export function EpisodeList({ novelId }: { novelId: string }) {
           <Button onClick={() => setExportTarget({ scopeKind: "novel", label: "작품 전체" })}>TXT · Markdown 내보내기</Button>
         }
       />
+      {sequentialWait(novel.data, episodes.data) && (
+        <div className="mb-3">
+          <SequentialWaitCallout novelId={novelId} wait={sequentialWait(novel.data, episodes.data)} />
+        </div>
+      )}
       <div className="mb-3 flex flex-wrap items-center gap-2" role="group" aria-label="화 상태 필터">
         {ENUMS.episode_status.map((s) => {
           const on = statuses.includes(s);

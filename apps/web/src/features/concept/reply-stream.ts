@@ -63,6 +63,11 @@ const MAX_TRANSPORT_ERRORS = 3;
 
 /** opens the stream while `taskId` (session.inFlightTaskId) is set; one stream per task */
 export function useConceptReplyStream(novelId: string, sessionId: string, taskId: string | null): ReplyStreamState {
+  return useReplyStream(`/novels/${novelId}/concept/sessions/${sessionId}/stream`, taskId, queryKeys.novel(novelId).concept());
+}
+
+/** 설계 추가 0018: same SSE contract for any chat (`streamPath` under /api); `refetchKey` is invalidated when the turn ends */
+export function useReplyStream(streamPath: string, taskId: string | null, refetchKey: readonly unknown[]): ReplyStreamState {
   const qc = useQueryClient();
   const [state, setState] = useState<ReplyStreamState>(IDLE_REPLY);
   const stateRef = useRef(state);
@@ -88,14 +93,14 @@ export function useConceptReplyStream(novelId: string, sessionId: string, taskId
         flush();
       } else timer ??= setTimeout(flush, FLUSH_MS); // batch token deltas into ~16 renders/s
     };
-    const es = new EventSource(apiUrl(`/novels/${novelId}/concept/sessions/${sessionId}/stream`));
+    const es = new EventSource(apiUrl(streamPath));
     const close = () => {
       if (closed) return;
       closed = true;
       es.close();
     };
     const refetch = () => {
-      void qc.invalidateQueries({ queryKey: queryKeys.novel(novelId).concept() });
+      void qc.invalidateQueries({ queryKey: refetchKey });
     };
     const data = (e: Event): Record<string, unknown> => {
       try {
@@ -137,7 +142,7 @@ export function useConceptReplyStream(novelId: string, sessionId: string, taskId
       close();
       if (timer) clearTimeout(timer);
     };
-  }, [novelId, sessionId, taskId, qc]);
+  }, [streamPath, taskId, qc]);
 
   return state;
 }

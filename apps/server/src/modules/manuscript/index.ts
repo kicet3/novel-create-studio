@@ -203,6 +203,18 @@ export interface ManuscriptService {
   saveVersion(tx: Tx, scope: NovelScope, episodeId: string, input: SaveVersionInput): Promise<ManuscriptVersion>;
   /** E16 (FR-MAN-07): human edit → new version (is_human_edit) → checking */
   saveHumanEdit(scope: NovelScope, episodeNo: number, input: { content: string; baseVersionId: string }, actor: ActorRef): Promise<ManuscriptVersion>;
+  /**
+   * 설계 추가 0018: E16 in the caller's transaction (revision chat accepts agent-proposed patches the author approved).
+   * Same rules as saveHumanEdit: published → 422 retcon_required, stale base → 409 stale_base_version, in-flight writing /
+   * check tasks cancelled, pending episode approval superseded, approved → checking (facts demoted), split_scenes queued.
+   */
+  applyHumanEditTx(
+    tx: Tx,
+    scope: NovelScope,
+    episodeId: string,
+    input: { content: string; baseVersionId: string; writerAnnotations?: unknown; auditDetails?: Record<string, unknown> },
+    actor: ActorRef,
+  ): Promise<ManuscriptVersion>;
   getVersion(scope: NovelScope, versionId: string, tx?: Tx): Promise<ManuscriptVersion>;
   listVersions(scope: NovelScope, episodeId: string): Promise<ManuscriptVersion[]>;
   /** 07 §6.3 scene-ID retention; retires unmatched scenes (scene.resegmented) */

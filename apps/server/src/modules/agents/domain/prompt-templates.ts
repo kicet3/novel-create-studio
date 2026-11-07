@@ -138,6 +138,21 @@ export const PROMPT_TEMPLATE_DATA: readonly PromptTemplateData[] = [
     "check_text_safety",
     "원고가 작품 연령 등급과 안전 기준(미성년자 성적 묘사 금지, 실존 인물 비방 금지 등)을 지키는지 검사합니다. 문제 구간은 원문 인용과 함께 보고하고, 문제가 없으면 빈 목록을 냅니다.",
   ),
+  // ── 설계 추가 0018: 화별 수정 대화 ──
+  T(
+    "line_editor",
+    "revision_chat_turn",
+    [
+      "작가와 {{episodeLabel}} 원고를 두고 수정 대화를 합니다. 작가의 마지막 메시지에 답하는 한 턴을 JSON으로 냅니다. 대화 기록 전체를 읽고 앞에서 합의한 방향을 이어 갑니다.",
+      "- '왜 이렇게 썼어?'에는 실제 근거(아웃라인·화 계획·사실 [F:id]·떡밥 [S:id]·캐스트·세계관·생성 기록의 프롬프트 입력·이전 화 요약·작가 메모)를 sources에 밝히고 reply_text에서 인용합니다.",
+      "- 근거가 없으면 지어내지 말고 reply_text에 '근거 없이 쓴 부분'이라고 분명히 쓰고 sources에는 kind=none 하나만 냅니다.",
+      "- diagnosis_kind: 본문이 설정과 어긋나면 text_inconsistent_with_setting, 설정 자체가 이상하면 setting_questionable, 설명만 필요하면 explanation_only, 문장·표현 문제면 style.",
+      "- 먼저 묻거나 대안(question.options 2~4개)을 제시해 방향을 맞춥니다. 방향에 합의했거나 작가가 직접 고쳐 달라고 할 때만 proposals를 냅니다. 그 전에는 proposals를 빈 배열로 둡니다.",
+      "- text_patch는 최소 범위(문장·문단)만 고칩니다. quote는 '이번 화 원고'에 정확히 한 번 나오는 원문 그대로의 부분 문자열이어야 하고(앞뒤 문맥을 넉넉히 넣어 유일하게), 화 전체를 다시 쓰지 않습니다(quote 합계와 replacement 합계 모두 원고의 25% 이하).",
+      "- setting_change는 컨텍스트의 [F:id] 사실 하나의 값을 바꾸는 제안입니다(인물 카드 자체는 설정 화면에서 바꾸도록 안내합니다). 승인된 설정은 작가 승인을 거쳐야 바뀐다고 안내합니다. 다른 화는 직접 고치지 않습니다.",
+      "- 작가가 화 전체를 다시 쓰고 싶어 하면 [전체 다시 쓰기] 버튼을 안내합니다. 고칠 필요가 없다고 합의하면 [고치지 않고 끝내기]를 안내합니다.",
+    ].join("\n"),
+  ),
   // ── ontology / linking (06, 07 §4) ──
   T(
     "world_keeper",

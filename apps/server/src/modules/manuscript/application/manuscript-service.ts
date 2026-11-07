@@ -433,12 +433,18 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
     const counts = version ? `공백 포함 ${version.charCountWithSpaces}자 / 공백 제외 ${version.charCountWithoutSpaces}자` : "";
     const floorCount = version ? (profile.countBasis === "without_spaces" ? version.charCountWithoutSpaces : version.charCountWithSpaces) : 0;
     const range = version && !belowFloor ? outOfRange(version, profile) : null;
+    const nv = await novel.getNovel(scope, tx);
+    const sequential = nv.autonomyLevel === "episode_approval" && nv.sequentialEpisodes;
+    const webBase = platform.config.server.public_base_url?.replace(/\/$/, "") ?? `http://${platform.config.server.host}:${platform.config.server.port}`;
     const body = [
       belowFloor ? `⚠ 분량 미달: ${countBasisLabel(profile.countBasis)} ${floorCount.toLocaleString("ko-KR")}자 (최소 ${EPISODE_HARD_MIN_CHARS.toLocaleString("ko-KR")}자). 자동 승인·공개하지 않습니다.` : null,
       `${ep.episodeNo}화${ep.title ? ` 「${ep.title}」` : ""} 원고가 검사와 다듬기를 마쳤습니다.`,
       ep.hookNote ? `회차 말 훅: ${ep.hookNote}` : null,
       counts ? `분량: ${counts}${summary.lengthWarning ? ` (${summary.lengthWarning})` : ""}` : null,
       `반려 횟수: ${ep.rejectionCount}`,
+      `${ep.episodeNo}화를 읽고 승인해 주세요.${sequential ? ` 승인하면 ${ep.episodeNo + 1}화를 씁니다.` : ""}`,
+      `읽기: ${webBase}/novels/${scope.novelId}/read/${ep.episodeNo}?mode=draft`,
+      `수정 대화: ${webBase}/novels/${scope.novelId}/episodes/${ep.episodeNo}?mode=chat`,
       "승인하면 이 화의 후보 사실이 캐논이 됩니다. 반려하면 다시 작업할 단계와 사유를 적어 주세요.",
     ]
       .filter(Boolean)
@@ -702,65 +708,66 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
 
     saveVersion: (tx, scope, episodeId, input) => saveVersion(tx, scope, episodeId, input),
     async saveHumanEdit(scope, episodeNo, input, actor) {
-      if (actor.type !== "user") throw new DomainValidationError("user_required", "사람 편집은 사용자만 저장할 수 있습니다.");
       const pre = await service.getEpisodeByNo(scope, episodeNo);
-      if (pre.status === "published") throw new DomainValidationError("retcon_required", "공개된 화는 직접 고칠 수 없습니다. 리트콘 승인으로 진행하세요."); // INV-EP-04
-      if (!HUMAN_EDITABLE_STATUSES.includes(pre.status)) throw new InvalidTransitionError("episode", pre.status, "checking", "지금 상태에서는 원고를 직접 고칠 수 없습니다.");
-      const tasks = await activeEpisodeTasks(scope, pre.id);
+      return uow.run((tx) => service.applyHumanEditTx(tx, scope, pre.id, input, actor));
+    },
+    async applyHumanEditTx(tx, scope, episodeId, input, actor) {
+      if (actor.type !== "user") throw new DomainValidationError("user_required", "사람 편집은 사용자만 저장할 수 있습니다.");
+      const ep = await mustEpisode(tx, scope, episodeId, true);
+      if (ep.status === "published") throw new DomainValidationError("retcon_required", "공개된 화는 직접 고칠 수 없습니다. 리트콘 승인으로 진행하세요."); // INV-EP-04
+      if (!HUMAN_EDITABLE_STATUSES.includes(ep.status)) throw new InvalidTransitionError("episode", ep.status, "checking", "지금 상태에서는 원고를 직접 고칠 수 없습니다.");
+      const base = ep.currentVersionId ?? ep.outlineVersionId;
+      if (input.baseVersionId !== base) {
+        throw new ConflictError("stale_base_version", "다른 버전이 먼저 저장되었습니다. 최신 버전을 기준으로 다시 편집하세요.", { currentVersionId: base });
+      }
+      if (!normalizeText(input.content).trim()) throw new DomainValidationError("content_required", "본문이 비어 있습니다.");
+      const tasks = (await orchestration.listTasks(scope, { episodeId: ep.id, statuses: ["pending", "ready", "running", "blocked"], limit: 500 }, tx)).map((t) => ({ id: t.id, kind: t.kind }));
       const pendingApprovals =
-        pre.status === "awaiting_approval"
-          ? (await soft(() => hitl.listApprovals(scope, { statuses: ["pending"], types: ["episode"] }), [])).filter((a) => a.subjectId === pre.id)
+        ep.status === "awaiting_approval"
+          ? (await soft(() => hitl.listApprovals(scope, { statuses: ["pending"], types: ["episode"] }, tx), [])).filter((a) => a.subjectId === ep.id)
           : [];
-      return uow.run(async (tx) => {
-        const ep = await mustEpisode(tx, scope, pre.id, true);
-        if (ep.status !== pre.status) throw new ConflictError("episode_changed", "화 상태가 바뀌었습니다. 새로 고친 뒤 다시 저장하세요.");
-        const base = ep.currentVersionId ?? ep.outlineVersionId;
-        if (input.baseVersionId !== base) {
-          throw new ConflictError("stale_base_version", "다른 버전이 먼저 저장되었습니다. 최신 버전을 기준으로 다시 편집하세요.", { currentVersionId: base });
-        }
-        if (!normalizeText(input.content).trim()) throw new DomainValidationError("content_required", "본문이 비어 있습니다.");
-        // stop in-flight work on this episode (runs stop at their next checkpoint: superseded)
-        for (const t of tasks) if (WRITING_KINDS.includes(t.kind as never) || CHECK_PHASE_KINDS.includes(t.kind as never)) await orchestration.cancelTask(tx, scope, t.id, actor);
-        for (const a of pendingApprovals) await soft(() => hitl.supersedeApproval(tx, scope, a.id, null, actor), undefined); // A5
-        const baseVersion = await mustVersion(tx, scope, input.baseVersionId);
-        const version = await saveVersion(tx, scope, ep.id, {
-          kind: "revision",
-          content: input.content,
-          parentVersionId: baseVersion.kind === "outline" ? null : baseVersion.id,
-          author: actor,
-          isHumanEdit: true,
-        });
-        await audit.record(tx, {
-          novelId: scope.novelId,
-          actor,
-          action: "manuscript.human_edited",
-          target: { type: "manuscript_version", id: version.id },
-          details: { episodeId: ep.id, baseVersionId: input.baseVersionId, statusAtEdit: ep.status },
-        });
-        const patch = {
-          autoRewriteCount: 0,
-          blockReasons: ep.blockReasons.filter((r) => r !== "approval" && r !== "rewrite_limit"),
-          ...(ep.status === "approved" ? { approvedVersionId: null, approvedAt: null, approvedByActorType: null, approvedByActorId: null } : {}),
-        };
-        if (ep.status !== "checking") {
-          await transition(tx, scope, ep.id, "checking", actor, { ruleId: "E16", patch, details: { versionId: version.id } });
-          if (ep.status === "approved") await soft(() => ontology.demoteEpisodeFacts(tx, scope, ep.id, actor), null);
-        } else {
-          await repo.updateEpisode(tx.db, scope, ep.id, patch);
-        }
-        await ports.createTask(tx, scope, {
-          kind: "split_scenes",
-          targetType: "episode",
-          targetId: ep.id,
-          episodeId: ep.id,
-          arcId: ep.arcId,
-          input: { episode_id: ep.id, manuscript_version_id: version.id, cycle_key: version.id },
-          createdBy: actor,
-          cycleKey: version.id,
-          priority: 700,
-        });
-        return version;
+      // stop in-flight work on this episode (runs stop at their next checkpoint: superseded)
+      for (const t of tasks) if (WRITING_KINDS.includes(t.kind as never) || CHECK_PHASE_KINDS.includes(t.kind as never)) await orchestration.cancelTask(tx, scope, t.id, actor);
+      for (const a of pendingApprovals) await soft(() => hitl.supersedeApproval(tx, scope, a.id, null, actor), undefined); // A5
+      const baseVersion = await mustVersion(tx, scope, input.baseVersionId);
+      const version = await saveVersion(tx, scope, ep.id, {
+        kind: "revision",
+        content: input.content,
+        parentVersionId: baseVersion.kind === "outline" ? null : baseVersion.id,
+        author: actor,
+        isHumanEdit: true,
+        ...(input.writerAnnotations !== undefined ? { writerAnnotations: input.writerAnnotations } : {}),
       });
+      await audit.record(tx, {
+        novelId: scope.novelId,
+        actor,
+        action: "manuscript.human_edited",
+        target: { type: "manuscript_version", id: version.id },
+        details: { episodeId: ep.id, baseVersionId: input.baseVersionId, statusAtEdit: ep.status, ...(input.auditDetails ?? {}) },
+      });
+      const patch = {
+        autoRewriteCount: 0,
+        blockReasons: ep.blockReasons.filter((r) => r !== "approval" && r !== "rewrite_limit"),
+        ...(ep.status === "approved" ? { approvedVersionId: null, approvedAt: null, approvedByActorType: null, approvedByActorId: null } : {}),
+      };
+      if (ep.status !== "checking") {
+        await transition(tx, scope, ep.id, "checking", actor, { ruleId: "E16", patch, details: { versionId: version.id } });
+        if (ep.status === "approved") await soft(() => ontology.demoteEpisodeFacts(tx, scope, ep.id, actor), null);
+      } else {
+        await repo.updateEpisode(tx.db, scope, ep.id, patch);
+      }
+      await ports.createTask(tx, scope, {
+        kind: "split_scenes",
+        targetType: "episode",
+        targetId: ep.id,
+        episodeId: ep.id,
+        arcId: ep.arcId,
+        input: { episode_id: ep.id, manuscript_version_id: version.id, cycle_key: version.id },
+        createdBy: actor,
+        cycleKey: version.id,
+        priority: 700,
+      });
+      return version;
     },
     getVersion: (scope, id, tx) => mustVersion(tx, scope, id),
     listVersions: (scope, episodeId) => repo.listVersions(uow.db, scope, episodeId),

@@ -138,6 +138,8 @@ export const ENUMS = {
     "resolve_entities",
     // 설계 추가 0017: 초고·다듬기 뒤 분량 맞추기(줄이기·늘리기)
     "adjust_length",
+    // 설계 추가 0018: 화별 수정 대화 한 턴(line_editor, 읽기 전용)
+    "revision_chat_turn",
   ],
   target_type: ["novel", "goal", "arc", "episode", "scene", "shot", "setup", "entity", "question", "concept_session", "character"],
   task_status: ["pending", "ready", "running", "blocked", "done", "failed", "cancelled"],
@@ -557,6 +559,14 @@ export const ENUMS = {
   /** 설계 추가 0014: 완전 자율 — 자율 진행 멈춤 사유, 질문 민감도(high = 자동 응답하지 않음) */
   autopilot_halt_reason: ["user", "budget_warning", "error"],
   question_sensitivity: ["normal", "high"],
+  /** 설계 추가 0018: 화별 수정 대화(module revision) — 세션 상태·작성자·진단·제안 종류/상태·종료 결과, 작가 메모 상태 */
+  revision_chat_session_status: ["active", "closed"],
+  revision_chat_author: ["user", "agent", "system"],
+  revision_diagnosis_kind: ["text_inconsistent_with_setting", "setting_questionable", "explanation_only", "style"],
+  revision_proposal_kind: ["text_patch", "setting_change", "impact_note"],
+  revision_proposal_status: ["pending", "accepted", "rejected", "stale", "awaiting_approval", "applied"],
+  revision_chat_outcome: ["explanation_only", "patched", "setting_changed", "handed_off"],
+  author_note_status: ["active", "retracted"],
 } as const satisfies Record<string, readonly [string, ...string[]]>;
 
 export type EnumName = keyof typeof ENUMS;

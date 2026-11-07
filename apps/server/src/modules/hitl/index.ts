@@ -212,7 +212,7 @@ export interface HitlService {
   // read side (web inbox, home)
   listQuestions(scope: NovelScope, filter?: QuestionFilter, tx?: Tx): Promise<Question[]>;
   getQuestionView(scope: NovelScope, questionId: string): Promise<QuestionView & { status: QuestionStatus; resolutionSource: Question["resolutionSource"]; sensitivity: Question["sensitivity"]; answers: Answer[] }>;
-  listApprovals(scope: NovelScope, filter?: { statuses?: ApprovalStatus[]; types?: ApprovalType[] }): Promise<Approval[]>;
+  listApprovals(scope: NovelScope, filter?: { statuses?: ApprovalStatus[]; types?: ApprovalType[] }, tx?: Tx): Promise<Approval[]>;
   getApproval(scope: NovelScope, approvalId: string, tx?: Tx): Promise<Approval>;
   pendingCounts(scope: NovelScope): Promise<PendingCounts>;
   /** web inbox summary (counts + late answers + reflections waiting) */

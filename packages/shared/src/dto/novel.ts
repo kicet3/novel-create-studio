@@ -53,6 +53,8 @@ export const novelDtoSchema = z.object({
   entityAgentResolution: z.boolean().default(true),
   /** 에이전트 판정을 바로 적용하는 신뢰도 기준(0~1, 기본 0.75) */
   entityAgentMinConfidence: z.number().min(0).max(1).default(0.75),
+  /** 설계 추가 0018: 한 화씩 진행 — 화별 승인에서 N화를 승인해야 N+1화를 씀(기본 켬) */
+  sequentialEpisodes: z.boolean().default(true),
   defaultNarrationMode: z.enum(ENUMS.narration_mode),
   timezone: z.string(),
   lengthProfileId: z.string(),
@@ -192,6 +194,8 @@ export const updateNovelSettingsRequestSchema = z
     /** 설계 추가 0015: 엔티티 판정 에이전트 켜기/끄기와 자동 적용 신뢰도 기준 */
     entityAgentResolution: z.boolean(),
     entityAgentMinConfidence: z.number().min(0.3).max(1),
+    /** 설계 추가 0018: 한 화씩 진행(화별 승인에서만 의미 있음) */
+    sequentialEpisodes: z.boolean(),
   })
   .partial()
   .refine((v) => Object.keys(v).length > 0, "변경할 항목이 없습니다.");

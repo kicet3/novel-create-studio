@@ -76,6 +76,11 @@ export const ID_PREFIXES = {
   sst: "StoryStructure",
   spt: "StoryPart",
   woi: "WorldOntologyItem",
+  // 설계 추가 0018: 화별 수정 대화
+  rvs: "RevisionChatSession",
+  rvm: "RevisionChatMessage",
+  rvp: "RevisionChatProposal",
+  ean: "EpisodeAuthorNote",
 } as const;
 
 export type IdPrefix = keyof typeof ID_PREFIXES;

@@ -48,6 +48,8 @@ export const TASK_KIND_ROLE: Readonly<Record<TaskKind, AgentRole>> = {
   resolve_entities: "world_keeper",
   // 설계 추가 0017: 분량 맞추기(줄이기·늘리기)
   adjust_length: "writer",
+  // 설계 추가 0018: 화별 수정 대화 한 턴(읽기 전용, 제안만)
+  revision_chat_turn: "line_editor",
 };
 
 /** target_type per task_kind (04 §2.2 표; build_initial_ontology uses target novel + input.series_bible_id). */
@@ -81,6 +83,7 @@ export const TASK_KIND_TARGET: Readonly<Partial<Record<TaskKind, TargetType>>> =
   build_world_ontology: "novel",
   resolve_entities: "novel",
   adjust_length: "episode",
+  revision_chat_turn: "episode",
 };
 
 /** Concept tasks are the only ones allowed without goal_id (INV-TSK-01 / INV-CON-08). */

@@ -196,6 +196,14 @@ export const QuestionDetail = forwardRef<QuestionDetailHandle, { novelId: string
             )}
           </p>
         )}
+        {approval && approval.approvalType === "episode" && typeof (approval.payload as { episodeNo?: unknown } | null)?.episodeNo === "number" && (
+          <p className="m-0 mt-1 text-xs">
+            <Link to={`${novelPath(novelId, "read")}/${(approval.payload as { episodeNo: number }).episodeNo}?mode=draft`}>읽기</Link>
+            {" · "}
+            <Link to={`${novelPath(novelId, "episodes")}/${(approval.payload as { episodeNo: number }).episodeNo}?mode=chat`}>읽고 승인 · 수정 대화</Link>
+            <span className="text-muted"> — 이상한 부분은 대화로 묻고 고친 뒤 여기서 승인하세요.</span>
+          </p>
+        )}
         {castIncomplete && (
           <Callout tone="warn" title="새 인물을 먼저 확인하세요" className="mt-2">
             이 플롯에 새로 등장하는 인물의 빈 항목을 채우고 캐릭터 화면에서 AI 제안을 수락해야 승인할 수 있습니다. 이미 수락했다면 승인해도 됩니다.

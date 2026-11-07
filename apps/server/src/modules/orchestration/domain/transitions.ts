@@ -166,6 +166,7 @@ export function basePriority(kind: TaskKind): number {
     case "concept_turn":
     case "import_concept":
     case "check_concept_brief":
+    case "revision_chat_turn":
       return 950;
     case "interpret_answer":
     case "apply_answer":

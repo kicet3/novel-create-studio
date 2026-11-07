@@ -27,6 +27,7 @@ import { useTasks } from "../board/api.js";
 import { GoalForm } from "./GoalForm.js";
 import { PausedCallout, PauseControl } from "./PauseControl.js";
 import { useHome, type HomeData } from "./api.js";
+import { SequentialWaitCallout } from "../revision/SequentialWait.js";
 import { NovelSetupFlow } from "./NovelSetupFlow.js";
 import { StructureStepCard } from "../structure/StructureStepCard.js";
 
@@ -72,6 +73,7 @@ function HomeBody({ data }: { data: HomeData }) {
         <HealthCallout data={data} />
         {novel.status === "concept" && <ConceptStageCallout novel={novel} />}
         {novel.status === "onboarding" && <NovelSetupFlow novel={novel} />}
+        <SequentialWaitCallout novelId={novel.id} wait={data.sequential} />
         <Kpis data={data} />
         <Split>
           <div className="flex min-w-0 flex-col gap-3">

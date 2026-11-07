@@ -109,3 +109,7 @@ export type { SessionView, GoalFormDefaults, SetAutoApproveInput, AutoApproveVie
 
 export type { ConceptModuleDeps } from "./module.js";
 export { createConceptModule } from "./module.js";
+
+/** 설계 추가 0018: shared with the revision chat (same SSE contract, display-only live reply) */
+export { createTurnStreamHub, type TurnStreamHub, type TurnStreamEvent } from "./application/turn-stream.js";
+export { createFieldStreamer } from "./domain/partial-json.js";

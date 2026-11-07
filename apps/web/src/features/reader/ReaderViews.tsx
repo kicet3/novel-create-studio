@@ -160,6 +160,8 @@ export interface EndActions {
   onOpenToc(): void;
   /** a later episode exists but is not readable yet */
   moreLater(episodeNo: number): boolean;
+  /** 설계 추가 0018: an episode waiting for approval → open its 수정 대화 (승인은 인박스) */
+  onReview?(episodeNo: number): void;
 }
 
 /** end of an episode. `paged`: 페이지 넘김's last page (one more flip opens the next episode) */
@@ -186,6 +188,15 @@ export function EndCard({ ep, actions, paged = false }: { ep: ReaderEpisodeDto; 
             <p className="m-0 font-semibold text-text">지금 읽을 수 있는 최신 화입니다</p>
             {actions.moreLater(ep.episodeNo) && <p className="m-0 mt-1 text-[13px]">다음 화는 아직 읽을 수 없습니다</p>}
           </div>
+        )}
+        {ep.status === "awaiting_approval" && actions.onReview && (
+          <button
+            type="button"
+            onClick={() => actions.onReview!(ep.episodeNo)}
+            className="flex min-h-12 w-full items-center justify-center rounded-[12px] border border-accent bg-accent-soft text-[14px] font-semibold text-accent hover:brightness-105"
+          >
+            읽고 승인 · 수정 대화
+          </button>
         )}
         {paged && ep.next && <p className="m-0 text-[12.5px] text-muted">한 번 더 넘기면 다음 화로 넘어갑니다</p>}
         {skipped && (

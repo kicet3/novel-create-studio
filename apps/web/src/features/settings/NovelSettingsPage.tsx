@@ -15,6 +15,7 @@ import { NotificationSection } from "./sections/NotificationSection.js";
 import { NovelBasicsSection } from "./sections/NovelBasicsSection.js";
 import { WebSearchSection } from "./sections/WebSearchSection.js";
 import { EntityResolutionSection } from "./sections/EntityResolutionSection.js";
+import { SequentialEpisodesSection } from "./sections/SequentialEpisodesSection.js";
 
 /** `/novels/:novelId/settings` — 작품 단위 설정 (08 §9.8, FR-UI-09). 모든 변경은 감사 로그에 남습니다. */
 export function NovelSettingsPage() {
@@ -38,6 +39,7 @@ export function NovelSettingsPage() {
               <WebSearchSection key={`web-${n.updatedAt}`} novel={n} />
               <EntityResolutionSection key={`entity-${n.updatedAt}`} novel={n} />
               <AutonomySection novel={n} />
+              <SequentialEpisodesSection novel={n} />
               <AutopilotSection novel={n} />
               <BudgetSection novelId={novelId} />
               <LengthProfileSection novelId={novelId} />

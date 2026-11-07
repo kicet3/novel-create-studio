@@ -176,6 +176,7 @@ export const LABELS_KO = {
     build_world_ontology: "세계관 온톨로지 생성",
     resolve_entities: "엔티티 판정 정리",
     adjust_length: "분량 맞추기",
+    revision_chat_turn: "수정 대화",
   }),
   task_status: labels("task_status", {
     pending: "대기",
@@ -281,6 +282,25 @@ export const LABELS_KO = {
   }),
   autopilot_halt_reason: labels("autopilot_halt_reason", { user: "사용자가 멈춤", budget_warning: "월 예산 경고", error: "오류" }),
   question_sensitivity: labels("question_sensitivity", { normal: "보통", high: "높음(사람만 답함)" }),
+  revision_chat_session_status: labels("revision_chat_session_status", { active: "대화 중", closed: "끝냄" }),
+  revision_chat_author: labels("revision_chat_author", { user: "작가", agent: "편집자", system: "안내" }),
+  revision_diagnosis_kind: labels("revision_diagnosis_kind", {
+    text_inconsistent_with_setting: "설정과 다른 본문",
+    setting_questionable: "설정 자체 검토",
+    explanation_only: "설명",
+    style: "문장·표현",
+  }),
+  revision_proposal_kind: labels("revision_proposal_kind", { text_patch: "본문 수정", setting_change: "설정 변경", impact_note: "영향 범위" }),
+  revision_proposal_status: labels("revision_proposal_status", {
+    pending: "검토 대기",
+    accepted: "적용됨",
+    rejected: "거절",
+    stale: "원고가 바뀜",
+    awaiting_approval: "승인 대기",
+    applied: "반영됨",
+  }),
+  revision_chat_outcome: labels("revision_chat_outcome", { explanation_only: "의도대로 둠", patched: "본문 수정", setting_changed: "설정 변경", handed_off: "전체 다시 쓰기" }),
+  author_note_status: labels("author_note_status", { active: "사용 중", retracted: "거둠" }),
   question_delivery_state: labels("question_delivery_state", {
     pending: "발송 대기",
     posted: "발송됨",

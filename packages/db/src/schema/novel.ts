@@ -63,6 +63,8 @@ export const novels = pgTable(
     /** 설계 추가 0015: 엔티티 판정 에이전트(기본 켬)와 자동 적용 신뢰도 기준(0~1) */
     entityAgentResolution: boolean("entity_agent_resolution").notNull().default(true),
     entityAgentMinConfidence: real("entity_agent_min_confidence").notNull().default(0.75),
+    /** 설계 추가 0018: 한 화씩 진행(화별 승인에서 N화 승인 뒤 N+1화) — 기본 켬 */
+    sequentialEpisodes: boolean("sequential_episodes").notNull().default(true),
     defaultNarrationMode: text("default_narration_mode", { enum: ENUMS.narration_mode }).notNull().default("third_limited"),
     timezone: text("timezone").notNull().default("Asia/Seoul"),
     lengthProfileId: text("length_profile_id").notNull(),

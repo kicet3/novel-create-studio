@@ -39,8 +39,20 @@ export function mountHomeRoute({ novel }: ApiRouters, m: Modules): void {
           inProgress: episodes.filter((e) => !["planned", "approved", "published"].includes(e.status)).length,
         }
       : null;
+    // 설계 추가 0018: 한 화씩 진행 — "N화 승인 대기 — 승인하면 N+1화를 씁니다"
+    const seqOn = n.autonomyLevel === "episode_approval" && n.sequentialEpisodes;
+    const doneMax = (episodes ?? []).filter((e) => e.status === "approved" || e.status === "published").reduce((x, e) => Math.max(x, e.episodeNo), 0);
+    const waiting = seqOn && episodes ? [...episodes].filter((e) => e.status === "awaiting_approval" && e.episodeNo >= doneMax).sort((a, b) => a.episodeNo - b.episodeNo)[0] : undefined;
+    const sequential = seqOn
+      ? {
+          enabled: true,
+          waitingEpisodeNo: waiting?.episodeNo ?? null,
+          nextEpisodeNo: waiting && episodes?.some((e) => e.episodeNo === waiting.episodeNo + 1 && e.status === "planned") ? waiting.episodeNo + 1 : null,
+        }
+      : null;
     res.json({
       novel: n,
+      sequential,
       goal,
       arcs,
       episodes: counts,

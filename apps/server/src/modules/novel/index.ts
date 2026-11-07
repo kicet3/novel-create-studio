@@ -153,6 +153,8 @@ export interface NovelSettingsPatch {
   /** 설계 추가 0015: 엔티티 판정 에이전트(기본 켬)와 자동 적용 신뢰도 기준 */
   entityAgentResolution?: boolean;
   entityAgentMinConfidence?: number;
+  /** 설계 추가 0018: 한 화씩 진행 */
+  sequentialEpisodes?: boolean;
 }
 
 export interface ChangeAutonomyInput {

@@ -663,8 +663,21 @@ export function createPlanning(m: ManuscriptInternals, getService: () => import(
     const auto = n.autonomyLevel === "full_auto" ? await autopilotLimits(scope, n) : null;
     if (auto?.stop) result.notes.push(`autopilot:${auto.stop}`);
     let startedToday = auto?.startedToday ?? 0;
-    for (const ep of all.filter((e) => e.status === "planned")) {
-      if (inFlight >= cfg.maxEpisodesInFlight || reserve.includingAwaiting + inFlight >= reserve.target) break;
+    // 설계 추가 0018: 한 화씩 진행 — episode_approval + sequentialEpisodes: N+1 starts only after N is approved/published,
+    // one episode in flight at a time (reserve target and the in-flight cap do not apply); rework of N keeps N+1 waiting
+    const sequential = n.autonomyLevel === "episode_approval" && n.sequentialEpisodes;
+    // only the writing frontier gates: an older approved episode re-opened for an edit (E16) does not stop new writing
+    const doneMax = all.filter((e) => e.status === "approved" || e.status === "published").reduce((x, e) => Math.max(x, e.episodeNo), 0);
+    const waitingSeq = sequential
+      ? all.filter((e) => (IN_FLIGHT_STATUSES.includes(e.status) || e.status === "awaiting_approval") && e.episodeNo >= doneMax).sort((a, b) => a.episodeNo - b.episodeNo)[0]
+      : undefined;
+    if (waitingSeq) result.notes.push(`sequential_wait:${waitingSeq.episodeNo}`);
+    for (const ep of all.filter((e) => e.status === "planned").sort((a, b) => a.episodeNo - b.episodeNo)) {
+      if (sequential) {
+        if (waitingSeq) break;
+        const prevSeq = all.find((e) => e.episodeNo === ep.episodeNo - 1);
+        if (prevSeq && !["approved", "published"].includes(prevSeq.status)) break;
+      } else if (inFlight >= cfg.maxEpisodesInFlight || reserve.includingAwaiting + inFlight >= reserve.target) break;
       if (auto?.stop) break;
       if (auto && startedToday >= auto.maxPerDay) {
         result.notes.push("autopilot:daily_episode_cap");
@@ -693,6 +706,7 @@ export function createPlanning(m: ManuscriptInternals, getService: () => import(
       if (taskId) result.createdTasks.push({ kind: "outline_episode", taskId, targetId: ep.id });
       inFlight++;
       startedToday++;
+      if (sequential) break;
     }
     result.inFlight = inFlight;
 

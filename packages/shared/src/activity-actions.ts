@@ -66,6 +66,9 @@ export const ACTIVITY_ACTIONS = [
   "autopilot.enabled", "autopilot.disabled", "autopilot.settings_changed", "autopilot.halted", "autopilot.resumed",
   "autopilot.approval_decided", "autopilot.question_answered", "autopilot.step", "autopilot.gate_hit", "autopilot.throttled",
   "autopilot.completed", "episode.publish_scheduled",
+  // 설계 추가 0018: 화별 수정 대화(module revision)
+  "revision_chat.proposal_accepted", "revision_chat.proposal_rejected", "revision_chat.setting_change_requested",
+  "revision_chat.setting_changed", "revision_chat.author_note_saved", "revision_chat.handed_off", "revision_chat.closed",
 ] as const;
 
 export type ActivityAction = (typeof ACTIVITY_ACTIONS)[number];

@@ -1263,7 +1263,7 @@ export function createHitlCore(deps: HitlServiceDeps) {
       const view = await viewOf(undefined, scope, q);
       return { ...view, status: q.status, resolutionSource: q.resolutionSource, sensitivity: q.sensitivity, answers: await repo.listAnswers(uow.db, scope, q.id) };
     },
-    listApprovals: (scope, filter) => repo.listApprovals(uow.db, scope, filter),
+    listApprovals: (scope, filter, tx) => repo.listApprovals(tx?.db ?? uow.db, scope, filter),
     async getApproval(scope, approvalId, tx) {
       const a = await repo.getApproval(tx?.db ?? uow.db, scope, approvalId);
       if (!a) throw new NotFoundError("승인 요청", approvalId);

@@ -42,11 +42,12 @@ import { DiffView, versionLabel } from "./DiffView.js";
 import { EditPanel } from "./EditPanel.js";
 import { PublishDialog, RevisionDialog, UnpublishDialog } from "./EpisodeDialogs.js";
 import { ExportDialog } from "./ExportDialog.js";
+import { RevisionChat } from "../revision/RevisionChatPanel.js";
 import { AttributionLegend, beatSort, DEFAULT_TOGGLES, issueSort, markerDomId, VersionViewer, type ViewerToggles } from "./VersionViewer.js";
 
 const FLOW: readonly EpisodeStatus[] = ["outlining", "drafting", "checking", "polishing", "awaiting_approval", "approved", "published"];
 
-type Mode = "read" | "diff" | "edit";
+type Mode = "read" | "diff" | "edit" | "chat";
 type DialogKind = "revision" | "publish" | "unpublish" | "export" | null;
 
 /** `/novels/:novelId/episodes/:episodeNo` — one episode: version viewer, diff, direct edit (08 §9.4). */
@@ -81,6 +82,8 @@ export function EpisodeScreen({ novelId, episodeNo }: { novelId: string; episode
   const finalId = ep && (ep.status === "published" || ep.status === "approved") ? (ep.publishedVersionId ?? ep.approvedVersionId) : null;
   const selectedId = params.get("v") ?? finalId ?? ep?.currentVersionId ?? sortedVersions[0]?.id ?? null;
   const detail = useVersionDetail(novelId, selectedId);
+  // 수정 대화 works on the working copy (anchors / patch bases are ids of the current version)
+  const currentDetail = useVersionDetail(novelId, mode === "chat" ? (ep?.currentVersionId ?? null) : null, "spans");
   const at = params.get("at");
   const end = params.get("end");
   const focus = useMemo(() => (at !== null && Number.isFinite(Number(at)) ? { start: Number(at), end: end !== null ? Number(end) : Number(at) + 1 } : null), [at, end]);
@@ -186,18 +189,23 @@ export function EpisodeScreen({ novelId, episodeNo }: { novelId: string; episode
         </Callout>
       )}
 
+      {ep.status === "awaiting_approval" && mode !== "chat" && (
+        <Callout tone="info" title={`${ep.episodeNo}화를 읽고 승인해 주세요`} className="mt-3" actions={<Button size="sm" onClick={() => setMode("chat")}>수정 대화</Button>}>
+          이상한 부분은 [수정 대화]에서 묻고 고칠 수 있습니다. 승인·반려는 인박스에서 합니다.
+        </Callout>
+      )}
+
+      {mode === "chat" ? (
+        <div className="mt-3">
+          <ChatTabs value={mode} onChange={setMode} versionsCount={sortedVersions.length} hasText={!!ep.currentVersionId} />
+          <div className="mt-3">
+            <RevisionChat novelId={novelId} episodeNo={episodeNo} timezone={tz} content={currentDetail.data ? { versionId: currentDetail.data.id, text: currentDetail.data.content } : null} />
+          </div>
+        </div>
+      ) : (
       <div className="mt-3 grid grid-cols-1 gap-3 min-[1100px]:grid-cols-[minmax(0,1fr)_340px]">
         <div className="min-w-0">
-          <Tabs
-            label="원고 보기"
-            value={mode}
-            onChange={setMode}
-            items={[
-              { value: "read", label: "본문" },
-              { value: "diff", label: "버전 비교", disabled: sortedVersions.length < 2 },
-              { value: "edit", label: "직접 수정", disabled: !ep.currentVersionId },
-            ]}
-          />
+          <ChatTabs value={mode} onChange={setMode} versionsCount={sortedVersions.length} hasText={!!ep.currentVersionId} />
           <div className="mt-3">
             {mode === "diff" ? (
               <QueryView query={versions}>{(vs) => <DiffView novelId={novelId} versions={vs} defaultTargetId={selectedId} me={me} />}</QueryView>
@@ -232,6 +240,7 @@ export function EpisodeScreen({ novelId, episodeNo }: { novelId: string; episode
           )}
         </aside>
       </div>
+      )}
 
       {dialog === "revision" && <RevisionDialog novelId={novelId} episode={ep} open onClose={() => setDialog(null)} />}
       {dialog === "publish" && <PublishDialog novelId={novelId} episode={ep} open onClose={() => setDialog(null)} />}
@@ -240,6 +249,22 @@ export function EpisodeScreen({ novelId, episodeNo }: { novelId: string; episode
         <ExportDialog novelId={novelId} target={{ scopeKind: "episode", targetId: ep.id, label: `${ep.episodeNo}화` }} open onClose={() => setDialog(null)} />
       )}
     </>
+  );
+}
+
+function ChatTabs({ value, onChange, versionsCount, hasText }: { value: Mode; onChange: (m: Mode) => void; versionsCount: number; hasText: boolean }) {
+  return (
+    <Tabs
+      label="원고 보기"
+      value={value}
+      onChange={onChange}
+      items={[
+        { value: "read", label: "본문" },
+        { value: "diff", label: "버전 비교", disabled: versionsCount < 2 },
+        { value: "edit", label: "직접 수정", disabled: !hasText },
+        { value: "chat", label: "수정 대화", disabled: !hasText },
+      ]}
+    />
   );
 }
 

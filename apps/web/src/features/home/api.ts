@@ -23,6 +23,8 @@ export interface HomeData {
   budget: BudgetStatusViewDto[] | null;
   health: HealthCheckResultDto[];
   modules: Record<string, boolean>;
+  /** 설계 추가 0018: 한 화씩 진행 (null = off / not episode_approval) */
+  sequential?: { enabled: boolean; waitingEpisodeNo: number | null; nextEpisodeNo: number | null } | null;
 }
 
 export function useHome(novelId: string) {

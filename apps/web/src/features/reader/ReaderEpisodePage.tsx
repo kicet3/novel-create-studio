@@ -74,6 +74,11 @@ export function ReaderEpisodePage() {
   const navigate = useNavigate();
   const [settings, update] = useReaderSettings();
   const { mode, view } = settings;
+  // 설계 추가 0018: links from the approval notice open the draft (`?mode=draft`) even when the reader is set to approved only
+  const urlMode = search.get("mode");
+  useEffect(() => {
+    if (urlMode === "draft" && mode !== "draft") update({ mode: "draft" });
+  }, [urlMode]); // eslint-disable-line react-hooks/exhaustive-deps
   const q = useReaderEpisode(novelId, episodeNo, mode);
   const toc = useReaderToc(novelId);
   const prefetch = usePrefetchReaderEpisode(novelId);
@@ -162,7 +167,10 @@ export function ReaderEpisodePage() {
   );
 
   const moreLater = useCallback((no: number) => !!toc.data?.episodes.some((x) => x.episodeNo > no), [toc.data]);
-  const actions = useMemo<EndActions>(() => ({ onGo: go, onOpenToc: () => setPanel("toc"), moreLater }), [go, moreLater]);
+  const actions = useMemo<EndActions>(
+    () => ({ onGo: go, onOpenToc: () => setPanel("toc"), moreLater, onReview: (no: number) => navigate(`${novelPath(novelId, "episodes")}/${no}?mode=chat`) }),
+    [go, moreLater, navigate, novelId],
+  );
 
   // history: opened
   useEffect(() => {

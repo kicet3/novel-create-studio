@@ -58,7 +58,7 @@ describe("ulid", () => {
 
 describe("prefixed ids", () => {
   it("lists all 00 §5.1 prefixes (incl. concept)", () => {
-    expect(ID_PREFIX_LIST).toHaveLength(70); // + img (imaging, 0005), chr/cds/csi (cast, 0006), sst/spt (story structure, 0008), woi (world, 0012)
+    expect(ID_PREFIX_LIST).toHaveLength(74); // + rvs/rvm/rvp/ean (revision chat, 0018), img (imaging, 0005), chr/cds/csi (cast, 0006), sst/spt (story structure, 0008), woi (world, 0012)
     for (const p of ["nov", "cns", "cnm", "cbf", "nfr", "ase", "rcp", "hck", "exp"]) expect(ID_PREFIXES).toHaveProperty(p);
     for (const p of ID_PREFIX_LIST) expect(p).toMatch(/^[a-z]{3}$/);
   });
