@@ -57,6 +57,69 @@ export function guardSceneLength(i: { originalSceneCount: number; newSceneCount:
   return i.projectedTotal < i.floor && i.newSceneCount < i.originalSceneCount ? "keep_original" : "keep_new";
 }
 
+/**
+ * 설계 추가 0017 — length adjustment. A count is accepted in [minChars, floor(maxChars × (1 + tolerance))]; outside it
+ * a trim / expand pass runs (bounded rounds). The midpoint of the profile is the goal of a pass.
+ */
+export function acceptedMaxChars(maxChars: number, tolerance: number): number {
+  return Math.floor(maxChars * (1 + Math.max(0, tolerance)));
+}
+
+export function lengthAdjustmentOf(count: number, profile: { minChars: number; maxChars: number }, tolerance: number): "trim" | "expand" | null {
+  if (count < profile.minChars) return "expand";
+  if (count > acceptedMaxChars(profile.maxChars, tolerance)) return "trim";
+  return null;
+}
+
+/** chars outside the accepted range (0 = inside) */
+export function lengthDistance(count: number, profile: { minChars: number; maxChars: number }, tolerance: number): number {
+  const hi = acceptedMaxChars(profile.maxChars, tolerance);
+  return count < profile.minChars ? profile.minChars - count : count > hi ? count - hi : 0;
+}
+
+export function lengthGoal(profile: { minChars: number; maxChars: number }): number {
+  return Math.round((profile.minChars + profile.maxChars) / 2);
+}
+
+/**
+ * per-scene targets that bring the episode total to `goal`: editable scenes scale by one ratio, fixed scenes (user
+ * text) keep their count. The ratio is bounded so one pass never asks for a rewrite into a fragment or a 3× scene.
+ */
+export function sceneTargets(counts: readonly number[], editable: readonly boolean[], goal: number): number[] {
+  const fixed = counts.reduce((n, c, i) => (editable[i] ? n : n + c), 0);
+  const ed = counts.reduce((n, c, i) => (editable[i] ? n + c : n), 0);
+  if (ed <= 0) return [...counts];
+  const ratio = Math.min(3, Math.max(0.3, (goal - fixed) / ed));
+  return counts.map((c, i) => (editable[i] ? Math.max(1, Math.round(c * ratio)) : c));
+}
+
+/**
+ * a rewritten scene that still contains the original verbatim plus a second full version ("원문 + 새 글") is an append,
+ * not a rewrite: the original copy is dropped. A short addition to the original (a tail, under half of it) is an edit
+ * and stays as written. Not for expand passes (they may keep the original and add to it).
+ */
+export function dedupeRewrite(original: string, rewritten: string): string {
+  const o = normalizeText(original).trim();
+  const b = normalizeText(rewritten).trim();
+  if (o.length < 200 || b.length <= o.length) return b;
+  const i = b.indexOf(o);
+  if (i < 0) return b;
+  const rest = `${b.slice(0, i).trim()}\n\n${b.slice(i + o.length).trim()}`.trim();
+  return rest.length >= o.length * 0.5 ? rest : b;
+}
+
+/**
+ * growth guard of a rewritten scene (설계 추가 0017): keep the original when the scene grows while the episode would
+ * end above `ceiling`, or when it runs away (more than `maxGrowthRatio` × and 300+ chars longer — a spill into the
+ * following scenes / a second copy).
+ */
+export function guardSceneGrowth(i: { originalSceneCount: number; newSceneCount: number; projectedTotal: number; ceiling?: number; maxGrowthRatio?: number }): "keep_new" | "keep_original" {
+  if (i.newSceneCount <= i.originalSceneCount) return "keep_new";
+  if (i.ceiling !== undefined && i.projectedTotal > i.ceiling) return "keep_original";
+  if (i.maxGrowthRatio !== undefined && i.newSceneCount > i.originalSceneCount * i.maxGrowthRatio && i.newSceneCount - i.originalSceneCount > 300) return "keep_original";
+  return "keep_new";
+}
+
 /** Korean label of the count basis ("공백 포함" / "공백 제외") */
 export function countBasisLabel(basis: CountBasis): string {
   return basis === "without_spaces" ? "공백 제외" : "공백 포함";
@@ -73,6 +136,10 @@ export function firstSentence(text: string, max = 80): string {
 /** line used by the writer prompt and the deterministic segmenter to separate scenes */
 export const SCENE_SEPARATOR = "* * *";
 const SEPARATOR_LINE = /^[ \t]*(\*[ \t]*\*[ \t]*\*|-{3,}|◇+|◆+|#{3,})[ \t]*$/gmu;
+/** trailing whitespace of a scene incl. a closing separator line (kept when the scene body is rewritten) */
+export const SCENE_TAIL = /\s*(?:\n[ \t]*(?:\*[ \t]*\*[ \t]*\*|-{3,}|◇+|◆+|#{3,})[ \t]*)?\s*$/u;
+/** a separator line closing a rewritten body (the scene tail already carries it) */
+export const TRAILING_SEPARATOR = /\n[ \t]*(?:\*[ \t]*\*[ \t]*\*|-{3,}|◇+|◆+|#{3,})[ \t]*\s*$/u;
 
 /** char offsets where scenes start, using explicit separator lines; [0] when none */
 export function separatorSceneStarts(text: string): number[] {

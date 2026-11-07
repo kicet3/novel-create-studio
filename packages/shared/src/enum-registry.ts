@@ -136,6 +136,8 @@ export const ENUMS = {
     "build_world_ontology",
     // 설계 추가 0015: 엔티티 판정 백로그 정리(world_keeper)
     "resolve_entities",
+    // 설계 추가 0017: 초고·다듬기 뒤 분량 맞추기(줄이기·늘리기)
+    "adjust_length",
   ],
   target_type: ["novel", "goal", "arc", "episode", "scene", "shot", "setup", "entity", "question", "concept_session", "character"],
   task_status: ["pending", "ready", "running", "blocked", "done", "failed", "cancelled"],

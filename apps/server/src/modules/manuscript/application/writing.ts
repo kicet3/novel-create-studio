@@ -32,13 +32,21 @@ import {
   continuationNeeded,
   countBasisLabel,
   countChars,
+  dedupeRewrite,
   factSignature,
   firstSentence,
+  guardSceneGrowth,
   guardSceneLength,
+  lengthAdjustmentOf,
+  lengthDistance,
+  lengthGoal,
   normalizeText,
   SCENE_SEPARATOR,
+  SCENE_TAIL,
+  sceneTargets,
   separatorSceneStarts,
   signaturesEqual,
+  TRAILING_SEPARATOR,
   type LengthCheck,
 } from "../domain/text.js";
 import { EPISODE_HARD_MIN_CHARS, type CountBasis } from "@ncs/shared";
@@ -56,17 +64,29 @@ const OUTLINE_INSTRUCTION = `당신은 웹소설 기획자(planner)입니다. �
 - scenes[]마다 key(s1, s2 …)·summary·pov_entity_id·location_entity_id·participant_entity_ids·setup_beat_ids를 채웁니다. 엔티티는 ID로만 참조합니다.
 - 배정된 떡밥 비트는 모두 한 씬 이상에 배정합니다. 새 인물은 new_entity_proposals에 이름만 제안합니다.
 - 씬 수는 [작품 구성]의 이번 화 계획 씬 수를 따르고, 계획한 플롯 사건과 현재 부 목표를 벗어나지 않습니다.
-- target_chars는 이번 화 목표 분량(최소 분량 이상)입니다. 아직 등장 전인 인물은 등장시키지 않습니다.`;
+- target_chars는 이번 화 목표 분량(최소~최대 분량 사이)입니다. 아직 등장 전인 인물은 등장시키지 않습니다.`;
 const DRAFT_INSTRUCTION = `당신은 웹소설 작가(writer)입니다. 아웃라인의 씬을 순서대로 본문으로 씁니다.
 - 씬과 씬 사이에는 "${SCENE_SEPARATOR}" 한 줄만 둡니다. 다른 표기·주석은 넣지 않습니다.
 - 작품 연령 등급을 넘는 묘사를 쓰지 않습니다. 시점 인물이 모르는 이름은 쓰지 않습니다.
-- 목표 분량 이상으로 씁니다. 최소 분량에 못 미친 채로 끝내지 않습니다.
+- 분량은 허용 범위(최소~최대) 안에서 목표 분량에 맞춥니다. 최소 분량에 못 미치거나 최대 분량을 넘기지 않습니다.
 - [작품 구성]의 결말·현재 부 목표·플롯 핵심 사건·이번 화 계획을 벗어나지 않습니다.`;
 const CONTINUE_INSTRUCTION = `당신은 웹소설 작가(writer)입니다. 이 화의 초고가 최소 분량보다 짧습니다. 지금까지 쓴 본문 바로 뒤에 이어질 본문만 씁니다.
-- 앞 내용을 반복하거나 요약하지 않습니다. 아웃라인의 남은 씬을 이어서 쓰고, 씬이 바뀌면 "${SCENE_SEPARATOR}" 한 줄을 둡니다.
+- 앞 내용을 반복하거나 요약하지 않고, 이미 쓴 씬을 처음부터 다시 쓰지 않습니다. 아웃라인의 남은 씬을 이어서 쓰고, 씬이 바뀌면 "${SCENE_SEPARATOR}" 한 줄을 둡니다.
+- 부족한 분량만큼만 씁니다. 화 전체가 최대 분량을 넘지 않게 합니다.
 - 제목·메모·설명 없이 이어지는 본문만 출력합니다.`;
-const REVISE_INSTRUCTION = `당신은 웹소설 작가(writer)입니다. 주어진 씬 하나만 다시 씁니다. 지적된 문제를 고치고 앞뒤 씬과 이어지게 씁니다. 씬 본문만 출력합니다.`;
-const POLISH_INSTRUCTION = `당신은 문장 교정자(line_editor)입니다. 주어진 씬의 문장만 다듬습니다. 사건·인물·숫자·고유명사는 바꾸지 않습니다. 다듬은 씬 본문만 출력합니다.`;
+const REVISE_INSTRUCTION = `당신은 웹소설 작가(writer)입니다. 주어진 씬 하나만 다시 씁니다. 지적된 문제를 고치고 앞뒤 씬과 이어지게 씁니다.
+- 원문을 그대로 다시 붙이거나 다음 씬 내용을 이어 쓰지 않습니다. 고친 씬 하나만 씁니다.
+- 씬 분량은 주어진 목표 분량에 맞춥니다. 씬 본문만 출력합니다.`;
+const POLISH_INSTRUCTION = `당신은 문장 교정자(line_editor)입니다. 주어진 씬의 문장만 다듬습니다. 사건·인물·숫자·고유명사는 바꾸지 않습니다. 분량은 주어진 목표를 넘기지 않습니다. 다듬은 씬 본문만 출력합니다.`;
+/** 설계 추가 0017: length adjustment passes (one call per scene; the episode total lands in the profile range) */
+const TRIM_INSTRUCTION = `당신은 분량 편집자(trim)입니다. 주어진 씬을 목표 분량으로 줄입니다.
+- 겹치는 묘사·설명, 늘어지는 대사, 반복되는 내면 독백을 덜어 냅니다.
+- 플롯 비트·떡밥·복선·인물의 행동·회차 말 훅은 남깁니다. 요약문으로 바꾸지 않고 장면으로 씁니다.
+- 사건·인물·숫자·고유명사는 바꾸지 않습니다. 줄인 씬 본문만 출력합니다.`;
+const EXPAND_INSTRUCTION = `당신은 분량 편집자(expand)입니다. 주어진 씬을 목표 분량으로 늘립니다.
+- 장면 묘사·감각·인물의 내면·대사 주고받기를 보탭니다.
+- 새 사건·새 인물·새 설정을 만들지 않고, 다음 씬 내용을 앞당겨 쓰지 않습니다.
+- 사건·인물·숫자·고유명사는 바꾸지 않습니다. 늘린 씬 본문만 출력합니다.`;
 const REWORK_INSTRUCTION = `당신은 쇼러너(showrunner)입니다. 사람이 반려한 사유를 읽고 다시 쓸 씬 번호와 작업 지시를 JSON으로 정합니다. 원고는 쓰지 않습니다.`;
 const SAFETY_INSTRUCTION = `당신은 원고 안전 검수자입니다. 씬마다 (1) 작품 연령 등급을 넘는 성적·폭력·언어 수위 (2) 미성년 인물의 성적 묘사 (3) 실존 인물 사칭·명예훼손이 있는지 판정해 violations JSON으로만 답합니다. 문제가 없으면 빈 배열입니다.`;
 
@@ -135,6 +155,15 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
   };
 
   const loadVersion = async (scope: NovelScope, id: string | null | undefined) => (id ? await repo.getVersion(db(), scope, id) : null);
+  type Profile = { minChars: number; maxChars: number; countBasis: CountBasis };
+  /** a target inside the profile range (mid when none was planned) */
+  const targetIn = (profile: Profile, planned: number | null | undefined) => Math.min(profile.maxChars, Math.max(profile.minChars, planned || lengthGoal(profile)));
+  const rangeOf = (profile: Profile) => `${profile.minChars}~${profile.maxChars}자(${countBasisLabel(profile.countBasis)})`;
+  /** what a pass should leave in this episode: the current total when it is accepted, else the profile midpoint */
+  const goalFor = (profile: Profile, total: number) => (lengthAdjustmentOf(total, profile, cfg.lengthTolerance) ? lengthGoal(profile) : total);
+  /** per-scene length line of a rewrite payload (scene target scaled so the episode lands on `goal`) */
+  const sceneLengthLine = (profile: Profile, total: number, sceneCount: number, sceneTarget: number) =>
+    `이 씬 현재 ${sceneCount}자 → 목표 ${sceneTarget}자 안팎(${countBasisLabel(profile.countBasis)}). 화 전체 현재 ${total}자, 결과는 ${rangeOf(profile)} 사이여야 합니다.`;
   const followUp = (tx: Tx, scope: NovelScope, ep: Episode, kind: TaskKind, input: Record<string, unknown>, createdBy: import("../../../platform/index.js").ActorRef, priority = 500) =>
     ports.createTask(tx, scope, {
       kind,
@@ -163,8 +192,8 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       const arc = await novel.getArc(scope, ep.arcId);
       const profile = await m.lengthProfile(scope);
       const beatIds = (await Promise.all(ports.reg.beatSources.map((s) => soft(() => s(scope, ep.episodeNo), [])))).flat();
-      // 설계 추가 L5: the episode plan's target, never under the profile minimum
-      const target = Math.max(ep.targetChars ?? Math.round((profile.minChars + profile.maxChars) / 2), profile.minChars);
+      // 설계 추가 L5: the episode plan's target, inside the profile range (0017: never over the maximum either)
+      const target = targetIn(profile, ep.targetChars);
       const data = JSON.stringify({
         episode: { no: ep.episodeNo, title: ep.title, hookNote: ep.hookNote },
         arc: { title: arc.title, goal: arc.goalText, conflict: arc.conflictText, end: arc.endCondition, range: [arc.plannedEpisodeFrom, arc.plannedEpisodeTo] },
@@ -173,6 +202,7 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
         assignedSetupBeatIds: beatIds,
         targetChars: target,
         minChars: profile.minChars,
+        maxChars: profile.maxChars,
         countBasis: countBasisLabel(profile.countBasis),
         rework: input.rework_cause ? { cause: input.rework_cause, issues: input.issue_refs ?? [], instructions: input.instructions ?? null } : null,
       });
@@ -202,7 +232,7 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       const assigned = new Set(scenes.flatMap((s) => s.setup_beat_ids));
       const missing = beatIds.filter((b) => !assigned.has(b));
       if (missing.length) scenes[Math.floor(scenes.length / 2)]!.setup_beat_ids.push(...missing);
-      const outline: OutlineData = outlineDataSchema.parse({ ...v.outline, scenes, hook: v.outline.hook || synth.outline.hook, target_chars: Math.max(v.outline.target_chars || target, profile.minChars) });
+      const outline: OutlineData = outlineDataSchema.parse({ ...v.outline, scenes, hook: v.outline.hook || synth.outline.hook, target_chars: targetIn(profile, v.outline.target_chars || target) });
       return { outline: { summary: v.summary || synth.summary, title: v.title ?? ep.title, outline }, modelId: out.modelId };
     },
     async commit(tx, run, input, p) {
@@ -240,14 +270,15 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       const outline = outlineDataSchema.parse(outlineV?.outlineData ?? {});
       const profile = await m.lengthProfile(scope);
       const n = await novel.getNovel(scope);
-      // 설계 추가 L6: never below the profile minimum (≥ 3,000-char floor)
-      const target = Math.max(outline.target_chars || Math.round((profile.minChars + profile.maxChars) / 2), profile.minChars);
+      // 설계 추가 L6: never below the profile minimum (≥ 3,000-char floor); 0017: never above the maximum
+      const target = targetIn(profile, outline.target_chars);
       const basis = countBasisLabel(profile.countBasis);
       const data = JSON.stringify({
         episode: { no: ep.episodeNo, title: ep.title },
         ageRating: n.ageRating,
         targetChars: target,
         minChars: profile.minChars,
+        maxChars: profile.maxChars,
         countBasis: basis,
         scenes: outline.scenes.map((s) => ({ key: s.key, summary: s.summary })),
         hook: outline.hook,
@@ -256,7 +287,11 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       const out = await llm.call({
         run,
         purpose: "draft",
-        ...promptOf(context, DRAFT_INSTRUCTION, `목표 분량: ${target}자 이상(${basis}), 최소 ${profile.minChars}자 미만으로 끝내지 않습니다.\n${data}`),
+        ...promptOf(
+          context,
+          DRAFT_INSTRUCTION,
+          `목표 분량: ${target}자 안팎 — 허용 범위 ${rangeOf(profile)}. 최소 ${profile.minChars}자 미만으로 끝내지 않고 최대 ${profile.maxChars}자를 넘기지 않습니다.\n${data}`,
+        ),
         output: { kind: "text" },
         maxOutputTokens: 16_000,
       });
@@ -277,18 +312,28 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
           writtenTail: content.slice(-1500),
           writtenChars: before,
           shortfall: profile.minChars - before,
+          maxChars: profile.maxChars,
           attempt,
         });
         const more = await llm.call({
           run,
           purpose: "draft_continue",
-          ...promptOf(context, CONTINUE_INSTRUCTION, `부족한 분량: ${profile.minChars - before}자 이상(${basis})\n${payload}`),
+          ...promptOf(
+            context,
+            CONTINUE_INSTRUCTION,
+            `부족한 분량: ${profile.minChars - before}자 이상(${basis}) — 현재 ${before}자, 이어 쓴 뒤 화 전체는 ${rangeOf(profile)} 사이여야 합니다(추가는 최대 ${Math.max(0, profile.maxChars - before)}자).\n${payload}`,
+          ),
           output: { kind: "text" },
           maxOutputTokens: 12_000,
         });
         modelId = more.modelId;
         const extra = normalizeText(String(more.value)).trim();
-        if (extra) content = `${content}\n\n${extra}`;
+        // 설계 추가 0017: a "continuation" that starts the episode over again is a rewrite, never appended to the text
+        // (draft + a second copy doubled episodes); a fuller rewrite replaces the short draft
+        const head = content.split(/\n\s*\n/)[0]!.trim();
+        if (extra && head.length >= 30 && extra.includes(head)) {
+          if (countChars(extra, profile.countBasis) > before) content = extra;
+        } else if (extra) content = `${content}\n\n${extra}`;
         lastGrowth = countChars(content, profile.countBasis) - before;
       }
       const lengthCheck = checkLength(content, profile);
@@ -324,15 +369,30 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       return { kind: "done" as const, outputRefs: [{ refType: "manuscript_version" as const, refId: ep.currentVersionId }] };
     }
     const version = await m.saveVersion(tx, scope, ep.id, { kind: ep.currentVersionId ? "revision" : kind, content: p.content, author: agent, modelId: p.modelId, writerAnnotations: p.annotations });
-    const lengthDetails = p.lengthCheck
-      ? { lengthShortfall: Math.max(0, p.lengthCheck.minChars - p.lengthCheck.count), belowFloor: p.lengthCheck.belowFloor, continueAttempts: p.continueAttempts ?? 0 }
-      : {};
-    await m.transition(tx, scope, ep.id, "checking", agent, { ruleId: "E3", details: { versionId: version.id, ...lengthDetails, ...(p.lengthKept?.length ? { lengthKept: p.lengthKept } : {}) } });
-    await followUp(tx, scope, ep, "split_scenes", { manuscript_version_id: version.id, cycle_key: version.id }, agent, 700);
+    const carried = { continueAttempts: p.continueAttempts ?? 0, ...(p.lengthKept?.length ? { lengthKept: p.lengthKept } : {}) };
+    const profile = await m.lengthProfile(scope, tx);
+    if (cfg.lengthAdjustMaxRounds > 0 && lengthAdjustmentOf(countChars(version.content, profile.countBasis), profile, cfg.lengthTolerance)) {
+      // 설계 추가 0017: out of the profile range → trim / expand pass first (episode stays in drafting)
+      await followUp(tx, scope, ep, "adjust_length", { manuscript_version_id: version.id, cycle_key: `${version.id}:adjust`, adjust_phase: "draft", adjust_round: 1, carried }, agent, 700);
+      return { kind: "done" as const, outputRefs: [{ refType: "manuscript_version" as const, refId: version.id }] };
+    }
+    await toChecking(tx, scope, ep, agent, version.id, checkLength(version.content, profile), carried);
     return { kind: "done" as const, outputRefs: [{ refType: "manuscript_version" as const, refId: version.id }] };
   };
 
-  /** rewrite scene by scene; scenes containing user-written text are never touched (PR-08, INV-MV-03) */
+  /** E3: drafting → checking with the length details of the version, then scene segmentation */
+  const toChecking = async (tx: Tx, scope: NovelScope, ep: Episode, agent: import("../../../platform/index.js").ActorRef, versionId: string, length: LengthCheck, extra: Record<string, unknown>) => {
+    const details = { versionId, lengthShortfall: Math.max(0, length.minChars - length.count), belowFloor: length.belowFloor, ...extra };
+    await m.transition(tx, scope, ep.id, "checking", agent, { ruleId: "E3", details });
+    await followUp(tx, scope, ep, "split_scenes", { manuscript_version_id: versionId, cycle_key: versionId }, agent, 700);
+  };
+
+  /**
+   * rewrite scene by scene; scenes containing user-written text are never touched (PR-08, INV-MV-03).
+   * `limits` (count basis): `min` floor guard (L7), `ceiling` (a grown scene may not take the episode above it) and
+   * `maxGrowthRatio` (runaway scene = spill into the next scenes / a second copy). A rewritten body that still holds the
+   * original verbatim is an append, not a rewrite (dedupeRewrite). A closing separator line stays where it was.
+   */
   const rewriteScenes = async (
     run: RunHandle,
     llm: PipelineLlm,
@@ -343,7 +403,8 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
     instruction: string,
     payload: (s: { ord: number; summary: string; text: string }) => string,
     purpose: string,
-    floor?: { basis: CountBasis; min: number },
+    limits?: { basis: CountBasis; min: number; ceiling?: number; maxGrowthRatio?: number },
+    opts: { dedupe?: boolean } = {},
   ) => {
     const human = userRanges((base.attributionSpans as never) ?? []);
     let out = "";
@@ -351,8 +412,8 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
     const changed: string[] = [];
     const skipped: string[] = [];
     const lengthKept: string[] = [];
-    const count = (t: string) => (floor ? countChars(t, floor.basis) : t.length);
-    let projected = floor ? count(base.content) : 0;
+    const count = (t: string) => (limits ? countChars(t, limits.basis) : t.length);
+    let projected = limits ? count(base.content) : 0;
     for (const s of scenes) {
       const text = base.content.slice(s.start, s.end);
       out += base.content.slice(pos, s.start);
@@ -367,24 +428,29 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
         continue;
       }
       const lead = /^\s*/.exec(text)![0];
-      const trail = /\s*$/.exec(text)![0];
+      const trail = lead.length < text.length ? SCENE_TAIL.exec(text)![0] : "";
+      const core = text.slice(lead.length, text.length - trail.length);
       const r = await llm.call({ run, purpose, ...promptOf(context, instruction, payload({ ord: s.ord, summary: s.summary, text })), output: { kind: "text" } });
-      const body = normalizeText(String(r.value)).trim();
+      let body = normalizeText(String(r.value)).trim();
+      if (body && /\S/.test(trail)) body = body.replace(TRAILING_SEPARATOR, "").trim();
+      if (body && opts.dedupe !== false) body = dedupeRewrite(core, body);
       let next = body ? `${lead}${body}${trail}` : text;
-      if (floor && body) {
-        // 설계 추가 L7: a shorter scene that would take the episode under the floor keeps the original text
+      if (limits && body) {
         const delta = count(next) - count(text);
-        if (guardSceneLength({ originalSceneCount: count(text), newSceneCount: count(next), projectedTotal: projected + delta, floor: floor.min }) === "keep_original") {
+        const g = { originalSceneCount: count(text), newSceneCount: count(next), projectedTotal: projected + delta };
+        // 설계 추가 L7: a shorter scene that would take the episode under the floor keeps the original text;
+        // 0017: so does a longer one past the ceiling or a runaway one
+        if (guardSceneLength({ ...g, floor: limits.min }) === "keep_original" || guardSceneGrowth({ ...g, ceiling: limits.ceiling, maxGrowthRatio: limits.maxGrowthRatio }) === "keep_original") {
           next = text;
           lengthKept.push(s.id);
         } else projected += delta;
       }
       out += next;
-      if (next !== text && body !== text.trim()) changed.push(s.id);
+      if (next !== text && body !== core.trim()) changed.push(s.id);
       await run.checkpoint();
     }
     out += base.content.slice(pos);
-    const rejected = floor && count(out) < floor.min && count(out) < count(base.content) ? ("length_floor" as const) : null;
+    const rejected = limits && count(out) < limits.min && count(out) < count(base.content) ? ("length_floor" as const) : null;
     return { content: out, changed, skipped, lengthKept, rejected };
   };
 
@@ -395,6 +461,15 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
     const valid = scenes.length && scenes.every((s) => s.manuscriptVersionId === versionId);
     if (valid) return scenes.map((s) => ({ id: s.id, ord: s.ord, start: s.charStart, end: s.charEnd, summary: s.summary }));
     return deterministicRanges(v.content, 1).map((r, i) => ({ id: `tmp${i}`, ord: i + 1, ...r, summary: "" }));
+  };
+
+  /** scene targets (by ord) that bring the episode to `goal`; scenes with user text keep their count */
+  const targetsByOrd = (base: { content: string; attributionSpans: unknown }, scenes: Array<Range & { ord: number }>, basis: CountBasis, goal: number) => {
+    const human = userRanges((base.attributionSpans as never) ?? []);
+    const counts = scenes.map((s) => countChars(base.content.slice(s.start, s.end).trim(), basis));
+    const editable = scenes.map((s) => !human.some((h) => h.start < s.end && s.start < h.end));
+    const targets = sceneTargets(counts, editable, goal);
+    return new Map(scenes.map((s, i) => [s.ord, { count: counts[i]!, target: targets[i]! }]));
   };
 
   // ── P6 revise_episode ──
@@ -414,12 +489,15 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       const outline = outlineDataSchema.parse((await loadVersion(scope, ep.outlineVersionId))?.outlineData ?? {});
       const base = await loadVersion(scope, ep.currentVersionId);
       const profile = await m.lengthProfile(scope);
-      const target = Math.max(outline.target_chars || Math.round((profile.minChars + profile.maxChars) / 2), profile.minChars);
       if (!base) throw new DomainValidationError("no_manuscript", "수정할 원고 버전이 없습니다.");
       const scenes = await activeRanges(scope, ep, base.id);
       const targets = new Set(input.target_scene_ids ?? []);
       const whole = (input as { full_rewrite?: boolean }).full_rewrite === true || !targets.size;
       const issues = (input.issue_refs ?? []).map((i) => i.message).filter(Boolean);
+      // 설계 추가 0017: each scene gets a target (same length when the episode is in range, scaled toward the midpoint
+      // when not) and the range of the whole episode — never "at least N / don't shorten" without a ceiling
+      const total = countChars(base.content, profile.countBasis);
+      const byOrd = targetsByOrd(base, scenes, profile.countBasis, goalFor(profile, total));
       let modelId = "none";
       const r = await rewriteScenes(
         run,
@@ -429,15 +507,123 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
         scenes,
         (s) => whole || targets.has(s.id),
         REVISE_INSTRUCTION,
-        (s) =>
-          `목표 분량: ${countChars(s.text.trim(), profile.countBasis)}자 이상 — 이 씬 분량을 줄이지 마세요(현재 ${countChars(s.text.trim(), profile.countBasis)}자, 화 전체 목표 ${target}자)\n${JSON.stringify({ sceneOrd: s.ord, summary: s.summary, issues, instructions: input.instructions ?? null, text: s.text })}`,
+        (s) => {
+          const t = byOrd.get(s.ord) ?? { count: countChars(s.text.trim(), profile.countBasis), target: countChars(s.text.trim(), profile.countBasis) };
+          return `${sceneLengthLine(profile, total, t.count, t.target)} 이 씬(${s.ord}/${scenes.length})만 고쳐 씁니다.\n${JSON.stringify({ sceneOrd: s.ord, summary: s.summary, issues, instructions: input.instructions ?? null, text: s.text })}`;
+        },
         "revise",
-        { basis: profile.countBasis, min: EPISODE_HARD_MIN_CHARS },
+        { basis: profile.countBasis, min: EPISODE_HARD_MIN_CHARS, maxGrowthRatio: 1.6 },
       );
       const content = normalizeText(r.content);
       return { content, annotations: annotate(content, outline), modelId, baseVersionId: base.id, changed: r.changed, skipped: r.skipped, rejected: r.rejected, lengthKept: r.lengthKept };
     },
     commit: (tx, run, input, p) => commitBody(tx, run, input, p, "revision"),
+  };
+
+  // ── 설계 추가 0017 adjust_length (writer): trim / expand pass toward the profile range ──
+  type AdjustProposal = {
+    phase: "draft" | "polish";
+    action: "trim" | "expand" | null;
+    baseVersionId: string;
+    before: number;
+    after: number;
+    improved: boolean;
+    content: string;
+    modelId: string;
+    changed: string[];
+    skipped: string[];
+    lengthKept: string[];
+    factDiff: boolean;
+    sceneDrafts: SceneDraft[];
+  };
+  const adjustLength: PipelineHandler<In, AdjustProposal> = {
+    kind: "adjust_length",
+    role: "writer",
+    promptTemplateVersion: "writer.adjust_length@0.1.0",
+    inputSchema: episodeTaskInputSchema,
+    allowedWrites: ["manuscript.createVersion(kind=revision)"],
+    context: episodeContext,
+    async execute(run, input, context, llm) {
+      const scope = scopeOf(run);
+      const ep = await getService().getEpisode(scope, input.episode_id);
+      const phase = (input as { adjust_phase?: string }).adjust_phase === "polish" ? "polish" : "draft";
+      const base = await loadVersion(scope, ep.currentVersionId);
+      if (!base) throw new DomainValidationError("no_manuscript", "분량을 맞출 원고 버전이 없습니다.");
+      const profile = await m.lengthProfile(scope);
+      const before = countChars(base.content, profile.countBasis);
+      const action = lengthAdjustmentOf(before, profile, cfg.lengthTolerance);
+      let content = base.content;
+      let modelId = "none";
+      let r: { changed: string[]; skipped: string[]; lengthKept: string[] } = { changed: [], skipped: [], lengthKept: [] };
+      if (action && (!input.manuscript_version_id || input.manuscript_version_id === base.id)) {
+        const scenes = await activeRanges(scope, ep, base.id);
+        const byOrd = targetsByOrd(base, scenes, profile.countBasis, lengthGoal(profile));
+        const out = await rewriteScenes(
+          run,
+          { call: async (c) => { const o = await llm.call(c); modelId = o.modelId; return o; } },
+          context,
+          base,
+          scenes,
+          () => true,
+          action === "trim" ? TRIM_INSTRUCTION : EXPAND_INSTRUCTION,
+          (s) => {
+            const t = byOrd.get(s.ord)!;
+            return `분량 ${action === "trim" ? "줄이기" : "늘리기"}: ${sceneLengthLine(profile, before, t.count, t.target)}\n${JSON.stringify({ sceneOrd: s.ord, summary: s.summary, text: s.text })}`;
+          },
+          action === "trim" ? "length_trim" : "length_expand",
+          // a trim never takes the episode under the 3,000-char floor
+          action === "trim" ? { basis: profile.countBasis, min: EPISODE_HARD_MIN_CHARS } : undefined,
+          // an expanded scene may keep the original and add to it
+          { dedupe: action === "trim" },
+        );
+        content = normalizeText(out.content);
+        r = out;
+      }
+      const after = countChars(content, profile.countBasis);
+      // a pass counts only when it brings the episode closer to the range (else the base is kept as it is)
+      const improved = !!action && content !== base.content && lengthDistance(after, profile, cfg.lengthTolerance) < lengthDistance(before, profile, cfg.lengthTolerance);
+      const final = improved ? content : base.content;
+      let factDiff = false;
+      let sceneDrafts: SceneDraft[] = [];
+      if (phase === "polish") {
+        // after polishing: the checked version (polish base) is what the scenes and facts were checked against
+        const checked = (await loadVersion(scope, (input as { checked_version_id?: string }).checked_version_id ?? base.parentVersionId)) ?? base;
+        const names = (await soft(() => ontology.listEntities(scope, { limit: 500 }), [])).map((e) => e.preferredName);
+        factDiff = !signaturesEqual(factSignature(checked.content, names), factSignature(final, names));
+        sceneDrafts = final === checked.content ? [] : await scenesThrough(scope, ep, checked.content, final);
+      }
+      return { phase, action, baseVersionId: base.id, before, after: improved ? after : before, improved, content: final, modelId, changed: r.changed, skipped: r.skipped, lengthKept: r.lengthKept, factDiff, sceneDrafts };
+    },
+    async commit(tx, run, input, p) {
+      const scope = scopeOf(run);
+      const agent = actors.agent("writer", run.runId);
+      const ep = await m.mustEpisode(tx, scope, input.episode_id, true);
+      if (ep.status !== (p.phase === "polish" ? "polishing" : "drafting") || ep.currentVersionId !== p.baseVersionId) return skip();
+      const version = p.improved ? await m.saveVersion(tx, scope, ep.id, { kind: "revision", content: p.content, author: agent, modelId: p.modelId }) : null;
+      const versionId = version?.id ?? p.baseVersionId;
+      const profile = await m.lengthProfile(scope, tx);
+      const round = Number((input as { adjust_round?: number }).adjust_round ?? 1);
+      const adjust = { round, action: p.action, before: p.before, after: p.after, improved: p.improved };
+      if (p.phase === "draft") {
+        if (p.improved && round < cfg.lengthAdjustMaxRounds && lengthAdjustmentOf(p.after, profile, cfg.lengthTolerance)) {
+          await followUp(
+            tx,
+            scope,
+            ep,
+            "adjust_length",
+            { manuscript_version_id: versionId, cycle_key: `${versionId}:adjust`, adjust_phase: "draft", adjust_round: round + 1, carried: (input as { carried?: unknown }).carried },
+            agent,
+            700,
+          );
+          return { kind: "done", outputRefs: [{ refType: "manuscript_version", refId: versionId }] };
+        }
+        const carried = ((input as { carried?: Record<string, unknown> }).carried ?? {}) as Record<string, unknown>;
+        await toChecking(tx, scope, ep, agent, versionId, checkLength(p.content, profile), { ...carried, lengthAdjust: adjust });
+        return { kind: "done", outputRefs: [{ refType: "manuscript_version", refId: versionId }] };
+      }
+      await finishPolished(tx, scope, ep, agent, { id: versionId, content: p.content }, p.factDiff, p.sceneDrafts, { lengthAdjust: adjust });
+      return { kind: "done", outputRefs: [{ refType: "manuscript_version", refId: versionId }] };
+    },
   };
 
   // ── P3a split_scenes ──
@@ -576,6 +762,53 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
   });
 
   // ── P4 polish_episode ──
+  /** INV-SC-02 without a re-check: move the current scene boundaries through the diff (07 §6.1 다듬기) */
+  const scenesThrough = async (scope: NovelScope, ep: Episode, from: string, content: string): Promise<SceneDraft[]> => {
+    const current = await repo.listScenes(db(), scope, ep.id);
+    const oldRanges = current.map((x) => ({ start: x.charStart, end: x.charEnd }));
+    const mapped = (current.length ? mapRanges(oldRanges, diffText(from, content), content.length) : null) ?? deterministicRanges(content, Math.max(1, current.length));
+    const drafts: SceneDraft[] = mapped.map((rg, i) => ({ ord: i + 1, charStart: rg.start, charEnd: rg.end, summary: current[i]?.summary || firstSentence(content.slice(rg.start, rg.end)) }));
+    if (drafts.length) drafts[drafts.length - 1]!.charEnd = content.length;
+    return drafts;
+  };
+
+  /**
+   * end of the polish phase for the polished (or length-adjusted) version: a fact diff re-checks (E7), otherwise the
+   * scenes move through the diff and the episode waits for approval (E8)
+   */
+  const finishPolished = async (
+    tx: Tx,
+    scope: NovelScope,
+    ep: Episode,
+    agent: import("../../../platform/index.js").ActorRef,
+    version: { id: string; content: string },
+    factDiff: boolean,
+    sceneDrafts: SceneDraft[],
+    opts: { countRewrite?: boolean; lengthAdjust?: unknown } = {},
+  ) => {
+    if (factDiff && cfg.polishRecheckOnFactDiff) {
+      // E7: the polished text changed fact-bearing tokens → full re-check (a polish counts toward the auto-rewrite cap)
+      await m.transition(tx, scope, ep.id, "checking", actors.system("orchestrator"), {
+        ruleId: "E7",
+        ...(opts.countRewrite ? { patch: { autoRewriteCount: ep.autoRewriteCount + 1 } } : {}),
+        details: { versionId: version.id, ...(opts.lengthAdjust ? { lengthAdjust: opts.lengthAdjust } : {}) },
+      });
+      await followUp(tx, scope, ep, "split_scenes", { manuscript_version_id: version.id, cycle_key: version.id }, agent, 700);
+      return;
+    }
+    if (sceneDrafts.length) await getService().replaceScenes(tx, scope, version.id, sceneDrafts, agent);
+    const length = checkLength(version.content, await m.lengthProfile(scope, tx));
+    await m.enterAwaitingApproval(tx, scope, ep.id, agent, { lengthWarning: lengthWarningOf(length), length });
+  };
+
+  /** 설계 추가 0017: one more trim / expand round after polishing when the episode is out of range */
+  const adjustAfterPolish = async (tx: Tx, scope: NovelScope, ep: Episode, agent: import("../../../platform/index.js").ActorRef, versionId: string, content: string, checkedVersionId: string) => {
+    const profile = await m.lengthProfile(scope, tx);
+    if (cfg.lengthAdjustMaxRounds <= 0 || !lengthAdjustmentOf(countChars(content, profile.countBasis), profile, cfg.lengthTolerance)) return false;
+    await followUp(tx, scope, ep, "adjust_length", { manuscript_version_id: versionId, checked_version_id: checkedVersionId, cycle_key: `${versionId}:adjust`, adjust_phase: "polish", adjust_round: 1 }, agent, 600);
+    return true;
+  };
+
   const polishEpisode: PipelineHandler<
     In,
     { content: string; modelId: string; baseVersionId: string; factDiff: boolean; changed: string[]; skipped: string[]; sceneDrafts: SceneDraft[]; rejected: "length_floor" | null; lengthKept: string[] }
@@ -592,6 +825,8 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       const base = (await loadVersion(scope, ep.currentVersionId))!;
       const scenes = await activeRanges(scope, ep, base.id);
       const profile = await m.lengthProfile(scope);
+      const total = countChars(base.content, profile.countBasis);
+      const byOrd = targetsByOrd(base, scenes, profile.countBasis, goalFor(profile, total));
       let modelId = "none";
       const r = await rewriteScenes(
         run,
@@ -601,21 +836,19 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
         scenes,
         () => true,
         POLISH_INSTRUCTION,
-        (s) =>
-          `목표 분량: ${countChars(s.text.trim(), profile.countBasis)}자 이상 — 이 씬 분량을 줄이지 마세요(현재 ${countChars(s.text.trim(), profile.countBasis)}자)\n${JSON.stringify({ sceneOrd: s.ord, instructions: input.instructions ?? null, text: s.text })}`,
+        (s) => {
+          const t = byOrd.get(s.ord) ?? { count: countChars(s.text.trim(), profile.countBasis), target: countChars(s.text.trim(), profile.countBasis) };
+          return `${sceneLengthLine(profile, total, t.count, t.target)} 문장만 다듬고 분량을 늘리지 않습니다.\n${JSON.stringify({ sceneOrd: s.ord, instructions: input.instructions ?? null, text: s.text })}`;
+        },
         "polish",
-        // polishing never takes an episode under the profile minimum (it only edits sentences); revise keeps the 3,000 floor
-        { basis: profile.countBasis, min: Math.max(EPISODE_HARD_MIN_CHARS, profile.minChars) },
+        // polishing never takes an episode under the profile minimum (it only edits sentences); revise keeps the 3,000 floor.
+        // 0017: nor above the profile maximum (a grown scene past it keeps the original; an episode already above it never grows)
+        { basis: profile.countBasis, min: Math.max(EPISODE_HARD_MIN_CHARS, profile.minChars), ceiling: Math.max(profile.maxChars, total) },
       );
       const content = normalizeText(r.content);
       const names = (await soft(() => ontology.listEntities(scope, { limit: 500 }), [])).map((e) => e.preferredName);
       const factDiff = !signaturesEqual(factSignature(base.content, names), factSignature(content, names));
-      // INV-SC-02 without a re-check: move the scene boundaries through the diff (07 §6.1 다듬기)
-      const current = await repo.listScenes(db(), scope, ep.id);
-      const oldRanges = current.map((x) => ({ start: x.charStart, end: x.charEnd }));
-      const mapped = (current.length ? mapRanges(oldRanges, diffText(base.content, content), content.length) : null) ?? deterministicRanges(content, Math.max(1, current.length));
-      const sceneDrafts: SceneDraft[] = mapped.map((rg, i) => ({ ord: i + 1, charStart: rg.start, charEnd: rg.end, summary: current[i]?.summary || firstSentence(content.slice(rg.start, rg.end)) }));
-      if (sceneDrafts.length) sceneDrafts[sceneDrafts.length - 1]!.charEnd = content.length;
+      const sceneDrafts = await scenesThrough(scope, ep, base.content, content);
       return { content, modelId, baseVersionId: base.id, factDiff, changed: r.changed, skipped: r.skipped, sceneDrafts, rejected: r.rejected, lengthKept: r.lengthKept };
     },
     async commit(tx, run, input, p) {
@@ -626,19 +859,14 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       if (p.rejected === "length_floor") {
         // 설계 추가 L9: the polished text would fall under the floor → keep the checked base version
         const base = await getService().getVersion(scope, p.baseVersionId, tx);
+        if (await adjustAfterPolish(tx, scope, ep, agent, base.id, base.content, base.id)) return { kind: "done", outputRefs: [{ refType: "manuscript_version", refId: base.id }] };
         const length = checkLength(base.content, await m.lengthProfile(scope, tx));
         await m.enterAwaitingApproval(tx, scope, ep.id, agent, { lengthWarning: lengthWarningOf(length), length });
         return { kind: "done", outputRefs: [{ refType: "manuscript_version", refId: base.id }] };
       }
       const version = await m.saveVersion(tx, scope, ep.id, { kind: "revision", content: p.content, author: agent, modelId: p.modelId });
-      if (p.factDiff && cfg.polishRecheckOnFactDiff) {
-        // E7: the polished text changed fact-bearing tokens → full re-check (counts toward the auto-rewrite cap)
-        await m.transition(tx, scope, ep.id, "checking", actors.system("orchestrator"), { ruleId: "E7", patch: { autoRewriteCount: ep.autoRewriteCount + 1 }, details: { versionId: version.id } });
-        await followUp(tx, scope, ep, "split_scenes", { manuscript_version_id: version.id, cycle_key: version.id }, agent, 700);
-      } else {
-        if (p.sceneDrafts.length) await getService().replaceScenes(tx, scope, version.id, p.sceneDrafts, agent);
-        const length = checkLength(p.content, await m.lengthProfile(scope, tx));
-        await m.enterAwaitingApproval(tx, scope, ep.id, agent, { lengthWarning: lengthWarningOf(length), length });
+      if (!(await adjustAfterPolish(tx, scope, ep, agent, version.id, version.content, p.baseVersionId))) {
+        await finishPolished(tx, scope, ep, agent, version, p.factDiff, p.sceneDrafts, { countRewrite: true });
       }
       return { kind: "done", outputRefs: [{ refType: "manuscript_version", refId: version.id }] };
     },
@@ -706,5 +934,5 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
     },
   };
 
-  return { handlers: [outlineEpisode, draftEpisode, reviseEpisode, splitScenes, checkTextSafety, polishEpisode, planRework] as Array<PipelineHandler<any, any>> };
+  return { handlers: [outlineEpisode, draftEpisode, reviseEpisode, adjustLength, splitScenes, checkTextSafety, polishEpisode, planRework] as Array<PipelineHandler<any, any>> };
 }

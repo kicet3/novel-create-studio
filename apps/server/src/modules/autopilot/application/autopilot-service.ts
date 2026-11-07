@@ -163,6 +163,8 @@ export function createAutopilotService(deps: AutopilotDeps): { service: Autopilo
           episodeStatus: ep.status,
           episodeNo: ep.episodeNo,
           belowFloor: !!flag?.lengthBelowFloor || !!(a.payload as { lengthBelowFloor?: boolean } | null)?.lengthBelowFloor,
+          // the current text decides (a later human edit may have brought it into range)
+          lengthOutOfRange: flag ? flag.lengthOutOfRange : null,
           openHigh: open.filter((i) => i.severity === "high").length,
           openMedium: open.filter((i) => i.severity === "medium").length,
           safetyEver: safety.length,

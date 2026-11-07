@@ -175,6 +175,7 @@ export const LABELS_KO = {
     plan_structure: "전체 구성 기획",
     build_world_ontology: "세계관 온톨로지 생성",
     resolve_entities: "엔티티 판정 정리",
+    adjust_length: "분량 맞추기",
   }),
   task_status: labels("task_status", {
     pending: "대기",

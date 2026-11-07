@@ -29,7 +29,7 @@ const HANDLE_NOTE = "엔티티는 이름 대신 컨텍스트의 핸들(E1, E2 �
 const T = (role: AgentRole, kind: TaskKind, instruction: string, output: string = JSON_NOTE): PromptTemplateData => ({ role, kind, version: TEMPLATE_VERSION, instruction, output });
 
 const DRAFT_RULES = [
-  "- 분량은 아래 목표 분량 이상으로 씁니다. 최소 분량 미만으로 끝내지 않습니다(한 화 절대 하한 3,000자).",
+  "- 분량은 아래 목표 분량 범위(최소~최대) 안에 맞춥니다. 최소 분량에 못 미치거나 최대 분량을 넘기지 않습니다(한 화 절대 하한 3,000자).",
   "- 모바일 가독성: 1~3문장 문단, 대사는 따로 줄을 바꿉니다.",
   "- 아웃라인의 비트와 씬 순서를 지키고, 배정된 떡밥 비트를 자연스럽게 넣습니다.",
   "- 마지막 문단은 다음 화가 궁금해지는 훅으로 끝냅니다.",
@@ -116,6 +116,17 @@ export const PROMPT_TEMPLATE_DATA: readonly PromptTemplateData[] = [
     "polish_episode",
     `검사를 통과한 {{episodeLabel}} 원고의 문장과 분량을 다듬습니다. 사건·사실은 바꾸지 않습니다.\n${DRAFT_RULES}`,
     "다듬은 본문 전체만 출력합니다.",
+  ),
+  T(
+    "writer",
+    "adjust_length",
+    [
+      "{{episodeLabel}} 원고 분량이 허용 범위를 벗어났습니다. 씬별로 목표 분량에 맞춰 줄이거나 늘립니다.",
+      "- 줄이기: 겹치는 묘사·설명·늘어지는 대사를 덜어 냅니다. 플롯 비트·떡밥·복선·훅은 남기고 요약으로 바꾸지 않습니다.",
+      "- 늘리기: 장면 묘사·감각·내면·대사를 보탭니다. 새 사건·인물·설정은 만들지 않습니다.",
+      "- 사람이 쓴 구간과 사건·사실·고유명사는 바꾸지 않습니다.",
+    ].join("\n"),
+    "고친 씬 본문만 출력합니다.",
   ),
   T(
     "showrunner",

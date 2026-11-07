@@ -46,6 +46,8 @@ export const TASK_KIND_ROLE: Readonly<Record<TaskKind, AgentRole>> = {
   build_world_ontology: "world_keeper",
   // 설계 추가 0015: 엔티티 판정 백로그 정리
   resolve_entities: "world_keeper",
+  // 설계 추가 0017: 분량 맞추기(줄이기·늘리기)
+  adjust_length: "writer",
 };
 
 /** target_type per task_kind (04 §2.2 표; build_initial_ontology uses target novel + input.series_bible_id). */
@@ -78,6 +80,7 @@ export const TASK_KIND_TARGET: Readonly<Partial<Record<TaskKind, TargetType>>> =
   plan_structure: "novel",
   build_world_ontology: "novel",
   resolve_entities: "novel",
+  adjust_length: "episode",
 };
 
 /** Concept tasks are the only ones allowed without goal_id (INV-TSK-01 / INV-CON-08). */

@@ -29,10 +29,11 @@ export const MANUSCRIPT_TASK_KINDS = [
   "plan_rework",
   "check_text_safety",
   "plan_structure",
+  "adjust_length",
 ] as const satisfies readonly TaskKind[];
 
 /** tasks that write the episode manuscript (04 §3.3 동시 실행 제약) */
-export const WRITING_KINDS: readonly TaskKind[] = ["outline_episode", "draft_episode", "revise_episode", "polish_episode", "plan_rework", "split_scenes"];
+export const WRITING_KINDS: readonly TaskKind[] = ["outline_episode", "draft_episode", "revise_episode", "polish_episode", "adjust_length", "plan_rework", "split_scenes"];
 /** P3 tasks whose completion the gate waits for (GC-1) — only kinds with a registered handler count */
 export const CHECK_PHASE_KINDS: readonly TaskKind[] = ["split_scenes", "extract_facts", "link_mentions", "check_continuity", "check_setups", "check_text_safety"];
 
@@ -61,6 +62,10 @@ export interface ManuscriptSettings {
   draftContinueMaxAttempts: number;
   /** stop continuing when one continuation added fewer chars than this */
   draftContinueMinGrowth: number;
+  /** 설계 추가 0017: trim / expand rounds after a draft or revision (one more after polishing) */
+  lengthAdjustMaxRounds: number;
+  /** share of maxChars accepted above the profile maximum (0.03 → 5,500 × 1.03) */
+  lengthTolerance: number;
 }
 
 export function settings(): ManuscriptSettings {
@@ -74,6 +79,8 @@ export function settings(): ManuscriptSettings {
     reserveTarget: defaultValue("reserve.target_episodes"),
     draftContinueMaxAttempts: 2,
     draftContinueMinGrowth: 200,
+    lengthAdjustMaxRounds: defaultValue("length.adjust_max_rounds"),
+    lengthTolerance: defaultValue("length.adjust_tolerance_ratio"),
   };
 }
 

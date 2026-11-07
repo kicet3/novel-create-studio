@@ -54,6 +54,7 @@ export const TASK_KIND_STAGE: Readonly<Partial<Record<TaskKind, AgentPipelineSta
   draft_episode: "draft",
   revise_episode: "draft",
   plan_rework: "draft",
+  adjust_length: "draft",
   polish_episode: "polish",
   check_continuity: "check",
   check_setups: "check",

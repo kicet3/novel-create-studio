@@ -109,7 +109,8 @@ describe("plot characters, writing context and plan deviations", () => {
     expect(outline.prompt).toContain("아직 등장 전 — 2화 첫 등장 예정");
     const draft = t.claude.requests.find((r) => r.system.includes(DRAFT_SYS))!;
     expect(draft.prompt).toContain("[이번 화 계획]");
-    expect(draft.prompt).toMatch(/목표 분량: \d+자 이상\(공백 포함\), 최소 5000자/);
+    expect(draft.prompt).toMatch(/목표 분량: \d+자 안팎 — 허용 범위 5000~5500자\(공백 포함\)/);
+    expect(draft.prompt).toContain("최대 5500자를 넘기지 않습니다");
     const check = t.claude.requests.find((r) => r.system.includes("연속성 편집자"))!;
     expect(check.prompt).toContain("[결말]");
     expect(check.system).toContain("plan_deviation");
@@ -163,6 +164,8 @@ describe("3,000-char floor: full_auto keeps the structure approval, no auto appr
       { times: Infinity, when: { text: true, system: CONTINUE_SYS }, text: "그는 숨을 골랐다." }, // grows < 200 chars → stop
       { times: Infinity, when: { text: true, system: DRAFT_SYS }, text: TINY },
       { times: Infinity, when: { text: true, system: "문장 교정자(line_editor)" }, text: "짧게 다듬은 문장." },
+      // 설계 추가 0017: the expand pass gives nothing longer → the text is kept as it was
+      { times: Infinity, when: { text: true, system: "분량 편집자(expand)" }, text: "짧게 늘린 문장." },
     );
     scriptPipeline(t.claude);
   });
@@ -189,8 +192,9 @@ describe("3,000-char floor: full_auto keeps the structure approval, no auto appr
     await drain(t, scope, async () => (await t.modules.manuscript.service.getEpisodeByNo(scope, 1)).status === "awaiting_approval", 100);
     const ep = await t.modules.manuscript.service.getEpisodeByNo(scope, 1);
     const current = await t.modules.manuscript.service.getVersion(scope, ep.currentVersionId!);
-    expect(current.content).toBe(`${TINY}\n\n그는 숨을 골랐다.`); // the shorter polished scenes were not taken
-    expect(t.claude.requests.filter((r) => r.system.includes(CONTINUE_SYS))).toHaveLength(1);
+    expect(current.content).toBe(`${TINY}\n\n그는 숨을 골랐다.`); // the shorter polished / expanded scenes were not taken
+    // episode 1 only (0017: the extra expand passes let episode 2 start its draft meanwhile)
+    expect(t.claude.requests.filter((r) => r.system.includes(CONTINUE_SYS) && r.prompt.includes('"episode":{"no":1,'))).toHaveLength(1);
     expect(current.charCountWithSpaces).toBeLessThan(3000);
     const list = dto.structureViewSchema.parse((await t.http("GET", `/api/novels/${scope.novelId}/structure`)).body);
     expect(list.episodes.find((e) => e.episodeNo === 1)!.lengthBelowFloor).toBe(true);

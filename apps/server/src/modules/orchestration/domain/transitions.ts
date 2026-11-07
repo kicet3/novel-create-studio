@@ -184,6 +184,7 @@ export function basePriority(kind: TaskKind): number {
     case "extract_facts":
     case "link_mentions":
     case "polish_episode":
+    case "adjust_length":
       return 500;
     case "plan_series_bible":
     case "plan_structure":
@@ -210,6 +211,7 @@ export function effectivePriority(priority: number, createdAt: Date, now: Date):
 export const REASSIGNABLE: Readonly<Partial<Record<TaskKind, readonly AgentRole[]>>> = {
   revise_episode: ["writer", "line_editor"],
   polish_episode: ["writer", "line_editor"],
+  adjust_length: ["writer", "line_editor"],
 };
 
 export function reassignAllowed(kind: TaskKind, toRole: AgentRole): boolean {
@@ -217,7 +219,7 @@ export function reassignAllowed(kind: TaskKind, toRole: AgentRole): boolean {
 }
 
 /** episode manuscript writers may not run concurrently on the same episode (04 §3.3, §5.3) */
-export const MANUSCRIPT_WRITER_KINDS: readonly TaskKind[] = ["outline_episode", "draft_episode", "revise_episode", "polish_episode"];
+export const MANUSCRIPT_WRITER_KINDS: readonly TaskKind[] = ["outline_episode", "draft_episode", "revise_episode", "polish_episode", "adjust_length"];
 
 /** wake idempotency keys (04 §4.1) */
 export const wakeKeys = {

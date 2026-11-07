@@ -260,8 +260,21 @@ export interface ManuscriptService {
   decideStructure(scope: NovelScope, input: { decision: "approved" | "rejected"; note?: string; expectedRevision: number }, actor: ActorRef): Promise<StructureView>;
   /** plan_arc again for a plot (flags cleared); 409 arc_not_replannable, 422 structure_not_approved */
   replanArc(scope: NovelScope, arcId: string, note: string | undefined, actor: ActorRef): Promise<{ taskId: string }>;
-  /** episode rows with `lengthBelowFloor` (current version under the 3,000-char floor) */
-  withLengthFlags<E extends Episode>(scope: NovelScope, episodes: E[]): Promise<Array<E & { lengthBelowFloor: boolean }>>;
+  /**
+   * episode rows with `lengthBelowFloor` (current version under the 3,000-char floor) and `lengthOutOfRange`
+   * (설계 추가 0017: outside [minChars, maxChars × (1 + tolerance)] of the profile; null = in range / no text)
+   */
+  withLengthFlags<E extends Episode>(scope: NovelScope, episodes: E[]): Promise<Array<E & { lengthBelowFloor: boolean; lengthOutOfRange: LengthOutOfRange | null }>>;
+}
+
+/** 설계 추가 0017: an episode text outside the accepted length range */
+export interface LengthOutOfRange {
+  deviation: "short" | "long";
+  count: number;
+  minChars: number;
+  maxChars: number;
+  /** maxChars × (1 + tolerance) */
+  acceptedMaxChars: number;
 }
 
 export type { ManuscriptModuleDeps } from "./module.js";

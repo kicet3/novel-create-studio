@@ -76,6 +76,10 @@ export const DEFAULT_DEFS = {
 
   // 7.3 원고 파이프라인
   "length.default_profile": d({ min_chars: 5000, max_chars: 5500, count_basis: "with_spaces" as const }, "novel"),
+  // 설계 추가 0017: 초고(수정본) 분량이 프로필 범위를 벗어나면 줄이기/늘리기 패스를 최대 N회 돌립니다(다듬기 뒤 1회 더).
+  "length.adjust_max_rounds": d(2, "system"),
+  // 최대 분량을 이 비율까지 넘는 것은 범위 안으로 봅니다(5,500자 × 1.03 = 5,665자). 자동 승인도 이 범위까지만.
+  "length.adjust_tolerance_ratio": d(0.03, "system"),
   "episode.max_rejections": d(3, "novel"),
   "continuity.max_auto_rewrites_per_episode": d(2, "novel"),
   "extraction.max_retries": d(2, "system"),

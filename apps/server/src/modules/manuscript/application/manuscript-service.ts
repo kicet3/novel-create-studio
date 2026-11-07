@@ -18,7 +18,7 @@ import { computeSpans, coversExactly, initialSpans, lineAttribution } from "../d
 import { diffText } from "../domain/diff.js";
 import { decideGate } from "../domain/gate.js";
 import { retainSceneIds, storyPoint } from "../domain/scenes.js";
-import { belowFloorByCounts, checkLength, countBasisLabel, countChars, normalizeText, type LengthCheck } from "../domain/text.js";
+import { acceptedMaxChars, belowFloorByCounts, checkLength, countBasisLabel, countChars, lengthAdjustmentOf, normalizeText, type LengthCheck } from "../domain/text.js";
 import { EPISODE_HARD_MIN_CHARS } from "@ncs/shared";
 import { findEpisodeRule, HUMAN_EDITABLE_STATUSES } from "../domain/transitions.js";
 import type {
@@ -28,6 +28,7 @@ import type {
   EpisodeRejection,
   EpisodeRuleId,
   GateOutcome,
+  LengthOutOfRange,
   ManuscriptService,
   ManuscriptVersion,
   SaveVersionInput,
@@ -93,6 +94,12 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
   const lengthProfile = async (scope: NovelScope, tx?: Tx) => {
     const p = await novel.getLengthProfile(scope, tx);
     return { minChars: p.minChars, maxChars: p.maxChars, countBasis: p.countBasis };
+  };
+  /** 설계 추가 0017: a stored version outside the accepted range of the profile (null = in range) */
+  const outOfRange = (v: { charCountWithSpaces: number; charCountWithoutSpaces: number }, profile: Awaited<ReturnType<typeof lengthProfile>>): LengthOutOfRange | null => {
+    const count = profile.countBasis === "without_spaces" ? v.charCountWithoutSpaces : v.charCountWithSpaces;
+    const a = lengthAdjustmentOf(count, profile, cfg.lengthTolerance);
+    return a ? { deviation: a === "expand" ? "short" : "long", count, minChars: profile.minChars, maxChars: profile.maxChars, acceptedMaxChars: acceptedMaxChars(profile.maxChars, cfg.lengthTolerance) } : null;
   };
 
   // ── transitions ─────────────────────────────────────────────────────
@@ -425,6 +432,7 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
     const version = ep.currentVersionId ? await mustVersion(tx, scope, ep.currentVersionId) : null;
     const counts = version ? `공백 포함 ${version.charCountWithSpaces}자 / 공백 제외 ${version.charCountWithoutSpaces}자` : "";
     const floorCount = version ? (profile.countBasis === "without_spaces" ? version.charCountWithoutSpaces : version.charCountWithSpaces) : 0;
+    const range = version && !belowFloor ? outOfRange(version, profile) : null;
     const body = [
       belowFloor ? `⚠ 분량 미달: ${countBasisLabel(profile.countBasis)} ${floorCount.toLocaleString("ko-KR")}자 (최소 ${EPISODE_HARD_MIN_CHARS.toLocaleString("ko-KR")}자). 자동 승인·공개하지 않습니다.` : null,
       `${ep.episodeNo}화${ep.title ? ` 「${ep.title}」` : ""} 원고가 검사와 다듬기를 마쳤습니다.`,
@@ -440,7 +448,8 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
       target: epRef(episodeId),
       question: { title: `${ep.episodeNo}화 승인 요청${belowFloor ? " (분량 미달)" : ""}`, body, links: [epRef(episodeId), ...(version ? [{ type: "manuscript_version" as const, id: version.id }] : [])] },
       requestedBy: actor,
-      payload: { episodeNo: ep.episodeNo, ...(belowFloor ? { lengthBelowFloor: true } : {}) },
+      // 설계 추가 0017: outside the accepted range → the autopilot leaves it to the author
+      payload: { episodeNo: ep.episodeNo, ...(belowFloor ? { lengthBelowFloor: true } : {}), ...(range ? { lengthOutOfRange: range } : {}) },
     });
     ep = await repo.updateEpisode(tx.db, scope, episodeId, { blockReasons: [...new Set([...ep.blockReasons, "approval" as const])] });
     await audit.record(tx, { novelId: scope.novelId, actor, action: "episode.blocked", target: epRef(episodeId), after: { blockReasons: ep.blockReasons }, approvalId: req.approvalId });
@@ -450,7 +459,8 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
   const afterGatePass = async (tx: Tx, scope: NovelScope, ep: Episode, actor: ActorRef) => {
     await transition(tx, scope, ep.id, "polishing", actor, { ruleId: "E6" });
     const current = ep.currentVersionId ? await mustVersion(tx, scope, ep.currentVersionId) : null;
-    if (current && current.agentRole === "line_editor") {
+    // 설계 추가 0017: a writer version saved while polishing is the length-adjusted polished text (adjust_length)
+    if (current && (current.agentRole === "line_editor" || (current.agentRole === "writer" && current.stage === "polishing"))) {
       // the checked version is the polished candidate (E7 recheck passed) → E8 right away
       const length = checkLength(current.content, await lengthProfile(scope, tx));
       await enterAwaitingApproval(tx, scope, ep.id, actor, { lengthWarning: lengthWarningOf(length), length });
@@ -866,11 +876,11 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
       reg.castPort = port;
     },
     async withLengthFlags(scope, list) {
-      const basis = (await lengthProfile(scope)).countBasis;
+      const profile = await lengthProfile(scope);
       const out = [];
       for (const e of list) {
         const v = e.currentVersionId ? await repo.getVersion(uow.db, scope, e.currentVersionId) : null;
-        out.push({ ...e, lengthBelowFloor: v ? belowFloorByCounts(v, basis) : false });
+        out.push({ ...e, lengthBelowFloor: v ? belowFloorByCounts(v, profile.countBasis) : false, lengthOutOfRange: v ? outOfRange(v, profile) : null });
       }
       return out;
     },

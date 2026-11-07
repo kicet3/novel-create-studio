@@ -36,6 +36,8 @@ export type ApprovalFacts =
       episodeStatus: string;
       episodeNo: number;
       belowFloor: boolean;
+      /** 설계 추가 0017: the text is outside [min, max × (1 + tolerance)] of the length profile (after the adjustment passes) */
+      lengthOutOfRange?: { deviation: "short" | "long"; count: number; minChars: number; maxChars: number } | null;
       openHigh: number;
       openMedium: number;
       /** safety_* issues ever opened on this episode (정책·저작권 경고는 사람) */
@@ -119,9 +121,9 @@ const SETTING_LABEL: Record<AutoApprovalType, string> = {
  */
 export function holdsForAuto(type: string, payload: unknown, s: AutopilotSettings): boolean {
   if (!isAutoApprovalType(type) || !settingFor(type, s)) return false;
-  const p = (payload ?? {}) as { autopilot?: { heldReason?: unknown }; lengthBelowFloor?: unknown; pendingChanges?: { ending?: unknown; goalEndingChanged?: unknown } };
+  const p = (payload ?? {}) as { autopilot?: { heldReason?: unknown }; lengthBelowFloor?: unknown; lengthOutOfRange?: unknown; pendingChanges?: { ending?: unknown; goalEndingChanged?: unknown } };
   if (p.autopilot?.heldReason) return false;
-  if (type === "episode" && p.lengthBelowFloor) return false;
+  if (type === "episode" && (p.lengthBelowFloor || p.lengthOutOfRange)) return false;
   if (type === "story_structure" && (p.pendingChanges?.ending || p.pendingChanges?.goalEndingChanged)) return false;
   return true;
 }
@@ -143,6 +145,15 @@ export function evaluateApproval(
     case "episode": {
       if (facts.episodeStatus !== "awaiting_approval") return { kind: "wait", reasonKo: "화 상태가 바뀌었습니다." };
       if (facts.belowFloor) return { kind: "human", gate: "length_below_floor", reasonKo: `${facts.episodeNo}화가 분량 하한(3,000자)에 못 미칩니다.` };
+      if (facts.lengthOutOfRange) {
+        const l = facts.lengthOutOfRange;
+        const n = (x: number) => x.toLocaleString("ko-KR");
+        return {
+          kind: "human",
+          gate: "length_out_of_range",
+          reasonKo: `${facts.episodeNo}화 분량 ${n(l.count)}자가 설정 범위(${n(l.minChars)}~${n(l.maxChars)}자)를 ${l.deviation === "short" ? "밑돕니다" : "넘습니다"}.`,
+        };
+      }
       if (facts.safetyEver > 0) return { kind: "human", gate: "safety", reasonKo: `${facts.episodeNo}화에 정책·안전 경고가 있었습니다.` };
       if (facts.rewriteLimit) return { kind: "human", gate: "rewrite_limit", reasonKo: `${facts.episodeNo}화가 자동 재작성 상한에 닿았습니다.` };
       if (facts.openHigh > 0) return { kind: "human", gate: "open_high_issue", reasonKo: `${facts.episodeNo}화에 심각도 높음 연속성 이슈가 ${facts.openHigh}건 열려 있습니다.` };

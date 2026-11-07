@@ -36,6 +36,7 @@ function LengthForm({ novelId, p }: { novelId: string; p: LengthProfileDto }) {
     <div className="flex flex-col gap-3">
       <p className="m-0 text-[13px] text-muted">현재: {p.name}</p>
       <p className="m-0 text-xs text-muted">기본 5,000~5,500자 · 3,000자는 고정 하한입니다. 최소 분량에 못 미친 초고는 아웃라인을 따라 이어 쓰고, 3,000자 미만인 화는 자동 승인·공개하지 않습니다.</p>
+      <p className="m-0 text-xs text-muted">초고가 이 범위를 벗어나면 자동으로 줄이거나 늘려 맞춥니다.</p>
       <div className="grid grid-cols-1 gap-3 min-[521px]:grid-cols-3">
         <Field label="최소 글자 수" error={minLow ? EPISODE_HARD_MIN_MESSAGE : undefined}>
           <Input inputMode="numeric" value={min} onChange={(e) => setMin(e.target.value)} />
