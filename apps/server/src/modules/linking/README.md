@@ -33,6 +33,7 @@ See /CONVENTIONS.md for layering, transactions, audit, tests and copy rules.
 - `application/linker.ts` L1–L8 (`runLinker`), `commit.ts` (NIL entities, mentions, EN3(b), questions), `decisions.ts` (confirm/relink, answer appliers, identity_change approval), `tasks.ts` (4 task kinds).
 - `extract_facts` = P3b + P3c in one task, then creates `link_mentions` → `check_continuity`/`check_setups`.
 - Scene text comes from `registerSceneSource()` (manuscript) or `input.scenes`; without a source extraction is skipped.
+- 설계 추가(수정 반영): after the candidate facts are written, registered `FactReconciler`s (revision) reconcile the facts of earlier versions of the episode in the same commit (only when scenes were read).
 - Without a model run L4 is the deterministic `ruleJudge`. Model schemas: `linking_l4_choice`, `linking_extraction`, `linking_initial_ontology`.
 
 ## 엔티티 판정 에이전트 (설계 추가 0015)

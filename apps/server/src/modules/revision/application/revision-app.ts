@@ -37,6 +37,9 @@ import type { OrchestrationService, RunHandle, TaskKindHandler } from "../../orc
 import { revisionRepo as repo } from "../adapters/db/repository.js";
 import { applyPatches, DEFAULT_MAX_PATCH_RATIO, excerptAround, locatePatches, normalizeText, type TextPatch } from "../domain/patch.js";
 import { ensureNoSourcePhrase, revisionTurnOutputSchema, type RevisionTurnOutput } from "../domain/turn.js";
+import type { FactEffect } from "../domain/reconcile.js";
+import type { LinkingService } from "../../linking/index.js";
+import { createFactReconcile, RECONCILE_PAYLOAD_KIND } from "./fact-reconcile.js";
 
 export interface RevisionDeps {
   platform: Platform;
@@ -49,6 +52,8 @@ export interface RevisionDeps {
   messaging: MessagingService;
   manuscript: ManuscriptService;
   foreshadow: ForeshadowService;
+  /** 설계 추가(수정 반영): the fact reconciler is registered with linking (extract_facts commit) */
+  linking?: Pick<LinkingService, "registerFactReconciler">;
 }
 
 export const TURN_TEMPLATE_ID = "line_editor.revision_chat_turn@0.1.0";
@@ -72,6 +77,8 @@ interface TurnResult {
   baseVersionId: string | null;
   /** impact notes per fact id, computed before the commit (read-only, outside the commit transaction) */
   impacts?: Record<string, ImpactPayload>;
+  /** 설계 추가(수정 반영): dry run per text_patch proposal (index in output.proposals) — facts the patch would change */
+  effects?: Record<number, FactEffect[]>;
   failed?: string;
 }
 type ImpactPayload = {
@@ -484,12 +491,22 @@ export function createRevisionApp(deps: RevisionDeps) {
         });
         // issues still open after the repair rounds: the offending items were dropped (result), the reply stays
         const impacts: Record<string, ImpactPayload> = {};
+        const effects: Record<number, FactEffect[]> = {};
+        for (const [pi, pr] of repaired.result.proposals.entries()) {
+          if (pr.kind !== "text_patch") continue;
+          const located = locatePatches(content.content, pr.patches);
+          if (located.issues.length) continue;
+          effects[pi] = await reconcile.preview(scope, ep.id, content.content, applyPatches(content.content, located.located), located.located.map((x) => ({ start: x.start, end: x.end, replacement: normalizeText(x.replacement) }))).catch((err) => {
+            log.warn({ err, episodeId: ep.id }, "revision chat: fact effect preview failed");
+            return [];
+          });
+        }
         for (const pr of repaired.result.proposals) {
           if (pr.kind === "text_patch" || !pr.fact_id || impacts[pr.fact_id]) continue;
           const note = await impactOf(scope, ep, pr.fact_id);
           if (note) impacts[pr.fact_id] = note;
         }
-        return { output: ensureNoSourcePhrase(repaired.result), observedMaxSeq, baseVersionId: content.versionId, impacts };
+        return { output: ensureNoSourcePhrase(repaired.result), observedMaxSeq, baseVersionId: content.versionId, impacts, effects };
       } catch (err) {
         streams.reset(s.id, run.taskId);
         throw err;
@@ -516,7 +533,7 @@ export function createRevisionApp(deps: RevisionDeps) {
       });
       const ep = await manuscript.getEpisode(scope, input.episode_id, tx);
       const impactFacts = new Set<string>();
-      for (const pr of out.proposals) {
+      for (const [pi, pr] of out.proposals.entries()) {
         if (pr.kind === "text_patch") {
           await repo.insertProposal(tx.db, {
             id: ids.next("rvp"),
@@ -525,7 +542,7 @@ export function createRevisionApp(deps: RevisionDeps) {
             messageId: msg.id,
             kind: "text_patch",
             baseVersionId: p.baseVersionId,
-            payload: { patches: pr.patches.map((x) => ({ quote: normalizeText(x.quote), replacement: normalizeText(x.replacement), reason: x.reason })) },
+            payload: { patches: pr.patches.map((x) => ({ quote: normalizeText(x.quote), replacement: normalizeText(x.replacement), reason: x.reason })), factEffects: p.effects?.[pi] ?? [] },
           });
         } else if (pr.kind === "setting_change" && pr.fact_id) {
           const [f] = await ontology.getFactsByIds(scope, [pr.fact_id], tx);
@@ -567,11 +584,11 @@ export function createRevisionApp(deps: RevisionDeps) {
    * in the episode; value facts: the subject appears and the value text occurs in the episode. Runs in `execute` (no
    * commit lock); one mention probe per episode, content loads only for value facts and bounded.
    */
-  async function impactOf(scope: NovelScope, ep: Episode, factId: string): Promise<ImpactPayload | null> {
-    const [f] = await ontology.getFactsByIds(scope, [factId]).catch(() => []);
+  async function impactOf(scope: NovelScope, ep: Episode, factId: string, tx?: Tx): Promise<ImpactPayload | null> {
+    const [f] = await ontology.getFactsByIds(scope, [factId], tx).catch(() => []);
     if (!f) return null;
-    const others = (await manuscript.listEpisodes(scope).catch(() => [])).filter((e) => e.id !== ep.id && !!e.currentVersionId).sort((a, b) => a.episodeNo - b.episodeNo);
-    const mentions = async (entityId: string, versionId: string) => (await ontology.listMentions(scope, { entityId, manuscriptVersionId: versionId, limit: 1 }).catch(() => [])).length > 0;
+    const others = (await manuscript.listEpisodes(scope, undefined, tx).catch(() => [])).filter((e) => e.id !== ep.id && !!e.currentVersionId).sort((a, b) => a.episodeNo - b.episodeNo);
+    const mentions = async (entityId: string, versionId: string) => (await ontology.listMentions(scope, { entityId, manuscriptVersionId: versionId, limit: 1 }, tx).catch(() => [])).length > 0;
     const needle = f.objectEntityId ? "" : normalizeText(valueText(f)).trim();
     const valueProbe = !f.objectEntityId && needle.length >= 2 && needle !== f.text;
     const items: ImpactPayload["items"] = [];
@@ -584,12 +601,20 @@ export function createRevisionApp(deps: RevisionDeps) {
         if (await mentions(f.objectEntityId, vid)) items.push({ episodeId: e.id, episodeNo: e.episodeNo, title: e.title, via: "같은 관계(두 대상이 함께) 언급" });
       } else if (valueProbe && loads < 40) {
         loads++;
-        const v = await manuscript.getVersion(scope, vid).catch(() => null);
+        const v = await manuscript.getVersion(scope, vid, tx).catch(() => null);
         if (v && normalizeText(v.content).includes(needle)) items.push({ episodeId: e.id, episodeNo: e.episodeNo, title: e.title, via: "같은 설정 값 언급" });
       }
     }
     return { subject: f.text, factId: f.factId, items };
   }
+
+  const reconcile = createFactReconcile({
+    ontology,
+    manuscript,
+    hitl,
+    orchestration,
+    impactOf: async (scope, episodeId, factId, tx) => impactOf(scope, await manuscript.getEpisode(scope, episodeId, tx), factId, tx),
+  });
 
   /** a run that ended without its commit: clear in-flight when the task is over, end/reset the live reply */
   async function onUncommitted(tx: Tx, scope: NovelScope, taskId: string, input: TurnInput) {
@@ -613,7 +638,7 @@ export function createRevisionApp(deps: RevisionDeps) {
   }
 
   // ── proposal decisions ───────────────────────────────────────────────
-  async function decideProposal(scope: NovelScope, episodeNo: number, proposalId: string, input: { decision: "accepted" | "rejected"; patchIdx?: number[] }, actor: ActorRef & { type: "user" }) {
+  async function decideProposal(scope: NovelScope, episodeNo: number, proposalId: string, input: { decision: "accepted" | "rejected"; patchIdx?: number[]; confirmedFactIds?: string[] }, actor: ActorRef & { type: "user" }) {
     await uow.run(async (tx) => {
       const ep0 = await manuscript.getEpisodeByNo(scope, episodeNo, tx);
       const s = await repo.sessionByEpisode(tx.db, scope, ep0.id, true);
@@ -632,13 +657,13 @@ export function createRevisionApp(deps: RevisionDeps) {
         await audit.record(tx, { novelId: scope.novelId, actor, action: "revision_chat.proposal_accepted", target: epRef(ep0.id), details: { proposalId: p.id, kind: p.kind, sessionId: s.id, episodeNo } });
         return;
       }
-      if (p.kind === "text_patch") return acceptPatch(tx, scope, s, p, ep0, input.patchIdx, actor);
+      if (p.kind === "text_patch") return acceptPatch(tx, scope, s, p, ep0, input.patchIdx, actor, input.confirmedFactIds);
       return acceptSetting(tx, scope, s, p, ep0, actor);
     });
     return getView(scope, episodeNo);
   }
 
-  async function acceptPatch(tx: Tx, scope: NovelScope, s: Session, p: Proposal, ep: Episode, patchIdx: number[] | undefined, actor: ActorRef & { type: "user" }) {
+  async function acceptPatch(tx: Tx, scope: NovelScope, s: Session, p: Proposal, ep: Episode, patchIdx: number[] | undefined, actor: ActorRef & { type: "user" }, confirmedFactIds: string[] = []) {
     if (ep.status === "published") throw new DomainValidationError("retcon_required", "공개된 화는 직접 고칠 수 없습니다. 리트콘 승인으로 진행하세요.");
     const st = chatState(ep);
     if (!st.canPatch) throw new ConflictError("revision_chat_unavailable", st.notice ?? "지금은 본문을 고칠 수 없습니다.");
@@ -655,16 +680,24 @@ export function createRevisionApp(deps: RevisionDeps) {
       return;
     }
     const next = applyPatches(cur.content, r.located);
-    const provenance = { revision_chat: { sessionId: s.id, proposalIds: [p.id], patchIdx: idx, agentProposed: true, acceptedBy: actor.id } };
+    // 설계 추가(수정 반영): approved facts the card listed and the author confirmed — the re-extraction applies their change
+    // with this confirmation as the human decision; any other approved change goes to a canon_change approval
+    // only an expected change / retraction can be confirmed ("keep" is no decision about a change)
+    const shownEffects = (((p.payload as { factEffects?: FactEffect[] }).factEffects ?? []) as FactEffect[]).filter((e) => e.needsConfirm && e.effect !== "keep");
+    const shown = new Map(shownEffects.map((e) => [e.factId, e.effect]));
+    const confirmed = [...new Set(confirmedFactIds)].filter((id) => shown.has(id));
+    // the effect the author saw: the re-extraction applies the confirmation only when its outcome matches it
+    const confirmedEffects = confirmed.map((factId) => ({ factId, effect: shown.get(factId)! }));
+    const provenance = { revision_chat: { sessionId: s.id, proposalIds: [p.id], patchIdx: idx, agentProposed: true, acceptedBy: actor.id, confirmedFactIds: confirmed, confirmedEffects } };
     const version = await manuscript.applyHumanEditTx(tx, scope, ep.id, { content: next, baseVersionId: cur.versionId, writerAnnotations: provenance, auditDetails: provenance }, actor);
-    await repo.updateProposal(tx.db, scope, p.id, { status: "accepted", resultVersionId: version.id, payload: { ...p.payload, appliedPatchIdx: idx }, decidedByUserId: actor.id, decidedAt: clock.date() });
+    await repo.updateProposal(tx.db, scope, p.id, { status: "accepted", resultVersionId: version.id, payload: { ...p.payload, appliedPatchIdx: idx, confirmedFactIds: confirmed }, decidedByUserId: actor.id, decidedAt: clock.date() });
     await repo.updateSession(tx.db, scope, s.id, { outcome: "patched" });
     await audit.record(tx, {
       novelId: scope.novelId,
       actor,
       action: "revision_chat.proposal_accepted",
       target: epRef(ep.id),
-      details: { proposalId: p.id, kind: "text_patch", sessionId: s.id, episodeNo: ep.episodeNo, versionId: version.id, baseVersionId: cur.versionId, patchIdx: idx, agentProposed: true },
+      details: { proposalId: p.id, kind: "text_patch", sessionId: s.id, episodeNo: ep.episodeNo, versionId: version.id, baseVersionId: cur.versionId, patchIdx: idx, agentProposed: true, confirmedFactIds: confirmed },
     });
     // other pending patches: still applicable on the new text? otherwise stale
     for (const o of await repo.listProposals(tx.db, scope, s.id, ["pending"])) {
@@ -714,6 +747,7 @@ export function createRevisionApp(deps: RevisionDeps) {
   /** canon_change / retcon approvals raised by this module */
   async function onSettingApproval(ctx: ApprovalDecisionContext) {
     const { tx, scope, approval, actor } = ctx;
+    if ((approval.payload as { kind?: string } | null)?.kind === RECONCILE_PAYLOAD_KIND) return reconcile.onApproval(ctx);
     const pl = (approval.payload ?? {}) as { oldFactId?: string; newValue?: string; proposalId?: string; episodeId?: string };
     if (!pl.proposalId || !pl.oldFactId || typeof pl.newValue !== "string") {
       log.warn({ approvalId: approval.id, type: approval.approvalType }, "canon change approval without a revision proposal: decision recorded only");
@@ -874,6 +908,7 @@ export function createRevisionApp(deps: RevisionDeps) {
     taskHandler,
     notesSection,
     onSettingApproval,
+    reconcile,
     service: { getView, postMessage, decideProposal, close, rewrite, stopTurn, inFlightTurnTaskId, sessionOf: (scope: NovelScope, episodeId: string) => repo.sessionByEpisode(uow.db, scope, episodeId) },
   };
 }

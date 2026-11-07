@@ -21,7 +21,7 @@ export interface RevisionService {
   getView(scope: NovelScope, episodeNo: number): Promise<RevisionChatView>;
   /** 409 revision_turn_in_flight while a turn is queued/running; 409 revision_chat_unavailable without text */
   postMessage(scope: NovelScope, episodeNo: number, input: { body: string; anchor?: { versionId: string; quote: string; start: number; end: number } }, actor: ActorRef): Promise<{ message: RevisionMessage; taskId: string }>;
-  decideProposal(scope: NovelScope, episodeNo: number, proposalId: string, input: { decision: "accepted" | "rejected"; patchIdx?: number[] }, actor: UserActor): Promise<RevisionChatView>;
+  decideProposal(scope: NovelScope, episodeNo: number, proposalId: string, input: { decision: "accepted" | "rejected"; patchIdx?: number[]; confirmedFactIds?: string[] }, actor: UserActor): Promise<RevisionChatView>;
   /** 고치지 않고 끝내기 (+ "작가 확인: 의도대로 둠" note) */
   close(scope: NovelScope, episodeNo: number, input: { saveNote: boolean; note?: string }, actor: UserActor): Promise<RevisionChatView>;
   /** 전체 다시 쓰기 → requestRevision (approved) / episode approval rejection (awaiting_approval) */

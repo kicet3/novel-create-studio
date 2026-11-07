@@ -102,6 +102,15 @@ export interface FactContent {
   /** conflict classification (06 §6.6): excluded from promotion */
   conflictWith?: string | null;
   diffKind?: string;
+  /** 설계 추가(수정 반영): the earlier fact of the same episode this one replaces after a text edit (never an overwrite) */
+  supersedes?: string | null;
+  /** set on the replaced fact: its successor */
+  supersededByFactId?: string | null;
+  /** a text-edit change of approved canon waits for the author's canon_change / retcon approval: excluded from promotion */
+  reconcilePending?: boolean;
+  /** set on an approved fact whose text-edit change the author rejected (keep the old setting): not asked again unless a
+   * different replacement appears */
+  reconcileKeptBy?: { approvalId: string; rejectedNewText: string | null } | null;
   [k: string]: unknown;
 }
 

@@ -7,7 +7,7 @@ import type { LlmService } from "../llm/index.js";
 import type { NovelService } from "../novel/index.js";
 import type { OntologyService } from "../ontology/index.js";
 import type { OrchestrationService } from "../orchestration/index.js";
-import type { LinkingService, SceneSource } from "./index.js";
+import type { FactReconciler, LinkingService, SceneSource } from "./index.js";
 import { commitLinkerResult } from "./application/commit.js";
 import { buildDisambiguationOptions, confirmMention, disambiguationApplier, duplicateApplier, identityChangeApprovalHandler, relinkMentions } from "./application/decisions.js";
 import { runLinker } from "./application/linker.js";
@@ -42,6 +42,7 @@ function tryRegister(fn: () => void): void {
 
 export function createLinkingModule(deps: LinkingModuleDeps): ServerModule<LinkingService> {
   const sceneSources: SceneSource[] = [];
+  const reconcilers: FactReconciler[] = [];
   const d = { ontology: deps.ontology, hitl: deps.hitl, novel: deps.novel };
   const service: LinkingService = {
     linkMentions: (scope, input, run) => runLinker({ ontology: deps.ontology, llm: deps.llm }, scope, input, run),
@@ -49,11 +50,12 @@ export function createLinkingModule(deps: LinkingModuleDeps): ServerModule<Linki
     relinkMentions: (tx, scope, ids, to, actor) => relinkMentions(d, tx, scope, ids, to, actor),
     buildDisambiguationOptions: (scope, mentionId, tx) => buildDisambiguationOptions(d, scope, mentionId, tx),
     registerSceneSource: (src) => void sceneSources.push(src),
+    registerFactReconciler: (r) => void reconcilers.push(r),
     commitLinkerResult: (tx, scope, result, actor, ctx) => commitLinkerResult(d, tx, scope, result, actor, ctx),
   };
 
   const log = deps.platform.log.child({ module: "linking" });
-  const taskDeps: TaskDeps = { ontology: deps.ontology, llm: deps.llm, hitl: deps.hitl, novel: deps.novel, agents: deps.agents, orchestration: deps.orchestration, sceneSources, log, audit: deps.audit };
+  const taskDeps: TaskDeps = { ontology: deps.ontology, llm: deps.llm, hitl: deps.hitl, novel: deps.novel, agents: deps.agents, orchestration: deps.orchestration, sceneSources, reconcilers, log, audit: deps.audit };
   deps.orchestration.registerTaskKind(defineTask(taskDeps, extractFactsHandler(taskDeps)));
   deps.orchestration.registerTaskKind(defineTask(taskDeps, linkMentionsHandler(taskDeps)));
   deps.orchestration.registerTaskKind(defineTask(taskDeps, buildInitialOntologyHandler(taskDeps)));

@@ -99,6 +99,11 @@ export function createOntologyService(deps: OntologyModuleDeps): OntologyService
     async demoteEpisodeFacts(tx, scope, episodeId, actor) {
       return { demoted: await F.relockEpisodeFacts(d, tx, scope, episodeId, "published_locked", "approved", actor) };
     },
+    listEpisodeFacts: (scope, episodeId, tx) => F.listEpisodeFacts(db(tx), scope, episodeId),
+    retireFacts: (tx, scope, changes, actor, opts) => F.retireFacts(d, tx, scope, changes, actor, opts),
+    pruneFactMentions: (tx, scope, ids, versions) => F.pruneFactMentions(d, tx, scope, ids, versions),
+    setFactReconcileHold: (tx, scope, ids, pending, actor) => F.setFactReconcileHold(d, tx, scope, ids, pending, actor),
+    markFactsKeptByDecision: (tx, scope, marks, approvalId, actor) => F.markFactsKeptByDecision(d, tx, scope, marks, approvalId, actor),
     async approveBibleFacts(tx, scope, bibleId, actor) {
       const r = await F.approveBible(d, tx, scope, bibleId, actor);
       return { approved: r.approved };

@@ -93,6 +93,7 @@ export function EditPanel({
       </div>
       <p className="m-0 text-xs text-muted">
         저장하면 새 버전(사람 수정)이 만들어지고 진행 중인 작업은 멈춘 뒤 다시 검사합니다. 사람 수정은 에이전트가 승인 없이 되돌리지 않습니다.
+        {" "}다시 검사할 때 새 본문에서 사실을 다시 추출해 온톨로지를 맞춥니다. 후보 사실은 바로 정리되고, 승인된 설정이 바뀌거나 빠지면 인박스의 설정 변경 승인을 거쳐 반영됩니다.
       </p>
       {save.error && (
         <Callout tone="danger" title={conflict ? "다른 버전이 먼저 저장되었습니다" : "저장하지 못했습니다"}>

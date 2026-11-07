@@ -4,9 +4,9 @@
  */
 import { and, eq, inArray, isNull, or, sql } from "@ncs/db/orm";
 import { entities, entityNames, facts, factVersions, identityDecisions, mentions } from "@ncs/db/schema";
-import type { CanonStatus } from "@ncs/shared";
+import type { CanonStatus, FactChangeReason } from "@ncs/shared";
 import { ConflictError, NotFoundError, type ActorRef, type NovelScope, type Tx } from "../../../../platform/index.js";
-import type { CandidateFactDraft, CandidateFactResult, Fact } from "../../index.js";
+import type { CandidateFactDraft, CandidateFactResult, EpisodeFact, Fact, FactRetirement } from "../../index.js";
 import { lookupPredicate, type OntologySchemaData } from "../../domain/base-schema.js";
 import {
   canonicalOrientation,
@@ -30,6 +30,7 @@ import {
   factShape,
   lockSlots,
   preferredNames,
+  project,
   resolveIds,
   rewriteSlots,
   titleMaxHoldersMap,
@@ -431,6 +432,7 @@ export async function promoteCandidates(d: OntoDeps, tx: Tx, scope: NovelScope, 
     else if (entityStatus.get(f.subjectEntityId) !== "active" || (f.objectEntityId && entityStatus.get(f.objectEntityId) !== "active")) hold(f, "entity_not_active");
     else if ((f.mentionIds ?? []).some((m) => UNRESOLVED_LINK.includes(mentionById.get(m)?.linkStatus ?? "ambiguous") || mentionById.get(m)?.linkStatus === "rejected")) hold(f, "mention_unresolved");
     else if (c?.conflictWith) hold(f, "conflict");
+    else if (c?.reconcilePending) hold(f, "reconcile_pending");
     else if (retconRequired.has(f.id)) hold(f, "retcon_required");
     else if (violated.has(f.id)) hold(f, "schema_violation");
     else if (f.narrativeFrameId && !c?.storyRange) hold(f, "frame_target_missing");
@@ -613,4 +615,139 @@ export async function reviseCandidateFact(d: OntoDeps, tx: Tx, scope: NovelScope
     details: { versionNo: fact.currentVersionNo },
   });
   return fact;
+}
+
+// ── 설계 추가(수정 반영): text edits of an episode → its extracted facts follow the new text ─────────────────
+
+/** live facts whose current version was extracted from the episode (content.episodeId), with their evidence mentions */
+export async function listEpisodeFacts(db: Tx["db"], scope: NovelScope, episodeId: string): Promise<EpisodeFact[]> {
+  const rows = await db
+    .select({ f: facts, content: factVersions.content })
+    .from(facts)
+    .innerJoin(factVersions, and(eq(factVersions.novelId, facts.novelId), eq(factVersions.factId, facts.id), isNull(factVersions.supersededAt)))
+    .where(and(eq(facts.novelId, scope.novelId), inArray(facts.canonStatus, LIVE), sql`${factVersions.content}->>'episodeId' = ${episodeId}`))
+    .orderBy(facts.id);
+  if (!rows.length) return [];
+  const { schema } = await activeSchema(db, scope);
+  const projected = await project(db, scope, rows.map((r) => r.f), schema);
+  return projected.map((p, i) => {
+    const { f, content } = rows[i]!;
+    const c = content as FactContent;
+    return {
+      ...p,
+      mentionIds: f.mentionIds ?? [],
+      sourceRefType: f.sourceRefType,
+      sourceRefId: f.sourceRefId,
+      conflictWith: c.conflictWith ?? null,
+      supersedes: c.supersedes ?? null,
+      reconcilePending: c.reconcilePending === true,
+      reconcileKeptBy: c.reconcileKeptBy ?? null,
+    };
+  });
+}
+
+/** drop evidence mentions of the given manuscript versions (an older text of the same episode); at least one mention stays */
+export async function pruneFactMentions(d: OntoDeps, tx: Tx, scope: NovelScope, factIds: string[], dropVersionIds: string[]): Promise<number> {
+  if (!factIds.length || !dropVersionIds.length) return 0;
+  const rows = await tx.db.select({ id: facts.id, mentionIds: facts.mentionIds }).from(facts).where(and(eq(facts.novelId, scope.novelId), inArray(facts.id, [...new Set(factIds)]))).for("update");
+  const all = [...new Set(rows.flatMap((r) => r.mentionIds ?? []))];
+  if (!all.length) return 0;
+  const ms = await tx.db.select({ id: mentions.id, v: mentions.manuscriptVersionId }).from(mentions).where(and(eq(mentions.novelId, scope.novelId), inArray(mentions.id, all)));
+  const drop = new Set(ms.filter((m) => m.v && dropVersionIds.includes(m.v)).map((m) => m.id));
+  let n = 0;
+  for (const r of rows) {
+    const cur = r.mentionIds ?? [];
+    const kept = cur.filter((m) => !drop.has(m));
+    if (kept.length === cur.length || kept.length === 0) continue;
+    await tx.db.update(facts).set({ mentionIds: kept, updatedAt: d.platform.clock.date() }).where(and(eq(facts.novelId, scope.novelId), eq(facts.id, r.id)));
+    n++;
+  }
+  return n;
+}
+
+/** hold / release candidate facts while a text-edit change of approved canon waits for the author (promotion skips them) */
+export async function setFactReconcileHold(d: OntoDeps, tx: Tx, scope: NovelScope, factIds: string[], pending: boolean, actor: ActorRef): Promise<number> {
+  if (!factIds.length) return 0;
+  const rows = await tx.db.select().from(facts).where(and(eq(facts.novelId, scope.novelId), inArray(facts.id, [...new Set(factIds)]))).for("update");
+  const contents = await currentContents(tx.db, scope, rows.map((r) => r.id));
+  let n = 0;
+  for (const f of rows) {
+    if (f.canonStatus !== "candidate" || (contents.get(f.id)?.content.reconcilePending === true) === pending) continue;
+    await appendFactVersion(d, tx, scope, f, {}, { changeReason: "reinterpretation", actor, contentPatch: { reconcilePending: pending } });
+    n++;
+  }
+  return n;
+}
+
+/** the author rejected a text-edit change of canon facts (kept the old setting): a marker version, nothing else changes */
+export async function markFactsKeptByDecision(
+  d: OntoDeps,
+  tx: Tx,
+  scope: NovelScope,
+  marks: Array<{ factId: string; rejectedNewText: string | null }>,
+  approvalId: string,
+  actor: ActorRef,
+): Promise<number> {
+  if (!marks.length) return 0;
+  const byFact = new Map(marks.map((m) => [m.factId, m]));
+  const rows = await tx.db.select().from(facts).where(and(eq(facts.novelId, scope.novelId), inArray(facts.id, [...byFact.keys()]))).for("update");
+  let n = 0;
+  for (const f of rows) {
+    if (!isCanon(f.canonStatus)) continue;
+    await appendFactVersion(d, tx, scope, f, {}, { changeReason: "reinterpretation", actor, approvalId, contentPatch: { reconcileKeptBy: { approvalId, rejectedNewText: byFact.get(f.id)!.rejectedNewText } } });
+    n++;
+  }
+  return n;
+}
+
+/**
+ * Retire facts the edited text no longer supports: approved / published_locked → retracted (F9), candidate → rejected (F4),
+ * slots released. With a successor the link is recorded on both sides (old.supersededByFactId, new.supersedes; the
+ * successor's conflict / hold marks are cleared) — the history is appended, nothing is overwritten. Audit: fact.superseded
+ * or fact.retracted with the source episode / versions and who decided (human_confirmed / approval / agent).
+ */
+export async function retireFacts(
+  d: OntoDeps,
+  tx: Tx,
+  scope: NovelScope,
+  changes: FactRetirement[],
+  actor: ActorRef,
+  opts: { changeReason: FactChangeReason; approvalId?: string | null; reason: string; details?: Record<string, unknown> },
+): Promise<string[]> {
+  if (!changes.length) return [];
+  const ids = [...new Set(changes.flatMap((c) => [c.factId, c.supersededByFactId ?? ""]).filter(Boolean))];
+  const rows = await tx.db.select().from(facts).where(and(eq(facts.novelId, scope.novelId), inArray(facts.id, ids))).for("update");
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  await lockSlots(tx, scope);
+  const changed: string[] = [];
+  for (const c of changes) {
+    const f = byId.get(c.factId);
+    if (!f) continue;
+    const to: CanonStatus | null = isCanon(f.canonStatus) ? "retracted" : f.canonStatus === "candidate" ? "rejected" : null;
+    if (!to) continue;
+    const succ = c.supersededByFactId ? byId.get(c.supersededByFactId) : undefined;
+    const successor = succ && LIVE.includes(succ.canonStatus) ? succ.id : null;
+    const rule = assertFactTransition(f.canonStatus, to);
+    await deleteSlots(tx, scope, f.id);
+    await appendFactVersion(d, tx, scope, f, { canonStatus: to }, { changeReason: opts.changeReason, actor, approvalId: opts.approvalId ?? null, contentPatch: { supersededByFactId: successor } });
+    if (successor) {
+      const s = byId.get(successor)!;
+      const [fresh] = await tx.db.select().from(facts).where(and(eq(facts.novelId, scope.novelId), eq(facts.id, s.id))).for("update");
+      const { fact: updated } = await appendFactVersion(d, tx, scope, fresh!, {}, { changeReason: opts.changeReason, actor, approvalId: opts.approvalId ?? null, contentPatch: { supersedes: f.id, conflictWith: null, reconcilePending: false } });
+      byId.set(s.id, updated);
+    }
+    await d.audit.record(tx, {
+      novelId: scope.novelId,
+      actor,
+      action: successor ? "fact.superseded" : "fact.retracted",
+      target: { type: "fact", id: f.id },
+      approvalId: opts.approvalId ?? null,
+      before: { canonStatus: f.canonStatus },
+      after: { canonStatus: to, ...(successor ? { supersededByFactId: successor } : {}) },
+      reason: opts.reason,
+      details: { rule: rule.id, ...(opts.details ?? {}), ...(c.details ?? {}) },
+    });
+    changed.push(f.id);
+  }
+  return changed;
 }

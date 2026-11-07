@@ -171,6 +171,7 @@ export function buildModules({ platform, runtime, databaseMode, database, llmAda
     messaging: messaging.service,
     manuscript: manuscript.service,
     foreshadow: foreshadow.service,
+    linking: linking.service,
   });
   const autopilot = createAutopilotModule({
     platform,

@@ -50,6 +50,19 @@ export interface SceneText {
   participantEntityIds?: string[];
 }
 
+/**
+ * 설계 추가(수정 반영): called in the extract_facts commit of every episode version (after the new candidate facts are
+ * written) so the facts extracted from earlier versions of the episode follow the new text. Registered by `revision`.
+ */
+export interface FactReconciler {
+  reconcileEpisode(
+    tx: Tx,
+    scope: NovelScope,
+    input: { episodeId: string; manuscriptVersionId: string; writtenFactIds: string[]; createdFactIds: string[] },
+    actor: ActorRef,
+  ): Promise<void>;
+}
+
 export interface SceneSource {
   /** scenes of a manuscript version (active scenes in order) */
   getScenes(scope: NovelScope, input: { episodeId: string; manuscriptVersionId: string }): Promise<SceneText[]>;
@@ -124,6 +137,8 @@ export interface LinkingService {
   // ── widened (A3) ──
   /** manuscript registers its scene reader (extract_facts reads scene text through it) */
   registerSceneSource(source: SceneSource): void;
+  /** 설계 추가(수정 반영): one reconciler (revision) — earlier-version facts follow an edited episode text */
+  registerFactReconciler(reconciler: FactReconciler): void;
   /** writes a LinkerResult: NIL entities (EN1) + mentions + EN3(b) check + disambiguation / duplicate questions */
   commitLinkerResult(
     tx: Tx,

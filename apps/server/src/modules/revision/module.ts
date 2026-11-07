@@ -11,6 +11,8 @@ export function createRevisionModule(deps: RevisionModuleDeps): ServerModule<Rev
   deps.orchestration.registerTaskKind(app.taskHandler());
   deps.hitl.registerApprovalHandler("canon_change", app.onSettingApproval);
   deps.hitl.registerApprovalHandler("retcon", app.onSettingApproval);
+  // 설계 추가(수정 반영): facts of earlier versions follow an edited episode text (extract_facts commit)
+  deps.linking?.registerFactReconciler({ reconcileEpisode: app.reconcile.reconcileEpisode });
   deps.agents.registerContextSection(app.notesSection);
   const service: RevisionService = app.service;
   return {

@@ -37,6 +37,8 @@ export const ACTIVITY_ACTIONS = [
   "cost.overrun_recorded", "cost.unknown_recorded", "cost.restored_carryover",
   // 온톨로지
   "fact.created", "fact.status_changed", "fact.version_created", "fact.retconned", "fact.reverted",
+  // 설계 추가(수정 반영): a text edit replaced / removed an extracted fact
+  "fact.superseded", "fact.retracted",
   "entity.created", "entity.status_changed", "entity.preferred_name_changed", "entity.updated",
   "entity_name.added", "entity_name.updated", "entity_name.retired",
   "mention.batch_linked", "mention.link_decided", "mention.relinked", "mention.agent_resolved", "question.agent_resolved",

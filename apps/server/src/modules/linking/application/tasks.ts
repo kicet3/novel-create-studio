@@ -12,7 +12,7 @@ import type { LlmService } from "../../llm/index.js";
 import type { NovelService } from "../../novel/index.js";
 import { lookupPredicate, mapPredicateLabel, normalizedKey, type CandidateFactDraft, type OntologyService, type StoryAnchor } from "../../ontology/index.js";
 import { TaskFailure, type CommitOutcome, type OrchestrationService, type RunHandle, type Task, type TaskKindHandler } from "../../orchestration/index.js";
-import type { LinkerInputMention, LinkerResult, SceneSource, SceneText } from "../index.js";
+import type { FactReconciler, LinkerInputMention, LinkerResult, SceneSource, SceneText } from "../index.js";
 import { extractionResultSchema, initialOntologySchema, type ExtractionResult, type InitialOntology } from "../domain/schemas.js";
 import { dictionaryMentions, excerpt, parseBibleContent } from "../domain/text.js";
 import { checkExtraction, normalizeEntityType } from "../domain/extraction-check.js";
@@ -29,6 +29,8 @@ export interface TaskDeps {
   agents: AgentsService;
   orchestration: OrchestrationService;
   sceneSources: SceneSource[];
+  /** 설계 추가(수정 반영): earlier-version facts of the episode follow the new text (revision registers one) */
+  reconcilers?: FactReconciler[];
   log?: Logger;
   /** 설계 추가 0015: agent decisions are audited (mention.agent_resolved / question.agent_resolved) */
   audit?: AuditService;
@@ -262,7 +264,14 @@ export function extractFactsHandler(deps: TaskDeps): AgentTaskHandler<ExtractInp
       const planned = p.agent && settings.enabled ? await applyPlanToLinker(rd, tx, scope, p.linker, p.agent) : null;
       const written = await commitLinkerResult({ ontology: deps.ontology, hitl: deps.hitl, novel: deps.novel }, tx, scope, planned?.result ?? p.linker, actor, { taskId: task.id, runId: run.runId, excerpts: p.excerpts, agentResolution: settings.enabled });
       if (planned) await finishPlan(rd, tx, scope, planned.entries, written, actor);
-      const facts = await materializeFacts(deps, tx, scope, p, written.byLocalKey, input, actor);
+      const materialized = await materializeFacts(deps, tx, scope, p, written.byLocalKey, input, actor);
+      const facts = materialized.map((w) => w.factId);
+      // the text was read (scenes present): facts of earlier versions the new text no longer supports are reconciled
+      if (p.scenes.length) {
+        for (const r of deps.reconcilers ?? []) {
+          await r.reconcileEpisode(tx, scope, { episodeId: input.episode_id, manuscriptVersionId: input.manuscript_version_id, writtenFactIds: facts, createdFactIds: materialized.filter((w) => w.diffKind !== "duplicate").map((w) => w.factId) }, actor);
+        }
+      }
       // identity assertions (06 §3.12 경로 B): two linked mentions, different entities → proposed merge + question
       for (const ia of p.extraction.identity_assertions) {
         const a = written.byLocalKey[ia.mention_key_a];
@@ -295,7 +304,7 @@ async function materializeFacts(
   byKey: Record<string, { mentionId: string; entityId: string | null; status: string; viaNameId: string | null }>,
   input: ExtractInput,
   actor: ActorRef,
-): Promise<string[]> {
+): Promise<Array<{ factId: string; diffKind: string }>> {
   const { schema } = await deps.ontology.getSchema(scope, tx);
   const drafts: CandidateFactDraft[] = [];
   for (const f of p.extraction.facts) {
@@ -336,7 +345,7 @@ async function materializeFacts(
   }
   if (drafts.length === 0) return [];
   const r = await deps.ontology.writeCandidateFacts(tx, scope, drafts, actor);
-  return r.written.map((w) => w.factId);
+  return r.written.map((w) => ({ factId: w.factId, diffKind: w.diffKind }));
 }
 
 // ── link_mentions ────────────────────────────────────────────────────────

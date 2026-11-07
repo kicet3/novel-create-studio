@@ -193,7 +193,7 @@ export interface ManuscriptService {
   ): Promise<Episode[]>;
   getEpisode(scope: NovelScope, episodeId: string, tx?: Tx): Promise<Episode>;
   getEpisodeByNo(scope: NovelScope, episodeNo: number, tx?: Tx): Promise<Episode>;
-  listEpisodes(scope: NovelScope, filter?: EpisodeFilter): Promise<Episode[]>;
+  listEpisodes(scope: NovelScope, filter?: EpisodeFilter, tx?: Tx): Promise<Episode[]>;
   /** guarded E1–E16 transition + audit + hooks; throws InvalidTransitionError when not in the table */
   transitionEpisode(tx: Tx, scope: NovelScope, episodeId: string, to: EpisodeStatus, actor: ActorRef, opts?: { ruleId?: EpisodeRuleId; reason?: string; approvalId?: string | null }): Promise<Episode>;
   setBlockReason(tx: Tx, scope: NovelScope, episodeId: string, reason: EpisodeBlockReason, on: boolean, actor: ActorRef): Promise<Episode>;
@@ -216,7 +216,7 @@ export interface ManuscriptService {
     actor: ActorRef,
   ): Promise<ManuscriptVersion>;
   getVersion(scope: NovelScope, versionId: string, tx?: Tx): Promise<ManuscriptVersion>;
-  listVersions(scope: NovelScope, episodeId: string): Promise<ManuscriptVersion[]>;
+  listVersions(scope: NovelScope, episodeId: string, tx?: Tx): Promise<ManuscriptVersion[]>;
   /** 07 §6.3 scene-ID retention; retires unmatched scenes (scene.resegmented) */
   replaceScenes(tx: Tx, scope: NovelScope, versionId: string, scenes: SceneDraft[], actor: ActorRef): Promise<Scene[]>;
   listScenes(scope: NovelScope, episodeId: string, opts?: { versionId?: string; includeRetired?: boolean }): Promise<Scene[]>;

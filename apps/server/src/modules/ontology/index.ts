@@ -11,6 +11,7 @@
  */
 import type {
   CanonStatus,
+  FactChangeReason,
   EntityStatus,
   EntityType,
   FactKind,
@@ -76,6 +77,26 @@ export interface FactAtAnchor {
   text: string;
   storyRange: StoryRangeInput;
   timelineId: string;
+}
+
+/** 설계 추가(수정 반영): a live fact extracted from an episode (listEpisodeFacts) */
+export interface EpisodeFact extends FactAtAnchor {
+  mentionIds: string[];
+  sourceRefType: string;
+  sourceRefId: string;
+  conflictWith: string | null;
+  supersedes: string | null;
+  /** waits for a canon_change / retcon approval of a text-edit change (not promoted meanwhile) */
+  reconcilePending: boolean;
+  /** the author rejected a text-edit change of this fact (kept the old setting) */
+  reconcileKeptBy: { approvalId: string; rejectedNewText: string | null } | null;
+}
+
+/** one fact to retire after a text edit, optionally replaced by a newer fact of the new text */
+export interface FactRetirement {
+  factId: string;
+  supersededByFactId?: string | null;
+  details?: Record<string, unknown>;
 }
 
 export interface EntityCard {
@@ -304,6 +325,22 @@ export interface OntologyRepository {
   /** 06 §6.4: episode-sourced facts candidate→approved (E9), approved→published_locked (E13), reverse (E14) */
   promoteEpisodeFacts(tx: Tx, scope: NovelScope, episodeId: string, to: "approved" | "published_locked", actor: ActorRef): Promise<{ promoted: number; held: string[] }>;
   demoteEpisodeFacts(tx: Tx, scope: NovelScope, episodeId: string, actor: ActorRef): Promise<{ demoted: number }>;
+  /** 설계 추가(수정 반영): live facts extracted from the episode (current content.episodeId) + evidence mentions */
+  listEpisodeFacts(scope: NovelScope, episodeId: string, tx?: Tx): Promise<EpisodeFact[]>;
+  /** canon → retracted / candidate → rejected with an optional successor link (fact.superseded / fact.retracted) */
+  retireFacts(
+    tx: Tx,
+    scope: NovelScope,
+    changes: FactRetirement[],
+    actor: ActorRef,
+    opts: { changeReason: FactChangeReason; approvalId?: string | null; reason: string; details?: Record<string, unknown> },
+  ): Promise<string[]>;
+  /** drop evidence mentions that point at older manuscript versions (re-point to the new text) */
+  pruneFactMentions(tx: Tx, scope: NovelScope, factIds: string[], dropVersionIds: string[]): Promise<number>;
+  /** hold / release candidates while a canon change of the same edit waits for approval */
+  setFactReconcileHold(tx: Tx, scope: NovelScope, factIds: string[], pending: boolean, actor: ActorRef): Promise<number>;
+  /** the author rejected the text-edit change of these canon facts: remember it (history appended) */
+  markFactsKeptByDecision(tx: Tx, scope: NovelScope, marks: Array<{ factId: string; rejectedNewText: string | null }>, approvalId: string, actor: ActorRef): Promise<number>;
   /** bible approval (INV-BIB-03): series_bible + build_initial_ontology facts → approved */
   approveBibleFacts(tx: Tx, scope: NovelScope, seriesBibleId: string, actor: ActorRef): Promise<{ approved: number }>;
   computeIdentityImpact(scope: NovelScope, entityIds: string[], tx?: Tx): Promise<IdentityImpact>;

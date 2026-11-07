@@ -32,6 +32,12 @@ export const revisionProposalDecisionRequestSchema = z.object({
   decision: z.enum(["accepted", "rejected"]),
   /** text_patch: indexes of the patches to apply (partial accept); omitted = all */
   patchIdx: z.array(z.number().int().min(0)).max(50).optional(),
+  /**
+   * 설계 추가(수정 반영): text_patch — approved facts listed under "이 수정으로 바뀌는 설정" that the author confirmed. Their
+   * change (supersede / retract) is applied with this confirmation after the re-extraction; any other approved fact the
+   * edit changes goes to a canon_change approval instead.
+   */
+  confirmedFactIds: z.array(z.string().min(1)).max(100).optional(),
 });
 export type RevisionProposalDecisionRequest = z.input<typeof revisionProposalDecisionRequestSchema>;
 
@@ -60,8 +66,24 @@ export const revisionQuestionSchema = z.object({ text: z.string(), options: z.ar
 export const revisionTextPatchSchema = z.object({ quote: z.string(), replacement: z.string(), reason: z.string() });
 export type RevisionTextPatch = z.infer<typeof revisionTextPatchSchema>;
 
+/** 설계 추가(수정 반영): dry run of a text patch on the extracted facts of the episode (예상 when `certain` is false) */
+export const revisionFactEffectSchema = z.object({
+  factId: z.string(),
+  canonStatus: z.string(),
+  text: z.string(),
+  effect: z.enum(["keep", "change", "retract"]),
+  certain: z.boolean(),
+  /** approved canon: changed only with the author's confirmation (else a canon_change approval) */
+  needsConfirm: z.boolean(),
+});
+export type RevisionFactEffect = z.infer<typeof revisionFactEffectSchema>;
+
 export const revisionTextPatchPayloadSchema = z.object({
   patches: z.array(revisionTextPatchSchema),
+  /** 설계 추가(수정 반영): "이 수정으로 바뀌는 설정" */
+  factEffects: z.array(revisionFactEffectSchema).optional(),
+  /** set on accept: approved facts the author confirmed */
+  confirmedFactIds: z.array(z.string()).optional(),
   /** set on accept: indexes that were applied */
   appliedPatchIdx: z.array(z.number().int()).optional(),
   staleReason: z.string().optional(),

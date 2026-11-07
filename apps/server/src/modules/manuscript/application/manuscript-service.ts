@@ -680,7 +680,7 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
       if (!e) throw new NotFoundError(`${no}화`, String(no));
       return e;
     },
-    listEpisodes: (scope, filter) => repo.listEpisodes(uow.db, scope, filter),
+    listEpisodes: (scope, filter, tx) => repo.listEpisodes(tx?.db ?? uow.db, scope, filter),
     async transitionEpisode(tx, scope, episodeId, to, actor, opts = {}) {
       const ep = await mustEpisode(tx, scope, episodeId, true);
       if (ep.status === "awaiting_approval" && to === "approved") return approveInTx(tx, scope, episodeId, actor, opts.approvalId ?? null);
@@ -770,7 +770,7 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
       return version;
     },
     getVersion: (scope, id, tx) => mustVersion(tx, scope, id),
-    listVersions: (scope, episodeId) => repo.listVersions(uow.db, scope, episodeId),
+    listVersions: (scope, episodeId, tx) => repo.listVersions(tx?.db ?? uow.db, scope, episodeId),
     replaceScenes,
     listScenes: (scope, episodeId, opts) => repo.listScenes(uow.db, scope, episodeId, opts),
     countChars,
