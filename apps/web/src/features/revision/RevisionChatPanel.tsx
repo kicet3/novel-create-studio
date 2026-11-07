@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Link } from "react-router";
-import { labelKo, type RevisionChatView, type RevisionMessageDto, type RevisionProposalDto } from "@ncs/shared";
+import { labelKo, type RevisionChatView, type RevisionFactEffect, type RevisionMessageDto, type RevisionProposalDto } from "@ncs/shared";
 import { errorMessage } from "../../api/client.js";
 import { Avatar, Badge, Button, Callout, Checkbox, Field, Input, Kbd, Select, Spinner, Textarea, formatDateTime } from "../../components/ui/index.js";
 import { cx } from "../../lib/cx.js";
@@ -281,7 +281,7 @@ function Bubble({
           {m.diagnosisKind && <Badge tone={m.diagnosisKind === "explanation_only" ? "neutral" : m.diagnosisKind === "style" ? "info" : "warn"}>{labelKo("revision_diagnosis_kind", m.diagnosisKind)}</Badge>}
         </div>
         {m.anchor && <blockquote className="m-0 border-l-2 border-accent pl-2 text-[12.5px] text-muted">“{clipQuote(m.anchor.quote, 160)}”</blockquote>}
-        <div className={cx("whitespace-pre-wrap rounded-[10px] px-3 py-2 text-[13.5px] leading-relaxed", mine ? "bg-accent-soft" : "bg-surface-2")}>{m.body}</div>
+        <div className={cx("whitespace-pre-wrap rounded-[10px] px-3 py-2 text-[13.5px] leading-relaxed [overflow-wrap:anywhere]", mine ? "bg-accent-soft" : "bg-surface-2")}>{m.body}</div>
         {m.sources && m.sources.length > 0 && (
           <ul className="m-0 flex list-none flex-wrap gap-1 p-0 text-[11.5px]" aria-label="근거">
             {m.sources.map((s, i) => (
@@ -296,11 +296,11 @@ function Bubble({
         )}
         {m.question && (
           <div className="flex flex-col gap-1">
-            <p className="m-0 text-[13px] font-semibold">{m.question.text}</p>
+            <p className="m-0 text-[13px] font-semibold [overflow-wrap:anywhere]">{m.question.text}</p>
             {m.question.options.length > 0 && (
-              <div className="flex flex-wrap gap-1">
+              <div className="flex min-w-0 flex-wrap gap-1">
                 {m.question.options.map((o) => (
-                  <Button key={o} size="sm" disabled={!onPick} onClick={() => onPick?.(o)}>
+                  <Button key={o} size="sm" disabled={!onPick} onClick={() => onPick?.(o)} className="h-auto! min-h-8 max-w-full justify-start! whitespace-normal! py-1.5 text-left [overflow-wrap:anywhere]">
                     {o}
                   </Button>
                 ))}
@@ -329,6 +329,38 @@ const SOURCE_LABEL: Record<string, string> = {
   none: "근거 없음",
 };
 
+const EFFECT_LABEL: Record<RevisionFactEffect["effect"], string> = { keep: "유지", change: "바뀜", retract: "철회" };
+
+/** 설계 추가(수정 반영): "이 수정으로 바뀌는 설정" — dry run of the patch on the facts extracted from this episode */
+function FactEffects({ effects, pending, confirmed, onToggle }: { effects: RevisionFactEffect[]; pending: boolean; confirmed: Set<string>; onToggle: (id: string, on: boolean) => void }) {
+  return (
+    <div className="flex flex-col gap-1 rounded-[8px] bg-surface-2 px-2 py-1.5 text-[12.5px]" data-testid="fact-effects">
+      <p className="m-0 font-semibold">이 수정으로 바뀌는 설정</p>
+      <ul className="m-0 flex list-none flex-col gap-1 p-0">
+        {effects.map((e) => (
+          <li key={e.factId} className="flex flex-wrap items-center gap-1.5">
+            <Badge tone={e.effect === "keep" ? "neutral" : e.effect === "change" ? "info" : "warn"}>
+              {EFFECT_LABEL[e.effect]}
+              {e.certain ? "" : " (예상)"}
+            </Badge>
+            <span>{e.text}</span>
+            <span className="text-faint">{labelKo("canon_status", e.canonStatus)}</span>
+            {e.needsConfirm && e.effect !== "keep" &&
+              (pending ? (
+                <Checkbox label="적용과 함께 확인" checked={confirmed.has(e.factId)} onChange={(ev) => onToggle(e.factId, ev.target.checked)} />
+              ) : (
+                <span className="text-faint">{confirmed.has(e.factId) ? "작가 확인함" : "인박스 승인으로"}</span>
+              ))}
+          </li>
+        ))}
+      </ul>
+      <p className="m-0 text-[11.5px] text-muted">
+        적용하면 본문에서 사실을 다시 추출해 온톨로지를 맞춥니다. 확인한 승인 설정은 바로 바뀌고(이력은 남음), 확인하지 않았거나 여기 없던 승인 설정의 변경은 인박스 승인을 거칩니다. 후보 사실은 새 본문에 맞춰 바로 정리됩니다.
+      </p>
+    </div>
+  );
+}
+
 function statusTone(s: RevisionProposalDto["status"]) {
   return s === "accepted" || s === "applied" ? "ok" : s === "stale" || s === "awaiting_approval" ? "warn" : s === "rejected" ? "neutral" : "accent";
 }
@@ -337,6 +369,9 @@ function ProposalCard({ p, novelId, episodeNo, view }: { p: RevisionProposalDto;
   const decide = useDecideRevisionProposal(novelId, episodeNo);
   const patches = ((p.payload.patches as Array<{ quote: string; replacement: string; reason: string }> | undefined) ?? []).map((x, i) => ({ ...x, i }));
   const [selected, setSelected] = useState<Set<number>>(() => new Set(patches.map((x) => x.i)));
+  const effects = (p.payload.factEffects as RevisionFactEffect[] | undefined) ?? [];
+  // approved facts shown here are confirmed by default; an unchecked one goes to an inbox approval instead
+  const [confirmed, setConfirmed] = useState<Set<string>>(() => new Set(effects.filter((e) => e.needsConfirm && e.effect !== "keep").map((e) => e.factId)));
   const pending = p.status === "pending";
   const header = (
     <div className="flex flex-wrap items-center gap-1.5 text-[12px]">
@@ -352,7 +387,7 @@ function ProposalCard({ p, novelId, episodeNo, view }: { p: RevisionProposalDto;
           variant="primary"
           loading={decide.isPending}
           disabled={(p.kind === "text_patch" && (!selected.size || !view.canPatch))}
-          onClick={() => decide.mutate({ id: p.id, decision: "accepted", ...(p.kind === "text_patch" ? { patchIdx: [...selected] } : {}) })}
+          onClick={() => decide.mutate({ id: p.id, decision: "accepted", ...(p.kind === "text_patch" ? { patchIdx: [...selected], confirmedFactIds: [...confirmed] } : {}) })}
         >
           적용
         </Button>
@@ -394,6 +429,21 @@ function ProposalCard({ p, novelId, episodeNo, view }: { p: RevisionProposalDto;
               {x.reason && <p className="m-0 text-[12px] text-muted">{x.reason}</p>}
             </div>
           ))}
+          {effects.length > 0 && (
+            <FactEffects
+              effects={effects}
+              pending={pending}
+              confirmed={pending ? confirmed : new Set((p.payload.confirmedFactIds as string[] | undefined) ?? [])}
+              onToggle={(id, on) =>
+                setConfirmed((s) => {
+                  const n = new Set(s);
+                  if (on) n.add(id);
+                  else n.delete(id);
+                  return n;
+                })
+              }
+            />
+          )}
           {pending && view.patchWarning && <p className="m-0 text-[12px] text-warn">{view.patchWarning}</p>}
           {p.status === "stale" && <p className="m-0 text-[12px] text-warn">{String(p.payload.staleReason ?? "원고가 바뀌어 적용하지 않았습니다.")} 다시 물어 새 제안을 받으세요.</p>}
           {p.resultVersionId && (
@@ -443,7 +493,7 @@ function ProposalCard({ p, novelId, episodeNo, view }: { p: RevisionProposalDto;
 function PatchDiff({ quote, replacement }: { quote: string; replacement: string }) {
   const segs = useMemo(() => diffChars(quote, replacement), [quote, replacement]);
   return (
-    <div className="whitespace-pre-wrap rounded-md bg-surface-2 px-2 py-1.5 text-[13px] leading-relaxed">
+    <div className="whitespace-pre-wrap rounded-md bg-surface-2 px-2 py-1.5 text-[13px] leading-relaxed [overflow-wrap:anywhere]">
       {segs.map((s, i) =>
         s.op === "equal" ? (
           <span key={i}>{s.text}</span>
