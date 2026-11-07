@@ -27,7 +27,7 @@ import { createCastModule, type CastService } from "../modules/cast/index.js";
 import { createWorldModule, type WorldService } from "../modules/world/index.js";
 import { createAutopilotModule, type AutopilotService } from "../modules/autopilot/index.js";
 import { createRevisionModule, type RevisionService } from "../modules/revision/index.js";
-import { createPublicationModule, type PublicationService } from "../modules/publication/index.js";
+import { createPublicationModule, type PublicDbConnector, type PublicationService } from "../modules/publication/index.js";
 
 export interface Modules {
   audit: ServerModule<AuditService>;
@@ -64,9 +64,11 @@ export interface BuildModulesOptions {
   database?: DbConnection;
   /** extra LLM adapters (test seam; production uses only the built-in provider adapters) */
   llmAdapters?: LlmAdapter[];
+  /** public site DB connector (test seam; production: postgres.js to the user's Supabase) */
+  publicDbConnector?: PublicDbConnector;
 }
 
-export function buildModules({ platform, runtime, databaseMode, database, llmAdapters }: BuildModulesOptions): Modules {
+export function buildModules({ platform, runtime, databaseMode, database, llmAdapters, publicDbConnector }: BuildModulesOptions): Modules {
   const audit = createAuditModule({ platform });
   const a = audit.service;
   const system = createSystemModule({ platform, audit: a, databaseMode, database });
@@ -148,7 +150,7 @@ export function buildModules({ platform, runtime, databaseMode, database, llmAda
     hitl: hitl.service,
   });
   const exportModule = createExportModule({ platform, audit: a, novel: n, manuscript: manuscript.service });
-  const publication = createPublicationModule({ platform, audit: a, novel: n, manuscript: manuscript.service });
+  const publication = createPublicationModule({ platform, audit: a, novel: n, manuscript: manuscript.service, secrets: system.service.secrets, publicDbConnector });
   const imaging = createImagingModule({ platform, audit: a, novel: n, budget: budget.service, llm: llm.service });
   // 설계 추가: 세계관 온톨로지 (N2 → build_world_ontology); before cast so the cast draft can read it
   const world = createWorldModule({ platform, audit: a, novel: n, ontology: ontology.service, orchestration: o, agents: agents.service, llm: llm.service, concept: concept.service });

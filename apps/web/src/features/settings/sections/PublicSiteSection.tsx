@@ -4,13 +4,14 @@ import { PUBLIC_SITE_SLUG_RE, publicSiteNovelDtoSchema, publicSiteStatusDtoSchem
 import { api, errorMessage } from "../../../api/client.js";
 import { queryKeys } from "../../../api/query-keys.js";
 import { Button, Callout, Card, Checkbox, Field, Input, QueryView, Textarea } from "../../../components/ui/index.js";
+import { publicSiteStatusKey } from "./PublicSiteConnectionCard.js";
 
 /**
- * 설계 추가 0021: 공개 사이트 (GET/PATCH /api/novels/:id/public-site, GET /api/public-site, POST /api/public-site/build).
- * 켜진 작품의 "공개된 화"만 정적 JSON으로 내보내고, 독자용 앱(apps/public-reader)이 그 파일만 읽습니다.
- * 이 화면은 파일을 만들 뿐 인터넷에 노출하지 않습니다(배포는 README의 수동 단계).
+ * 설계 추가 0021/0022: 공개 사이트 (GET/PATCH /api/novels/:id/public-site, GET /api/public-site, POST /api/public-site/build).
+ * 켜진 작품의 "공개된 화"만 공개 사이트(snowpage)로 내보냅니다 — 설치 설정에서 고른 대상(Supabase 공개 스키마 또는 정적 파일).
+ * 연결 문자열·대상·제한 역할 SQL은 설치 설정 → 공개 사이트(snowpage)에서 다룹니다.
  */
-const siteKey = [...queryKeys.installSettings, "public-site"] as const;
+const siteKey = publicSiteStatusKey;
 const novelKey = (novelId: string) => [...queryKeys.novel(novelId).settings(), "public-site"] as const;
 
 function usePublicSiteStatus() {
@@ -59,7 +60,7 @@ function PublicSiteForm({ novelId, settings }: { novelId: string; settings: Publ
     <div className="flex flex-col gap-3">
       <Checkbox
         label="공개 사이트에 노출"
-        hint={`켜면 이 작품의 공개된 화(지금 ${settings.publishedEpisodeCount}개)만 독자용 읽기 사이트 파일로 내보냅니다. 초안·승인 대기·승인만 된 화와 기획·설정 자료는 나가지 않습니다.`}
+        hint={`켜면 이 작품의 공개된 화(지금 ${settings.publishedEpisodeCount}개)만 공개 독자 사이트(snowpage)로 내보냅니다. 초안·승인 대기·승인만 된 화와 기획·설정 자료는 나가지 않습니다.`}
         checked={enabled}
         onChange={(e) => setEnabled(e.target.checked)}
       />
@@ -73,7 +74,7 @@ function PublicSiteForm({ novelId, settings }: { novelId: string; settings: Publ
         <Textarea value={intro} rows={4} maxLength={2000} onChange={(e) => setIntro(e.target.value)} />
       </Field>
       {save.error && <Callout tone="danger">{errorMessage(save.error)}</Callout>}
-      {save.isSuccess && !dirty && <Callout tone="ok">저장했습니다. 공개 사이트 파일도 다시 만들었습니다.</Callout>}
+      {save.isSuccess && !dirty && <Callout tone="ok">저장했습니다. 공개 사이트도 다시 맞췄습니다.</Callout>}
       <div className="flex justify-end">
         <Button variant="primary" disabled={!dirty || blocked} loading={save.isPending} onClick={() => save.mutate(patch)}>
           변경 저장
@@ -81,18 +82,18 @@ function PublicSiteForm({ novelId, settings }: { novelId: string; settings: Publ
       </div>
       <div className="flex flex-col gap-1 border-t border-border pt-3 text-xs text-muted">
         <span>
-          출력 폴더: <code className="break-all">{s?.outputDir ?? "…"}</code>
+          내보낼 곳: {s ? (s.target === "supabase" ? `Supabase 공개 스키마 ${s.supabase.schema}` : "정적 파일(오프라인·개발용)") : "…"}
         </span>
         <span>
-          마지막 생성: {s?.lastBuiltAt ? new Date(s.lastBuiltAt).toLocaleString("ko-KR") : "아직 없음"}
+          마지막 동기화: {s?.lastBuiltAt ? new Date(s.lastBuiltAt).toLocaleString("ko-KR") : "아직 없음"}
           {s ? ` · 작품 ${s.novelCount}개 · 공개된 화 ${s.episodeCount}개` : ""}
         </span>
         {s?.lastError && <Callout tone="danger">{s.lastError}</Callout>}
         {rebuild.error && <Callout tone="danger">{errorMessage(rebuild.error)}</Callout>}
-        <p className="m-0 text-faint">이 폴더를 독자용 앱(apps/public-reader)이 읽습니다. 인터넷에 공개하는 일(호스팅·포트 개방)은 직접 결정해서 따로 해야 합니다.</p>
+        <p className="m-0 text-faint">연결 문자열·내보낼 곳·독자 사이트용 제한 역할 SQL은 설치 설정 → 공개 사이트(snowpage)에서 정합니다.</p>
         <div className="flex justify-end">
           <Button loading={rebuild.isPending} onClick={() => rebuild.mutate()}>
-            공개 사이트 다시 만들기
+            지금 동기화
           </Button>
         </div>
       </div>

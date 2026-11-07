@@ -1,27 +1,33 @@
 {
   "name": "@ncs/public-reader",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "독자용 읽기 사이트: 공개된 화만 담긴 정적 스냅숏(apps/server publication)을 읽는 별도 앱 + 좋아요·댓글·평점용 작은 서버(자체 SQLite).",
+  "description": "snowpage — 공개 독자 사이트(Next.js, Vercel). 스튜디오가 Supabase 공개 스키마로 동기화한 공개된 화만 읽고, 로그인 없이 익명으로 좋아요·평점·댓글을 같은 스키마에 씁니다.",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -p tsconfig.json --noEmit && vite build && tsc -p tsconfig.server.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.server.json --noEmit && tsc -p tsconfig.test.json",
-    "serve": "node --disable-warning=ExperimentalWarning dist-server/main.js"
+    "predev": "pnpm --filter \"@ncs/public-reader^...\" run build",
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "next typegen && tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@ncs/public-schema": "workspace:*",
     "@ncs/reader-core": "workspace:*",
+    "next": "16.4.5",
+    "postgres": "^3.4.9",
     "pretendard": "^1.3.9",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "react-dom": "^19.3.1",
+    "server-only": "^0.0.1"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.3.4",
+    "@electric-sql/pglite": "0.5.15",
+    "@tailwindcss/postcss": "^4.3.5",
+    "@types/node": "^22.19.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^6.2.1",
     "tailwindcss": "^4.3.4",
-    "vite": "^8.3.6"
+    "typescript": "~5.9.3"
   }
 }

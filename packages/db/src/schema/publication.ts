@@ -14,3 +14,12 @@ export const publicSiteNovels = pgTable("public_site_novels", {
 });
 export type PublicSiteNovelsRow = typeof publicSiteNovels.$inferSelect;
 export type PublicSiteNovelsInsert = typeof publicSiteNovels.$inferInsert;
+
+/** public_site_config — install-level public site target (0022; single row id = 'install'; the writer URL is a secret) */
+export const publicSiteConfig = pgTable("public_site_config", {
+  id: text("id").notNull().primaryKey().default("install"),
+  target: text("target"),
+  schemaName: text("schema_name").notNull().default("ncs_public"),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+});
+export type PublicSiteConfigRow = typeof publicSiteConfig.$inferSelect;

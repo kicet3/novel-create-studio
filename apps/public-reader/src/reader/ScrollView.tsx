@@ -1,3 +1,4 @@
+"use client";
 /** 스크롤 보기: the whole episode in one column; the reading anchor is the paragraph at the top of the screen. */
 import { useEffect, useLayoutEffect, useRef, type MouseEvent, type ReactNode } from "react";
 import {
@@ -11,8 +12,8 @@ import {
   type ReadingAnchor,
   type ReadingBlock,
 } from "@ncs/reader-core";
-import type { ViewportInfo } from "../lib/hooks.js";
-import type { InitialPosition, Position } from "./PagedView.js";
+import type { ViewportInfo } from "../lib/hooks";
+import type { InitialPosition, Position } from "./PagedView";
 
 const TOP_OFFSET = 56;
 

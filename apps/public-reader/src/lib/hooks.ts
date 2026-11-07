@@ -1,4 +1,4 @@
-/** Reader settings (localStorage via @ncs/reader-core), theme, viewport + fold segments, document meta. */
+/** Reader settings (localStorage via @ncs/reader-core), theme, viewport + fold segments. Client only (SSR-safe defaults). */
 import { useCallback, useEffect, useState, useSyncExternalStore, type CSSProperties } from "react";
 import {
   READER_LINE_HEIGHT,
@@ -16,6 +16,7 @@ import {
 } from "@ncs/reader-core";
 
 export function browserStore(): KeyValueStore | null {
+  if (typeof window === "undefined") return null;
   try {
     return window.localStorage;
   } catch {
@@ -27,6 +28,9 @@ export function browserStore(): KeyValueStore | null {
 let current: ReaderSettings | null = null;
 const subs = new Set<() => void>();
 const getSettings = () => (current ??= loadReaderSettings(browserStore()));
+/** server render + hydration: the defaults (the stored settings apply right after hydration) */
+const serverSettings = loadReaderSettings(null);
+const getServerSettings = () => serverSettings;
 
 export function useReaderSettings(): [ReaderSettings, (patch: Partial<ReaderSettings>) => void] {
   const s = useSyncExternalStore(
@@ -35,7 +39,7 @@ export function useReaderSettings(): [ReaderSettings, (patch: Partial<ReaderSett
       return () => subs.delete(fn);
     },
     getSettings,
-    getSettings,
+    getServerSettings,
   );
   const update = useCallback((patch: Partial<ReaderSettings>) => {
     current = { ...getSettings(), ...patch };
@@ -114,9 +118,12 @@ const sameVp = (a: ViewportInfo, b: ViewportInfo) =>
   a.width === b.width && a.height === b.height && a.safeTop === b.safeTop && a.safeBottom === b.safeBottom && JSON.stringify(a.segments) === JSON.stringify(b.segments);
 
 /** re-renders on resize / rotation / fold-unfold (segment changes) */
+const SSR_VIEWPORT: ViewportInfo = { width: 390, height: 844, segments: null, safeTop: 0, safeBottom: 0 };
+
 export function useViewport(): ViewportInfo {
-  const [vp, setVp] = useState(readViewport);
+  const [vp, setVp] = useState(SSR_VIEWPORT);
   useEffect(() => {
+    setVp(readViewport());
     let raf = 0;
     const on = () => {
       cancelAnimationFrame(raf);
@@ -138,20 +145,11 @@ export function useViewport(): ViewportInfo {
   return vp;
 }
 
-/** <title> + meta description per screen */
-export function useDocumentMeta(title: string | null, description?: string | null): void {
-  useEffect(() => {
-    if (!title) return;
-    document.title = title;
-    const desc = (description ?? "").replace(/\s+/g, " ").trim().slice(0, 160);
-    let meta = document.querySelector<HTMLMetaElement>('meta[name="description"]');
-    if (!meta) {
-      meta = document.createElement("meta");
-      meta.name = "description";
-      document.head.appendChild(meta);
-    }
-    if (desc) meta.content = desc;
-  }, [title, description]);
+/** true after hydration (client-only UI: stored settings, resume position, viewport) */
+export function useMounted(): boolean {
+  return useSyncExternalStore(
+    () => () => undefined,
+    () => true,
+    () => false,
+  );
 }
-
-export const SITE_NAME = "연재 읽기";

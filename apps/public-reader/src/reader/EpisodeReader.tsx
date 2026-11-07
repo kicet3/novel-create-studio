@@ -1,55 +1,98 @@
-/** 화 읽기: 페이지 넘김(기본) / 스크롤 보기, 끝 카드(좋아요·댓글·다음 화), 보기 설정, 이어 읽기 위치 저장. */
+"use client";
+/**
+ * 화 읽기 (client): 페이지 넘김(기본, 글자 수 기준) / 스크롤 보기, 탭 영역·스와이프·키보드, 끝 카드(좋아요·댓글·다음 화),
+ * 보기 설정, 이어 읽기 위치(localStorage). The server-rendered HTML carries the whole episode as plain paragraphs
+ * (search engines, no-JS); after hydration the reader takes over with the stored settings and the real viewport.
+ */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { episodeLabel, loadHistory, loadResume, markHistory, readingBlocks, resumeAnchorFor, saveHistory, saveResume } from "@ncs/reader-core";
 import type { PublicEpisode } from "@ncs/reader-core/snapshot";
-import { SITE_NAME, browserStore, useDocumentMeta, useReaderSettings, useViewport } from "../lib/hooks.js";
-import { href, Link, navigate, useLocation } from "../lib/router.js";
-import { loadEpisode, loadNovel, useAsync } from "../lib/data.js";
-import { useSession } from "../lib/session.js";
-import { CommentsSheet, LikeButton, useEpisodeStats } from "../components/social.js";
-import { SettingsSheet } from "../components/SettingsSheet.js";
-import { Icon, IconButton, Message, formatCount } from "../components/ui.js";
-import { PagedView, type InitialPosition, type Position } from "./PagedView.js";
-import { ScrollView } from "./ScrollView.js";
+import { browserStore, useMounted, useReaderSettings, useViewport } from "../lib/hooks";
+import { href } from "../lib/href";
+import { CommentsSheet, LikeButton, useEpisodeStats, useWritable } from "../components/social";
+import { SettingsSheet } from "../components/SettingsSheet";
+import { formatCount } from "../components/format";
+import { Icon, IconButton, Message } from "../components/ui";
+import { PagedView, type InitialPosition, type Position } from "./PagedView";
+import { ScrollView } from "./ScrollView";
 
-export function EpisodeReader({ slug, episodeNo }: { slug: string; episodeNo: number }) {
-  const q = useAsync(`ep:${slug}:${episodeNo}`, () => loadEpisode(slug, episodeNo));
-  const novel = useAsync(`novel:${slug}`, () => loadNovel(slug));
-  const ep = q.data?.slug === slug && q.data.episodeNo === episodeNo ? q.data : undefined;
-  if (q.error) {
-    return (
-      <div className="pr-page">
-        <main className="pr-main">
-          <Message tone="danger">공개된 화가 아닙니다.</Message>
-          <Link className="pr-btn" to={href.novel(slug)}>
-            작품 홈으로
-          </Link>
-        </main>
-      </div>
-    );
-  }
-  if (!ep) return <div className="pr-page pr-reader-loading" aria-busy="true" />;
-  return <Reader key={`${slug}/${episodeNo}`} ep={ep} novelTitle={novel.data?.slug === slug ? novel.data.title : null} intro={novel.data?.intro ?? null} />;
+export interface EpisodeReaderProps {
+  ep: PublicEpisode;
+  novelTitle: string;
+  /** ?at=end (coming back from the next episode) */
+  startAtEnd: boolean;
 }
 
-function Reader({ ep, novelTitle, intro }: { ep: PublicEpisode; novelTitle: string | null; intro: string | null }) {
+export function EpisodeReader(props: EpisodeReaderProps) {
+  const mounted = useMounted();
+  if (!mounted) return <StaticEpisode ep={props.ep} novelTitle={props.novelTitle} />;
+  return <Reader key={`${props.ep.slug}/${props.ep.episodeNo}`} {...props} />;
+}
+
+/** server render / first paint: the text as an article (same markup as the scroll view) */
+function StaticEpisode({ ep, novelTitle }: { ep: PublicEpisode; novelTitle: string }) {
+  const blocks = readingBlocks(ep.text);
+  const heading = episodeLabel(ep.episodeNo, ep.title);
+  return (
+    <div className="pr-reader pr-reader-static" data-chrome="true">
+      <header className="pr-bar pr-bar-top">
+        <Link href={href.novel(ep.slug)} className="pr-icon-btn" aria-label="목차로">
+          <Icon name="back" />
+        </Link>
+        <div className="pr-bar-title">
+          <span className="pr-bar-novel">{novelTitle}</span>
+          <span className="pr-bar-ep">{heading}</span>
+        </div>
+        <span className="pr-icon-btn" aria-hidden="true" />
+      </header>
+      <div className="pr-scroll">
+        <article className="pr-prose pr-column">
+          <h1 className="pr-ep-title">{heading}</h1>
+          {blocks.map((b, i) =>
+            b.type === "p" ? (
+              <p key={i}>{b.text}</p>
+            ) : b.type === "break" ? (
+              <div key={i} className="pr-break">
+                * * *
+              </div>
+            ) : null,
+          )}
+        </article>
+        <nav className="pr-column pr-scroll-end" aria-label="화 이동">
+          {ep.next && (
+            <Link className="pr-btn pr-btn-primary pr-btn-block" href={href.episode(ep.slug, ep.next.episodeNo)}>
+              다음 화 · {episodeLabel(ep.next.episodeNo, ep.next.title)}
+            </Link>
+          )}
+          <Link className="pr-btn pr-btn-ghost pr-btn-block" href={href.novel(ep.slug)}>
+            목차로
+          </Link>
+        </nav>
+      </div>
+    </div>
+  );
+}
+
+function Reader({ ep, novelTitle, startAtEnd }: EpisodeReaderProps) {
   const { slug, episodeNo } = ep;
+  const router = useRouter();
   const [settings] = useReaderSettings();
   const vp = useViewport();
-  const { search } = useLocation();
-  const session = useSession();
+  const writable = useWritable();
   const { stats, toggleLike, error: likeError, setComments } = useEpisodeStats(slug, episodeNo);
   const [chrome, setChrome] = useState(true);
   const [sheet, setSheet] = useState<"comments" | "settings" | null>(null);
   const [pos, setPos] = useState<Position | null>(null);
   const blocks = useMemo(() => readingBlocks(ep.text), [ep.text]);
   const heading = episodeLabel(ep.episodeNo, ep.title);
-  useDocumentMeta(`${novelTitle ?? ""} ${heading} · ${SITE_NAME}`.trim(), intro ?? novelTitle);
 
   const initial = useMemo<InitialPosition>(() => {
-    if (search.get("at") === "end") return { kind: "end" };
-    const a = resumeAnchorFor(loadResume(browserStore(), slug), episodeNo, "approved", false);
-    if (a === "ratio") return { kind: "ratio", ratio: loadResume(browserStore(), slug)!.ratio };
+    if (startAtEnd) return { kind: "end" };
+    const saved = loadResume(browserStore(), slug);
+    const a = resumeAnchorFor(saved, episodeNo, "approved", false);
+    if (a === "ratio") return { kind: "ratio", ratio: saved!.ratio };
     return a ? { kind: "anchor", anchor: a } : { kind: "start" };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug, episodeNo]);
@@ -77,8 +120,8 @@ function Reader({ ep, novelTitle, intro }: { ep: PublicEpisode; novelTitle: stri
 
   // warm the next episode when the end is near
   useEffect(() => {
-    if (pos?.finished && ep.next) void loadEpisode(slug, ep.next.episodeNo).catch(() => undefined);
-  }, [pos?.finished, ep.next, slug]);
+    if (pos?.finished && ep.next) router.prefetch(href.episode(slug, ep.next.episodeNo));
+  }, [pos?.finished, ep.next, slug, router]);
 
   const leave = useCallback(
     (dir: "prev" | "next") => {
@@ -87,21 +130,20 @@ function Reader({ ep, novelTitle, intro }: { ep: PublicEpisode; novelTitle: stri
         if (dir === "next") setChrome(true);
         return;
       }
-      navigate(href.episode(slug, t.episodeNo, dir === "prev" ? "end" : undefined));
-      if (settings.view === "scroll") window.scrollTo(0, 0);
+      router.push(href.episode(slug, t.episodeNo, dir === "prev" ? "end" : undefined), { scroll: settings.view === "scroll" });
     },
-    [ep.next, ep.prev, slug, settings.view],
+    [ep.next, ep.prev, slug, settings.view, router],
   );
   const toggleChrome = useCallback(() => setChrome((c) => !c), []);
 
-  const social = session.available && stats;
+  const social = writable !== null && stats;
   const endCard = (
     <div className="pr-end">
       <p className="pr-end-kicker">{heading}</p>
       <p className="pr-end-title">이번 화 끝</p>
       {social && (
         <div className="pr-end-actions">
-          <LikeButton liked={stats.liked} count={stats.likes} onToggle={toggleLike} />
+          <LikeButton liked={stats.liked} count={stats.likes} onToggle={toggleLike} disabled={writable === false} />
           <button type="button" className="pr-like" onClick={() => setSheet("comments")}>
             <Icon name="comment" />
             <span>댓글 {formatCount(stats.comments)}</span>
@@ -110,13 +152,13 @@ function Reader({ ep, novelTitle, intro }: { ep: PublicEpisode; novelTitle: stri
       )}
       {likeError && <Message tone="danger">{likeError}</Message>}
       {ep.next ? (
-        <Link className="pr-btn pr-btn-primary pr-btn-block" to={href.episode(slug, ep.next.episodeNo)}>
+        <Link className="pr-btn pr-btn-primary pr-btn-block" href={href.episode(slug, ep.next.episodeNo)}>
           다음 화 · {episodeLabel(ep.next.episodeNo, ep.next.title)}
         </Link>
       ) : (
         <p className="pr-faint">지금 공개된 마지막 화입니다.</p>
       )}
-      <Link className="pr-btn pr-btn-ghost pr-btn-block" to={href.novel(slug)}>
+      <Link className="pr-btn pr-btn-ghost pr-btn-block" href={href.novel(slug)}>
         목차로
       </Link>
     </div>
@@ -131,7 +173,7 @@ function Reader({ ep, novelTitle, intro }: { ep: PublicEpisode; novelTitle: stri
       )}
 
       <header className="pr-bar pr-bar-top" data-hidden={!chrome}>
-        <Link to={href.novel(slug)} className="pr-icon-btn" aria-label="목차로">
+        <Link href={href.novel(slug)} className="pr-icon-btn" aria-label="목차로">
           <Icon name="back" />
         </Link>
         <div className="pr-bar-title">
@@ -149,7 +191,7 @@ function Reader({ ep, novelTitle, intro }: { ep: PublicEpisode; novelTitle: stri
         </IconButton>
         {social ? (
           <>
-            <LikeButton compact liked={stats.liked} count={stats.likes} onToggle={toggleLike} />
+            <LikeButton compact liked={stats.liked} count={stats.likes} onToggle={toggleLike} disabled={writable === false} />
             <button type="button" className="pr-like pr-like-compact" onClick={() => setSheet("comments")} aria-label={`댓글 ${stats.comments}개`}>
               <Icon name="comment" />
               <span>{formatCount(stats.comments)}</span>
@@ -164,7 +206,7 @@ function Reader({ ep, novelTitle, intro }: { ep: PublicEpisode; novelTitle: stri
       </nav>
 
       <SettingsSheet open={sheet === "settings"} onClose={() => setSheet(null)} />
-      {session.available && <CommentsSheet open={sheet === "comments"} onClose={() => setSheet(null)} slug={slug} episodeNo={episodeNo} title={heading} onCount={setComments} />}
+      <CommentsSheet open={sheet === "comments"} onClose={() => setSheet(null)} slug={slug} episodeNo={episodeNo} title={heading} onCount={setComments} />
     </div>
   );
 }

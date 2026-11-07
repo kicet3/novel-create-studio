@@ -1,0 +1,19 @@
+{
+  "name": "@ncs/public-schema",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "공개 사이트 DB(Supabase) 스키마: 스튜디오가 적용하는 버전별 마이그레이션, 식별자 검사, 독자용 제한 역할 SQL. 의존성 없는 순수 TS.",
+  "exports": {
+    ".": { "@ncs/source": "./src/index.ts", "types": "./dist/index.d.ts", "default": "./dist/index.js" }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json",
+    "test": "vitest run --project public-schema"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.15"
+  }
+}

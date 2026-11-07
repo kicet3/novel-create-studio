@@ -4,6 +4,7 @@
  */
 import type { Express } from "express";
 import type { LlmAdapter } from "./modules/llm/index.js";
+import type { PublicDbConnector } from "./modules/publication/index.js";
 import { sql } from "@ncs/db/orm";
 import type { DbConnection } from "@ncs/db";
 import { DEFAULTS, type InstallConfig } from "@ncs/shared";
@@ -41,12 +42,14 @@ export interface CreateServerCoreOptions {
   secretCipher?: SecretCipher;
   /** extra LLM adapters — test seam only; production passes none */
   llmAdapters?: LlmAdapter[];
+  /** public site DB connector — test seam only (a PGlite standing in for Supabase) */
+  publicDbConnector?: PublicDbConnector;
 }
 
 export function createServerCore(o: CreateServerCoreOptions): ServerCore {
   const platform = createPlatform(o);
   const runtime = createRuntime({ log: o.log, workSignal: platform.workSignal, concurrency: o.config.run.max_concurrent_global });
-  const modules = buildModules({ platform, runtime, databaseMode: o.databaseMode, database: o.database, llmAdapters: o.llmAdapters });
+  const modules = buildModules({ platform, runtime, databaseMode: o.databaseMode, database: o.database, llmAdapters: o.llmAdapters, publicDbConnector: o.publicDbConnector });
   const list = moduleList(modules);
   let ownerId: string | null = null;
 

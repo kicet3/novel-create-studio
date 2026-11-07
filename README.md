@@ -227,44 +227,20 @@ NCS_HOST=100.101.102.103 NCS_ALLOWED_HOSTNAMES=studio.tailnet-1234.ts.net,studio
 Host 헤더가 바인드 IP·루프백·허용 이름이 아니면 거부합니다(DNS rebinding 방지). 다른 사이트에서 오는 상태 변경 요청은
 `Origin`/`Sec-Fetch-Site`로 막습니다(403). 허용 이름 없이 루프백이 아닌 주소에 바인드하면 `ncs doctor`가 경고합니다.
 
-## 독자용 공개 사이트 (`apps/public-reader`)
+## 공개 독자 사이트 snowpage (`apps/public-reader`)
 
-독자가 **공개된 화만** 읽고 좋아요·댓글(답글 1단계)·평점을 남기는 별도 앱입니다. 스튜디오 서버·DB·비밀 값에 접근하지 않습니다.
+글은 PC의 스튜디오에서 쓰고, 공개 독자 사이트 **snowpage**(Next.js, Vercel, `https://novel.snowlink.team`)는 공개된 화만 받아 보여 줍니다.
+독자는 로그인 없이 익명으로 좋아요·평점·댓글(답글 1단계)을 남깁니다.
 
 ```
-스튜디오(apps/server, module publication) ──정적 JSON──▶ <NCS_HOME>/public-site/data ──읽기──▶ apps/public-reader
-   작품별 "공개 사이트에 노출"(기본 꺼짐)                novels.json, novels/<slug>/…        SPA + 독자 서버(자체 reader.db)
+스튜디오(module publication) ──공개된 화만──▶ Supabase 공개 스키마(ncs_public) ◀── snowpage(Vercel, 제한 역할 ncs_public_reader)
 ```
 
-1. **스냅숏 만들기** — 스튜디오 `설정 → 공개 사이트`에서 작품마다 노출을 켜고 공개 주소(slug)·작가 표시 이름·공개 소개를 정합니다.
-   켜진 작품의 `status = published` 화의 `published_version_id` 원고만 나갑니다(초안·승인 대기·승인만 된 화, 기획·바이블·온톨로지·내부 id는 나가지 않음).
-   화 공개/공개 취소·제목 변경·설정 변경 뒤 자동으로 다시 만들고(감사 이벤트 + 60초 대조), `공개 사이트 다시 만들기` 버튼도 있습니다.
-   출력 폴더: 기본 `<NCS_HOME>/public-site/data`, `config.json`의 `public_site.output_dir` 또는 `NCS_PUBLIC_SITE_DATA_DIR`로 바꿉니다
-   (다른 파일이 든 폴더에는 쓰지 않습니다. 파일마다 임시 파일 + rename으로 원자적으로 씁니다).
-2. **앱 빌드** — `pnpm public:build` (= `pnpm --filter @ncs/public-reader build` → `apps/public-reader/dist`, `dist-server`).
-3. **실행** — `pnpm public:serve` (= `pnpm --filter @ncs/public-reader serve`). 기본 `http://127.0.0.1:3200`(루프백만).
-
-   | 환경 변수 | 기본값 | 뜻 |
-   |---|---|---|
-   | `HOST` / `PORT` | `127.0.0.1` / `3200` | 바인드 주소 |
-   | `DATA_DIR` | `$NCS_HOME/public-site/data` (`~/.ncs/…`) | 스냅숏 폴더(읽기 전용) |
-   | `DB_PATH` | `<DATA_DIR>/../reader.db` | 독자 계정·좋아요·평점·댓글(SQLite, `node:sqlite` — Node ≥ 22.5) |
-   | `ADMIN_TOKEN` | (없음 = 운영 화면 꺼짐) | 24자 이상. `/admin`에서 댓글 숨기기·삭제, 숫자 보기 |
-   | `PUBLIC_ORIGIN` | (없음 = 요청 Host와 같은 출처) | 쓰기 요청을 받을 정확한 출처(쉼표 구분), `https://…`면 Secure 쿠키 |
-   | `COOKIE_SECURE` / `TRUST_PROXY` | 꺼짐 | https 뒤에서 Secure 쿠키 / 내 리버스 프록시의 `X-Forwarded-For`를 믿기 |
-
-   서버는 의존성 없는 `node:http`입니다: 경로 탈출·dotfile·심볼릭 링크 차단, 디렉터리 목록 없음, SPA 대체(작품·화 제목을 `<title>`/description에),
-   CSP `default-src 'self'`·`frame-ancestors 'none'`·`nosniff`·`Referrer-Policy`, `/assets` 장기 캐시·HTML/데이터 재검증(ETag).
-   독자 계정은 닉네임 + 비밀번호(scrypt, 이메일 등 개인정보 없음), httpOnly SameSite=Lax 세션 쿠키, 쓰기 요청은 CSRF 토큰 + Origin 검사,
-   IP·독자별 요청 제한, 댓글 1000자·평문 표시. 공개가 취소된 화의 댓글은 보이지 않고 DB에는 남습니다.
-4. **정적 호스팅만 쓰기** — `dist`와 스냅숏 폴더를 `/data`로 함께 올리면 읽기만 되는 사이트가 됩니다(좋아요·댓글·평점은 숨김).
-   모든 경로를 `index.html`로 돌려주는 SPA 대체 설정이 필요합니다. `VITE_DATA_BASE`·`VITE_API_BASE`·`VITE_BASE`로 경로를 바꿀 수 있습니다.
-5. **인터넷 공개는 직접 결정할 일** — 이 저장소는 아무것도 외부에 열지 않습니다(Tailscale Funnel·공개 바인드·포트 개방 없음).
-   공개하려면 HTTPS 리버스 프록시 뒤에 `HOST=127.0.0.1`로 두고 `PUBLIC_ORIGIN=https://…`, `TRUST_PROXY=1`을 설정하세요.
-   스냅숏 폴더만 서버로 복사(rsync 등)하면 스튜디오와 다른 기계에서도 돌릴 수 있습니다.
-
-알려진 제약: 작품의 공개 주소(slug)를 바꾸면 기존 좋아요·평점·댓글은 옛 주소에 남습니다. 비밀번호 찾기는 없습니다(이메일을 받지 않음).
-요청 제한은 프로세스 메모리에 있어 재시작하면 초기화됩니다.
+- 스튜디오 `설치 설정 → 공개 사이트(snowpage)`: Supabase 쓰기 연결 문자열(비밀 `public_site.database_url`, 암호화·다시 표시 안 함), 스키마 이름,
+  내보낼 곳(기본: 연결 문자열이 있으면 Supabase, 없으면 정적 파일 `<NCS_HOME>/public-site/data` — 오프라인·개발용), [연결 확인]·[지금 동기화],
+  독자 사이트용 제한 역할 SQL(사용자가 Supabase SQL Editor에서 직접 실행).
+- 공개 스키마 마이그레이션은 `packages/public-schema`(스튜디오 마이그레이션과 별개, 그 스키마 안에만 적용)입니다.
+- 배포·환경 변수·도메인·Supabase 단계: [`apps/public-reader/README.md`](apps/public-reader/README.md).
 
 ## PRD 대비 알려진 빈 곳
 
@@ -366,7 +342,8 @@ packages/shared  @ncs/shared   enum 레지스트리, 한국어 라벨, ID(접두
 packages/db      @ncs/db       SQL 마이그레이션 + runner, drizzle 스키마, embedded/external PG 런타임, PGlite 테스트 DB
 packages/test-kit @ncs/test-kit FakeClock, 결정적 ID, 픽스처 빌더
 packages/reader-core @ncs/reader-core 읽기 화면 순수 로직(페이지 나누기·보기 설정·이어 읽기·폴더블 펼침 판단) + 공개 스냅숏 계약
-apps/public-reader @ncs/public-reader 독자용 읽기 사이트(별도 앱): 정적 SPA + 좋아요·댓글·평점용 작은 Node 서버(자체 SQLite)
+packages/public-schema @ncs/public-schema 공개 사이트 DB(Supabase) 스키마 마이그레이션·식별자 검사·독자용 제한 역할 SQL (의존성 없음)
+apps/public-reader @ncs/public-reader snowpage 공개 독자 사이트(Next.js, Vercel): Supabase 공개 스키마 읽기 + 익명 좋아요·댓글·평점
 ```
 
 ### 패키지 해석 규칙

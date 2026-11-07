@@ -1,3 +1,4 @@
+"use client";
 /**
  * 페이지 넘김: pages of about N characters (paginateBlocks from @ncs/reader-core), measured against a hidden twin of
  * the page box. One page on phones / cover screens, two pages side by side (book spread) on wide near-square screens
@@ -30,7 +31,7 @@ import {
   type ReadingAnchor,
   type ReadingBlock,
 } from "@ncs/reader-core";
-import type { ViewportInfo } from "../lib/hooks.js";
+import type { ViewportInfo } from "../lib/hooks";
 
 export type InitialPosition = { kind: "start" } | { kind: "end" } | { kind: "anchor"; anchor: ReadingAnchor } | { kind: "ratio"; ratio: number };
 

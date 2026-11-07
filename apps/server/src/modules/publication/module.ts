@@ -3,7 +3,9 @@ import type { Platform, ServerModule } from "../../platform/index.js";
 import type { AuditService } from "../audit/index.js";
 import type { ManuscriptService } from "../manuscript/index.js";
 import type { NovelService } from "../novel/index.js";
+import type { SecretProvider } from "../../platform/index.js";
 import type { PublicationService } from "./index.js";
+import type { PublicDbConnector } from "./adapters/pg/public-db.js";
 import { createPublicationService, isRebuildHint, RECONCILE_INTERVAL_MS } from "./application/publication-service.js";
 import { mountPublicationRoutes } from "./adapters/http/routes.js";
 
@@ -12,6 +14,10 @@ export interface PublicationModuleDeps {
   audit: AuditService;
   novel: NovelService;
   manuscript: ManuscriptService;
+  /** studio secrets (system.service.secrets): holds the Supabase writer URL */
+  secrets: SecretProvider;
+  /** test seam: connect to a stand-in for the user's Supabase database (default postgres.js) */
+  publicDbConnector?: PublicDbConnector;
 }
 
 /** debounce of audit hints (several publish events in one approval burst → one rebuild) */
@@ -39,13 +45,15 @@ export function createPublicationModule(deps: PublicationModuleDeps): ServerModu
       },
     ],
     async start() {
+      // a public-site config problem must never block the studio from starting
+      await service.init().catch(() => log.warn("public site config could not be loaded; sync stays off until fixed"));
       // UI-style hint only: correctness comes from the reconcile fingerprint, the hint just makes it prompt
       unsubscribe = deps.audit.subscribe((ev) => {
         if (!isRebuildHint(ev.action)) return;
         if (timer) clearTimeout(timer);
         timer = setTimeout(() => {
           timer = null;
-          service.rebuild().catch((err: unknown) => log.warn({ err }, "public site rebuild failed"));
+          service.rebuild().catch((err: unknown) => log.warn({ err }, "public site sync failed"));
         }, HINT_DEBOUNCE_MS);
         timer.unref?.();
       });
@@ -55,6 +63,7 @@ export function createPublicationModule(deps: PublicationModuleDeps): ServerModu
       unsubscribe = null;
       if (timer) clearTimeout(timer);
       timer = null;
+      await service.close();
     },
   };
 }

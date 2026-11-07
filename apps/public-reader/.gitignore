@@ -1,0 +1,12 @@
+# Next.js / Vercel
+.next/
+out/
+.vercel/
+*.tsbuildinfo
+
+# env: real values never committed (.env.example only)
+.env
+.env*.local
+.env.*
+!.env.example
+next-env.d.ts

@@ -20,6 +20,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "1.5.0",
     "@ncs/db": "workspace:*",
+    "@ncs/public-schema": "workspace:*",
     "@ncs/reader-core": "workspace:*",
     "@ncs/shared": "workspace:*",
     "dotenv": "^18.0.9",

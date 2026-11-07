@@ -1,3 +1,4 @@
+"use client";
 /** 보기 설정: 넘김 방식, 글자 크기·글꼴, 줄 간격, 문단 간격, 여백, 배경 테마 (localStorage). */
 import type { ReactNode } from "react";
 import {
@@ -15,8 +16,8 @@ import {
   fontPxOf,
   stepFont,
 } from "@ncs/reader-core";
-import { useReaderSettings } from "../lib/hooks.js";
-import { Sheet } from "./ui.js";
+import { useReaderSettings } from "../lib/hooks";
+import { Sheet } from "./Sheet";
 
 function Segmented<T extends string>({ label, value, options, labels, onChange }: { label: string; value: T; options: readonly T[]; labels: Record<T, string>; onChange: (v: T) => void }) {
   return (

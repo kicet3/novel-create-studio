@@ -30,6 +30,7 @@ import { createLogger, type Clock, type Db } from "../../src/platform/index.js";
 import { startScriptedClaude, type ScriptedClaude } from "./scripted-claude.js";
 import { scriptedClaudeCli } from "./scripted-claude-cli.js";
 import type { LlmAdapter } from "../../src/modules/llm/index.js";
+import type { PublicDbConnector } from "../../src/modules/publication/index.js";
 
 /** dummy Claude API key used against the local scripted mock (never a real key) */
 export const TEST_ANTHROPIC_KEY = "sk-ant-api03-test-scripted-claude-0000000000";
@@ -61,6 +62,8 @@ export async function createTestCore(
     devMode?: boolean;
     /** Claude subscription lane (`claude_code`): a ClaudeCliLlmAdapter over a scripted spawn (default: CLI not installed) */
     claudeCli?: LlmAdapter;
+    /** public site DB (Supabase stand-in) connector */
+    publicDbConnector?: PublicDbConnector;
   } = {},
 ): Promise<TestCore> {
   const testDb = await createTestDb();
@@ -85,6 +88,7 @@ export async function createTestCore(
     clock: opts.clock,
     // never the real `claude` executable in tests
     llmAdapters: [opts.claudeCli ?? scriptedClaudeCli().adapter],
+    publicDbConnector: opts.publicDbConnector,
   });
   await core.start({ background: false });
   const owner = (await core.modules.novel.service.getOwnerUser())!;
