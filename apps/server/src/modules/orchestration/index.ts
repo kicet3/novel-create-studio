@@ -112,8 +112,15 @@ export interface TaskKindHandler<I = unknown, P = unknown> {
   /** `<agent_role>.<task_kind>@<semver>` → runs.prompt_template_version; deterministic tasks use `code.<kind>@<semver>` */
   readonly promptTemplateVersion: string;
   readonly inputSchema: z.ZodType<I>;
-  /** pre-lease gate (e.g. INV-BIB-02, INV-ARC-02); return a block to keep the task from running */
-  gate?(scope: NovelScope, task: Task): Promise<{ ok: true } | { ok: false; blockReason: TaskBlockReason; blockedRef?: { refType: RefType; refId: string } }>;
+  /**
+   * pre-lease gate (e.g. INV-BIB-02, INV-ARC-02); return a block to keep the task from running.
+   * `{ ok: false, defer: true }` skips this dispatcher pass only (the task stays ready and is tried again next tick) —
+   * for a short wait on a sibling task that is already queued / running (설계 추가 0019: outline waits for the recap).
+   */
+  gate?(
+    scope: NovelScope,
+    task: Task,
+  ): Promise<{ ok: true } | { ok: false; defer: true } | { ok: false; defer?: false; blockReason: TaskBlockReason; blockedRef?: { refType: RefType; refId: string } }>;
   /** proposals only — no domain writes (P-2). LLM calls go through llm.ModelCallPort with ctx.run. */
   execute(ctx: TaskContext<I>): Promise<P>;
   /** deterministic writes in the engine's transaction; create follow-up tasks via orchestration.createTask(tx, …) */

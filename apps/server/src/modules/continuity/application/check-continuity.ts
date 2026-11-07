@@ -16,6 +16,7 @@ import { TaskFailure, type RunHandle } from "../../orchestration/index.js";
 import { adjustSeverity, continuityReviewSchema, dedupeKeyOf, RULES, type ContinuityReview } from "../domain/rules.js";
 import { CHECK_CONTINUITY_KINDS } from "../domain/transitions.js";
 import type { IssueEvidenceInput } from "../index.js";
+import type { EpisodeEnd } from "../../manuscript/index.js";
 import type { ContinuityInternals, IssueDraft } from "./continuity-service.js";
 import { orPlaceholder, type ContinuityPorts } from "./ports.js";
 
@@ -100,13 +101,44 @@ export function locate(content: string, scenes: SceneInfo[], quote?: string, sce
   return s ? { sceneId: s.id, charStart: s.charStart, charEnd: s.charEnd } : { sceneId: null, charStart: null, charEnd: null };
 }
 
+/** 설계 추가 0019: opening continuity of episode N > 1 against N-1's end (handoff + last scene of its latest text) */
+export const OPENING_CHECK_INSTRUCTION = `[PREV_END]가 있으면 [SCENE 1]의 시작이 직전 화 끝(장소·시간·함께 있는 인물·몸과 마음 상태·열린 행동/훅)에서 자연스럽게 이어지는지 확인하세요.
+- 설명 없는 시간·장소 점프, 직전 화 끝 상태와의 모순(다친 인물이 멀쩡함, 함께 있던 인물이 설명 없이 사라짐, 열린 행동이 없던 일이 됨), 직전 화를 되풀이하는 요약 문단은 kind=opening_continuity, evidence ["PREV_END"]로 보고하세요(사실 핸들 불필요). quote에는 이번 화 원고의 문제 문장을 그대로 옮기세요.
+- 첫 문단에서 전환(얼마 뒤·어디로)을 밝힌 시간·장소 이동은 문제가 아닙니다.
+- severity: 직전 화 끝 상태와 명백히 모순되면 high, 이음이 어색하거나 요약 문단이면 medium, 사소하면 low.`;
+
 export const CHECK_INSTRUCTION = `당신은 웹소설의 연속성 편집자(continuity_editor)입니다.
 [CANDIDATE]마다 원고를 보고 verdict를 violation / not_violation / uncertain 중 하나로 정하세요(닫힌 판정).
 - 회상·꿈·다른 시간선 장면, 시체 언급, 회상 대사는 사망 인물 규칙 위반이 아닙니다.
 - violation이면 quote에 문제 문장을 원고에서 그대로 옮기고, proposed_fix와 fix_scope(span/scene/outline)를 적으세요.
 그 밖에 [FACTS]의 캐논과 모순되는 서술(외형·나이·관계·장소 이동·능력 규칙·인물 지식)을 찾으면 issues에 넣고,
 evidence에 근거 사실 핸들(F1, F2 …)을 1개 이상 적으세요. 근거 사실이 없는 의심은 넣지 마세요.
-[작품 구성]의 결말·현재 부 목표·플롯 핵심 사건·이번 화 계획에서 벗어난 전개는 kind=plan_deviation, evidence ["PLAN"]으로 보고하세요(사실 핸들 불필요).`;
+[작품 구성]의 결말·현재 부 목표·플롯 핵심 사건·이번 화 계획에서 벗어난 전개는 kind=plan_deviation, evidence ["PLAN"]으로 보고하세요(사실 핸들 불필요).
+${OPENING_CHECK_INSTRUCTION}`;
+
+/** [PREV_END] block of the review prompt */
+export function prevEndBlock(end: EpisodeEnd): string {
+  const h = !end.stale ? end.handoff : null;
+  return [
+    `[PREV_END] episode=${end.episodeNo} version=${end.versionId}`,
+    h
+      ? [
+          h.place ? `장소: ${h.place}` : "",
+          h.time ? `시간: ${h.time}` : "",
+          h.present.length ? `함께 있는 인물: ${h.present.join(", ")}` : "",
+          h.physical_state ? `몸 상태: ${h.physical_state}` : "",
+          h.emotional_state ? `마음 상태: ${h.emotional_state}` : "",
+          h.open_hook ? `열린 행동·훅: ${h.open_hook}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n")
+      : "",
+    `마지막 장면:\n${end.tail}`,
+    "[/PREV_END]",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
 
 export function checkContinuityHandler(deps: ContinuityPorts, svc: ContinuityInternals): AgentTaskHandler<CheckContinuityInput, CheckContinuityProposal> {
   const log = deps.platform.log;
@@ -320,6 +352,11 @@ export function checkContinuityHandler(deps: ContinuityPorts, svc: ContinuityInt
       const { candidates, facts, povKnowledge } = await prefilter(scope, ctx, input, skippedRules);
       if (skippedRules.length) log.warn({ episodeId: ctx.ep.id, skippedRules }, "check_continuity: ontology port not implemented for some rules");
 
+      // 설계 추가 0019: how N-1 ended — always its LATEST text (full_auto may change it after N started); the stored
+      // handoff only when it was made from that text (a stale one is left out)
+      const prevEnd = ctx.ep.episodeNo > 1 ? await orPlaceholder(() => deps.manuscript.getEpisodeEnd(scope, ctx.ep.episodeNo - 1), null) : null;
+      const prevBlock = prevEnd ? prevEndBlock(prevEnd) : "";
+
       const handles = new Map<string, FactAtAnchor>();
       facts.forEach((f, i) => handles.set(`F${i + 1}`, f));
       const sceneBlocks = ctx.scenes.length
@@ -332,6 +369,7 @@ export function checkContinuityHandler(deps: ContinuityPorts, svc: ContinuityInt
         "[/FACTS]",
         povKnowledge.length ? `[POV_KNOWLEDGE]\n${povKnowledge.join("\n")}\n[/POV_KNOWLEDGE]` : "",
         ...candidates.filter((c) => c.needsLlm).map((c) => `[CANDIDATE] id=${c.id} rule=${c.ruleId} ${c.prompt}`),
+        prevBlock,
         "",
         ...sceneBlocks,
       ]
@@ -362,6 +400,8 @@ export function checkContinuityHandler(deps: ContinuityPorts, svc: ContinuityInt
         const ids = m.evidence.flatMap((e) => [e.factId ?? e.factVersionId, e.nameId, e.answerId].filter((x): x is string => !!x));
         // plan deviation: one issue per plot + scene position (scene ids change per version, the model's wording per run)
         if (m.kind === "plan_deviation") ids.push(`plan:${m.evidence[0]?.arcId ?? ""}:${ctx.scenes.find((x) => x.id === m.sceneId)?.ord ?? "ep"}`);
+        // opening continuity: one issue per episode against its predecessor (N-1 versions / wording change per run)
+        if (m.kind === "opening_continuity") ids.push(`opening:${prevEnd?.episodeId ?? ""}`);
         return {
           kind: m.kind,
           severity,
@@ -408,6 +448,36 @@ export function checkContinuityHandler(deps: ContinuityPorts, svc: ContinuityInt
         );
       }
       for (const i of review.issues) {
+        if (i.kind === "opening_continuity") {
+          if (!prevEnd) continue; // episode 1 / no previous text: nothing to continue from
+          const loc = locate(ctx.version.content, ctx.scenes, i.quote, i.scene_ord ?? 1);
+          counts.llmIssues++;
+          const d = toDraft(
+            {
+              id: "LLM:opening_continuity",
+              ruleId: "LLM:opening_continuity",
+              kind: "opening_continuity",
+              severity: i.severity,
+              needsLlm: true,
+              message: i.message,
+              fixScope: i.fix_scope === "outline" ? "outline" : "scene",
+              sceneId: loc.sceneId,
+              charStart: loc.charStart,
+              charEnd: loc.charEnd,
+              evidence: [{ manuscriptVersionId: prevEnd.versionId, quote: i.quote ?? null }],
+              entityIds: [],
+              evidenceCanon: [],
+              prompt: "",
+            },
+            { suggestion: i.proposed_fix ?? null },
+          );
+          const same = drafts.find((x) => x.dedupeKey === d.dedupeKey);
+          if (same) {
+            same.message = `${same.message}\n${d.message}`.slice(0, 2000);
+            if (d.severity === "high") same.severity = "high";
+          } else drafts.push(d);
+          continue;
+        }
         if (i.kind === "plan_deviation") {
           // 설계 추가: deviation from the story plan — the plot is the evidence; medium (gate not blocked), fixed in the outline
           const loc = locate(ctx.version.content, ctx.scenes, i.quote, i.scene_ord);

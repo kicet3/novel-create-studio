@@ -151,6 +151,10 @@ export const episodeRecaps = pgTable(
     prefilterResult: jsonb("prefilter_result").$type<unknown>(),
     createdByRunId: text("created_by_run_id"),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+    /** 설계 추가 0019: 직전 화 끝 상태 (place, time, present, physical_state, emotional_state, open_hook, last_line) */
+    handoff: jsonb("handoff").$type<unknown>(),
+    /** 설계 추가 0019: the episode text changed after this recap (a newer version is summarized again) */
+    staleAt: timestamp("stale_at", { withTimezone: true, mode: "date" }),
   },
 );
 export type EpisodeRecapsRow = typeof episodeRecaps.$inferSelect;

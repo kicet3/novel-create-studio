@@ -35,7 +35,7 @@ export const RULES: Readonly<Record<string, RuleDef>> = {
 };
 
 /** LLM-reported issue kinds accepted from the open review (others are produced deterministically) */
-export const LLM_REVIEW_KINDS = ["appearance", "age", "relationship", "ability_rule", "location_travel", "death_state", "character_knowledge", "plan_deviation"] as const;
+export const LLM_REVIEW_KINDS = ["appearance", "age", "relationship", "ability_rule", "location_travel", "death_state", "character_knowledge", "plan_deviation", "opening_continuity"] as const;
 
 // ── dedupe key (03 §3.6: (episode_id, kind, evidence hash); 06 §9: hash = rule id + sorted evidence ids + entities) ──
 function fnv1a(input: string, seed: number): number {

@@ -28,7 +28,12 @@ const HANDLE_NOTE = "엔티티는 이름 대신 컨텍스트의 핸들(E1, E2 �
 
 const T = (role: AgentRole, kind: TaskKind, instruction: string, output: string = JSON_NOTE): PromptTemplateData => ({ role, kind, version: TEMPLATE_VERSION, instruction, output });
 
+/** 설계 추가 0019: episode N > 1 continues where N-1 ended (outline + draft) */
+export const CONTINUATION_RULE =
+  "2화부터: 첫 씬은 '직전 화 끝 상태'·'직전 내용'의 마지막 장면에서 바로 이어집니다(시간·장소·등장 인물·몸과 마음 상태·열린 행동). 앞 화를 다시 요약하는 문단을 쓰지 않고, 직전 화 끝 상태와 어긋나게 시작하지 않습니다. 아웃라인이 시간·장소를 건너뛰면 첫 문단에서 그 전환(얼마 뒤·어디로)을 분명히 밝힙니다.";
+
 const DRAFT_RULES = [
+  `- ${CONTINUATION_RULE}`,
   "- 분량은 아래 목표 분량 범위(최소~최대) 안에 맞춥니다. 최소 분량에 못 미치거나 최대 분량을 넘기지 않습니다(한 화 절대 하한 3,000자).",
   "- 모바일 가독성: 1~3문장 문단, 대사는 따로 줄을 바꿉니다.",
   "- 아웃라인의 비트와 씬 순서를 지키고, 배정된 떡밥 비트를 자연스럽게 넣습니다.",
@@ -89,6 +94,7 @@ export const PROMPT_TEMPLATE_DATA: readonly PromptTemplateData[] = [
       "- 비트 5~8개, 씬 3~5개(장소·시점 인물·등장 엔티티 핸들·씬 목표)를 정합니다.",
       "- 배정된 떡밥 비트와 답변 제약을 반드시 반영합니다.",
       "- 회차 끝 훅(cliffhanger)을 한 문장으로 적습니다.",
+      `- ${CONTINUATION_RULE}`,
       `- ${HANDLE_NOTE}`,
     ].join("\n"),
   ),
@@ -209,6 +215,12 @@ export const PROMPT_TEMPLATE_DATA: readonly PromptTemplateData[] = [
     "continuity_editor",
     "check_continuity",
     "원고를 컨텍스트의 캐논 사실·제약·인물 지식과 대조해 모순(외모·나이·관계·능력 규칙·이동 시간·생사·인물 지식·정체 누설)을 찾습니다. 각 이슈에 심각도, 원문 인용, 근거 사실 핸들, 수정 제안을 붙입니다. 모순이 없으면 빈 목록을 냅니다.",
+  ),
+  // 설계 추가 0019: 화 정리 — 다음 화가 이어 쓸 끝 상태 + 줄거리
+  T(
+    "continuity_editor",
+    "summarize_episode",
+    "{{episodeLabel}} 원고를 읽고 다음 화가 이어 쓸 수 있게 정리합니다. (1) 끝 상태: 마지막 장면의 장소·시간, 그 자리에 있는 인물, 인물들의 몸 상태와 마음 상태, 끝나지 않은 행동이나 훅. (2) 이 화 줄거리 3~5줄. 원고에 있는 내용만 쓰고 추측하지 않습니다.",
   ),
   T(
     "foreshadow_manager",

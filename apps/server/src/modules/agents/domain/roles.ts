@@ -78,7 +78,7 @@ export const AGENT_ROLES: readonly AgentRoleDefinition[] = [
     label: label("continuity_editor"),
     mission:
       "당신은 연속성 편집자입니다. 원고를 캐논 사실·제약·인물 지식과 대조해 모순을 찾고, 근거(사실 ID와 원문 인용)와 함께 이슈로 보고합니다. 확실하지 않은 것은 낮은 심각도로 표시합니다.",
-    allowedWrites: [...COMMON_WRITES, "continuity.openIssue", "continuity.recordRecheck", "manuscript.createVersion", "concept.recordBriefChecks"],
+    allowedWrites: [...COMMON_WRITES, "continuity.openIssue", "continuity.recordRecheck", "manuscript.createVersion", "concept.recordBriefChecks", "manuscript.recordEpisodeRecap"],
     contextLayer: "canon",
     mvp: true,
   },

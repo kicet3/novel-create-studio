@@ -63,7 +63,11 @@ export type ContextSectionKind =
   /** 설계 추가: story structure — ending, current part / plot, this episode's plan (module manuscript) */
   | "story_plan"
   /** 설계 추가: world ontology — approved world facts + flagged candidates (module world) */
-  | "world";
+  | "world"
+  /** 설계 추가 0019: where / how the previous episode ended (module manuscript, episode_recaps.handoff) */
+  | "prev_handoff"
+  /** 설계 추가 0019: rolling story so far — recent episodes in detail, older ones compressed (module manuscript) */
+  | "story_so_far";
 
 export interface ContextSpec {
   anchor: StoryAnchor;
@@ -76,6 +80,8 @@ export interface ContextSpec {
   manuscriptVersionId?: string;
   /** 설계 추가: plot (arc) the run plans (plan_arc → story_plan section) */
   arcId?: string;
+  /** 설계 추가 0019: sections never dropped by the token budget for this run (e.g. recent_text for outline / draft) */
+  keepSections?: ContextSectionKind[];
 }
 
 export interface ContextSectionResult {

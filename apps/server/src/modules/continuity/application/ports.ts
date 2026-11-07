@@ -19,6 +19,7 @@ export type ContinuityManuscriptPort = Pick<
   | "advanceCheckGate"
   | "registerIssueSink"
   | "registerVersionAnnotator"
+  | "getEpisodeEnd"
 >;
 export type ContinuityOntologyPort = Pick<
   OntologyService,

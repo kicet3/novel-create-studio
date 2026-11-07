@@ -894,6 +894,9 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
     schedule: () => {
       throw new Error("wired in module.ts");
     },
+    getEpisodeEnd: () => {
+      throw new Error("wired in module.ts");
+    },
     registerIssueSink: (sink) => void reg.issueSinks.push(sink),
     registerPlannedBeatSource: (src) => void reg.beatSources.push(src),
     registerVersionAnnotator: (kind, a) => void reg.annotators[kind].push(a),

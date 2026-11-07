@@ -40,6 +40,7 @@ export const CHECK_CONTINUITY_KINDS: readonly ContinuityIssueKind[] = [
   "answer_constraint",
   "glossary_spelling",
   "plan_deviation", // 설계 추가: 전체 구성·플롯·화 계획 이탈 (medium, never blocks the gate)
+  "opening_continuity", // 설계 추가 0019: 첫 장면이 직전 화 끝 상태와 이어지지 않음 (high blocks like any high issue)
 ];
 export const SETUP_KINDS: readonly ContinuityIssueKind[] = ["setup_missing", "setup_contradiction"];
 

@@ -64,6 +64,7 @@ export const TASK_KIND_STAGE: Readonly<Partial<Record<TaskKind, AgentPipelineSta
   link_mentions: "check",
   split_scenes: "check",
   review_setup_due: "check",
+  summarize_episode: "check",
 };
 
 export const agentsTimelineQuerySchema = z.object({

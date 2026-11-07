@@ -140,6 +140,8 @@ export const ENUMS = {
     "adjust_length",
     // 설계 추가 0018: 화별 수정 대화 한 턴(line_editor, 읽기 전용)
     "revision_chat_turn",
+    // 설계 추가 0019: 화 승인 뒤 직전 화 끝 상태 + 줄거리 정리(continuity_editor)
+    "summarize_episode",
   ],
   target_type: ["novel", "goal", "arc", "episode", "scene", "shot", "setup", "entity", "question", "concept_session", "character"],
   task_status: ["pending", "ready", "running", "blocked", "done", "failed", "cancelled"],
@@ -392,6 +394,7 @@ export const ENUMS = {
     "safety_minor_sexual",
     "safety_real_person",
     "plan_deviation", // 설계 추가: 전체 구성·플롯·화 계획 이탈
+    "opening_continuity", // 설계 추가 0019: 첫 장면이 직전 화 끝과 이어지지 않음
   ],
   issue_severity: ["high", "medium", "low"],
   continuity_issue_status: ["open", "fixing", "resolved", "waived", "false_positive", "superseded"],

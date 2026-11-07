@@ -142,6 +142,20 @@ export function scriptedStructure(prompt: string, episodesPerPart = 3) {
   };
 }
 
+/** 설계 추가 0019: summarize_episode answer (last_line is checked against the text; a miss is replaced deterministically) */
+export const SCRIPTED_RECAP = {
+  handoff: {
+    place: "여관 방 거울 앞",
+    time: "새벽",
+    present: ["한결"],
+    physical_state: "손등의 흉터가 욱신거린다",
+    emotional_state: "회귀를 받아들이고 결의에 차 있다",
+    open_hook: "흉터가 빛난 이유를 알아내야 한다",
+    last_line: "그는 이번에는 누구에게도 등을 내주지 않겠다고, 그러나 지켜야 할 사람은 끝까지 지키겠다고 다짐했다.",
+  },
+  summary_lines: ["한결이 십 년 전 새벽 여관 방에서 눈을 뜬다.", "종소리로 자신이 회귀했음을 깨닫는다.", "거울 앞에서 손등의 흉터가 빛나는 것을 본다."],
+};
+
 /** text-output steps are told apart by their task instruction (system prompt) */
 const SYS = {
   draft: "아웃라인의 씬을 순서대로 본문으로 씁니다",
@@ -178,6 +192,8 @@ export function scriptPipeline(claude: ScriptedClaude): void {
     // 설계 추가 0015: entity resolver — nothing to decide beyond the deterministic rules
     sticky({ when: { schemaHas: ["resolutions"] }, json: { resolutions: [] } }),
     sticky({ when: { schemaHas: ["verdicts"] }, json: { verdicts: [], issues: [] } }),
+    // 설계 추가 0019: summarize_episode — the end state + summary of every scripted episode (same two scenes)
+    sticky({ when: { schemaHas: ["handoff", "summary_lines"] }, json: SCRIPTED_RECAP }),
     sticky({ when: { schemaHas: ["findings"] }, json: { findings: [], unplanned: [] } }),
     sticky({ when: { schemaHas: ["blocking"] }, json: { blocking: false, basis: "none", reason_ko: "" } }),
   );

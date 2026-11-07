@@ -277,6 +277,38 @@ export interface ManuscriptService {
    * (설계 추가 0017: outside [minChars, maxChars × (1 + tolerance)] of the profile; null = in range / no text)
    */
   withLengthFlags<E extends Episode>(scope: NovelScope, episodes: E[]): Promise<Array<E & { lengthBelowFloor: boolean; lengthOutOfRange: LengthOutOfRange | null }>>;
+
+  // ── 설계 추가 0019: 화 사이 이어짐 ──
+  /** how episode `episodeNo` ends: its latest text version (current, else approved), the end tail and the stored handoff; null without text */
+  getEpisodeEnd(scope: NovelScope, episodeNo: number, tx?: Tx): Promise<EpisodeEnd | null>;
+}
+
+/** 설계 추가 0019: 직전 화 끝 상태 (summarize_episode, episode_recaps.handoff) */
+export interface EpisodeHandoffData {
+  place: string;
+  time: string;
+  present: string[];
+  physical_state: string;
+  emotional_state: string;
+  open_hook: string;
+  last_line: string;
+}
+
+/** 설계 추가 0019: the end of an episode as the next episode continues from it */
+export interface EpisodeEnd {
+  episodeId: string;
+  episodeNo: number;
+  /** latest text version (current ?? approved) — what the next episode must continue from */
+  versionId: string;
+  /** last scene, bounded (~1,200–2,000 chars) */
+  tail: string;
+  recapId: string | null;
+  /** version the stored handoff / summary was made from */
+  recapVersionId: string | null;
+  handoff: EpisodeHandoffData | null;
+  summaryLines: string[];
+  /** the text changed after the stored handoff (a newer version is summarized again) */
+  stale: boolean;
 }
 
 /** 설계 추가 0017: an episode text outside the accepted length range */

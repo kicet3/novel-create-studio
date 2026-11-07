@@ -49,7 +49,13 @@ export interface PlanningApi {
   onGoalSaved(ctx: { tx: Tx; scope: NovelScope; enteredPlanning: boolean; actor: ActorRef; novel: { approvedConceptBriefId: string | null } }): Promise<void>;
 }
 
-export function createPlanning(m: ManuscriptInternals, getService: () => import("../index.js").ManuscriptService, structure: StructureApi): PlanningApi {
+export function createPlanning(
+  m: ManuscriptInternals,
+  getService: () => import("../index.js").ManuscriptService,
+  structure: StructureApi,
+  /** 설계 추가 0019: before N+1's outline, N gets a handoff of its latest text (summarize_episode) */
+  handoff?: { ensurePrevRecap(tx: import("../../../platform/index.js").Tx, scope: NovelScope, ep: { episodeNo: number }): Promise<unknown> },
+): PlanningApi {
   const { ports } = m;
   const cast = () => castPortOf(ports.reg);
   const { novel, orchestration, ontology, platform } = ports.deps;
@@ -690,8 +696,10 @@ export function createPlanning(m: ManuscriptInternals, getService: () => import(
         const links = await orchestration.listTasks(scope, { kinds: ["link_mentions"], episodeId: prev.id, limit: 20 });
         if (!links.some((t) => t.status === "done" && (t.input as { manuscript_version_id?: string })?.manuscript_version_id === prev.currentVersionId)) break;
       }
-      const taskId = await platform.uow.run((tx) =>
-        ports.createTask(tx, scope, {
+      const taskId = await platform.uow.run(async (tx) => {
+        // 설계 추가 0019: N's handoff runs first (higher priority + the outline gate defers while it is queued / running)
+        if (handoff) await handoff.ensurePrevRecap(tx, scope, ep);
+        return ports.createTask(tx, scope, {
           kind: "outline_episode",
           targetType: "episode",
           targetId: ep.id,
@@ -701,8 +709,8 @@ export function createPlanning(m: ManuscriptInternals, getService: () => import(
           createdBy: scheduler,
           cycleKey: ep.id,
           priority: 500 + 50 * Math.max(0, reserve.target - reserve.includingAwaiting),
-        }),
-      );
+        });
+      });
       if (taskId) result.createdTasks.push({ kind: "outline_episode", taskId, targetId: ep.id });
       inFlight++;
       startedToday++;

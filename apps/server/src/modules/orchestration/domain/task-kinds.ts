@@ -50,6 +50,8 @@ export const TASK_KIND_ROLE: Readonly<Record<TaskKind, AgentRole>> = {
   adjust_length: "writer",
   // 설계 추가 0018: 화별 수정 대화 한 턴(읽기 전용, 제안만)
   revision_chat_turn: "line_editor",
+  // 설계 추가 0019: 화 승인 뒤 직전 화 끝 상태 + 줄거리 정리(읽기 전용, episode_recaps만 씀)
+  summarize_episode: "continuity_editor",
 };
 
 /** target_type per task_kind (04 §2.2 표; build_initial_ontology uses target novel + input.series_bible_id). */
@@ -84,6 +86,7 @@ export const TASK_KIND_TARGET: Readonly<Partial<Record<TaskKind, TargetType>>> =
   resolve_entities: "novel",
   adjust_length: "episode",
   revision_chat_turn: "episode",
+  summarize_episode: "episode",
 };
 
 /** Concept tasks are the only ones allowed without goal_id (INV-TSK-01 / INV-CON-08). */

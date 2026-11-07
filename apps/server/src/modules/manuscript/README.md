@@ -10,6 +10,13 @@
 - planning + writing task handlers: plan_series_bible, plan_arc, schedule_episodes, outline_episode, draft_episode, split_scenes, polish_episode, revise_episode, plan_rework, check_text_safety
 - approval handlers series_bible / arc_plan / arc / episode; novel.onGoalSaved → plan_series_bible (N3)
 - check gate (07 §5.3) from registered contributors; onEpisodeTransition hooks
+- 설계 추가 0019 화 사이 이어짐 (`application/handoff.ts`): `summarize_episode` (continuity_editor) writes the episode's
+  end state (handoff) + 3–5 line summary into episode_recaps on approval, when the text changes after the next episode
+  started (older recaps → `stale_at`) and before the next outline; boot backfill once per version (`recap_backfill@1:<version>`).
+  Sections `prev_handoff` (직전 화 끝 상태) / `story_so_far` (지금까지의 줄거리); outline/draft keep `recent_text` + `prev_handoff`
+  under any budget; `getEpisodeEnd` gives continuity the latest N-1 text for the opening-continuity check.
+  N's `outline_episode` gate defers (stays ready, re-tried next tick — `{ ok: false, defer: true }`) while a summarize_episode
+  of N-1 is pending / ready / running; a failed / blocked recap does not hold it. Recap priority 800 > outline max.
 
 ## Owned tables (`@ncs/db/schema/manuscript.ts`)
 - episodes
@@ -26,7 +33,7 @@
 - task kinds ×10
 - hitl approval handlers ×4
 - novel goal hook
-- agents context sections outline / recent_text
+- agents context sections outline / recent_text / prev_handoff / story_so_far
 
 ## HTTP endpoints (`…` = `/api/novels/:novelId`)
 - `GET …/episodes`

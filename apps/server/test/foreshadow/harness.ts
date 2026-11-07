@@ -48,6 +48,8 @@ export interface Harness {
   };
   calls: { advanceCheckGate: string[]; requestArcPlanApproval: string[]; createTask: any[]; createQuestion: any[]; requestApproval: any[] };
   ontology: { linkedFacts: FactAtAnchor[]; mentions: any[]; leaks: any[]; violations: any[]; canon: FactAtAnchor[]; constraints: FactAtAnchor[] };
+  /** 설계 추가 0019: manuscript.getEpisodeEnd stub (episode no → end) */
+  episodeEnds: Map<number, import("../../src/modules/manuscript/index.js").EpisodeEnd>;
   run(tx: Tx): <T>(fn: (tx: Tx) => Promise<T>) => Promise<T>;
   tx<T>(fn: (tx: Tx) => Promise<T>): Promise<T>;
   createArc(from: number, to: number, status?: string): Promise<string>;
@@ -110,6 +112,7 @@ export async function createHarness(): Promise<Harness> {
   const calls: Harness["calls"] = { advanceCheckGate: [], requestArcPlanApproval: [], createTask: [], createQuestion: [], requestApproval: [] };
   const ont: Harness["ontology"] = { linkedFacts: [], mentions: [], leaks: [], violations: [], canon: [], constraints: [] };
   const db = () => testDb.db as unknown as Db;
+  const episodeEnds: Harness["episodeEnds"] = new Map();
 
   /** raw SQL inside the caller's transaction when given (PGlite has one connection) */
   async function exec(text: string, tx?: Tx): Promise<any[]> {
@@ -176,6 +179,9 @@ export async function createHarness(): Promise<Harness> {
     },
     registerVersionAnnotator: () => undefined,
     registerIssueSink: (s: ManuscriptIssueSink) => void reg.safetySinks.push(s),
+    async getEpisodeEnd(_s: NovelScope, no: number) {
+      return episodeEnds.get(no) ?? null;
+    },
   };
   const ontology = {
     async getSetupLinkedFacts(_s: NovelScope, ids: string[]) {
@@ -250,6 +256,7 @@ export async function createHarness(): Promise<Harness> {
 
   let arcOrd = 0;
   const h: Harness = {
+    episodeEnds,
     testDb,
     platform,
     clock,

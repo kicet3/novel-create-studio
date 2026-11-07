@@ -13,6 +13,7 @@ import { mountManuscriptRoutes } from "./adapters/http/routes.js";
 import { mountReaderRoutes } from "./adapters/http/reader-routes.js";
 import { createTaskRegistrar } from "./application/agent-task.js";
 import { createContextSections } from "./application/context-sections.js";
+import { createHandoff } from "./application/handoff.js";
 import { createManuscriptService } from "./application/manuscript-service.js";
 import { createPlanning } from "./application/planning.js";
 import { createStructure } from "./application/structure.js";
@@ -44,17 +45,22 @@ export function createManuscriptModule(deps: ManuscriptModuleDeps): ServerModule
   const { service, internals } = createManuscriptService(ports);
   const getService = () => service;
   const structure = createStructure(internals, getService);
-  const planning = createPlanning(internals, getService, structure);
+  const handoff = createHandoff(ports);
+  const planning = createPlanning(internals, getService, structure, handoff);
   const writing = createWriting(internals, getService);
   service.requestArcPlanApproval = planning.requestArcPlanApproval;
   service.schedule = planning.schedule;
+  service.getEpisodeEnd = handoff.getEpisodeEnd;
   Object.assign(service, structure.service);
 
   // registrations (CONVENTIONS §6): context sections, task kinds, approval handlers, N3 hook
-  const sections = [...createContextSections(ports), structure.section];
+  const sections = [...createContextSections(ports), ...handoff.sections, structure.section];
   for (const s of sections) deps.agents.registerContextSection(s);
   const register = createTaskRegistrar(ports, sections);
   for (const h of [...planning.handlers, ...structure.handlers, ...writing.handlers]) register(h);
+  // 설계 추가 0019: summarize_episode (continuity_editor) + its triggers on episode transitions
+  deps.orchestration.registerTaskKind(deps.agents.defineAgentTask(handoff.handler));
+  reg.transitionHooks.push((ctx) => handoff.onTransition(ctx));
   const approvalHandlers = { ...planning.approvalHandlers, ...structure.approvalHandlers };
   for (const [type, handler] of Object.entries(approvalHandlers)) {
     deps.hitl.registerApprovalHandler(type as keyof typeof approvalHandlers, handler);
@@ -98,5 +104,9 @@ export function createManuscriptModule(deps: ManuscriptModuleDeps): ServerModule
       mountReaderRoutes(r, { service, novel: deps.novel, db: deps.platform.uow.db });
     },
     loops: [{ name: "manuscript.scheduler", intervalMs: 30_000, wakeOn: ["wake", "task"], tick }],
+    // 설계 추가 0019: approved episodes without a handoff / summary of their latest text get one (once per version)
+    async start() {
+      await handoff.backfillAll();
+    },
   };
 }

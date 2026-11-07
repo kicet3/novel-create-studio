@@ -20,6 +20,10 @@ export const SECTION_RANK: Readonly<Record<ContextSectionKind, number>> = {
   cast: 3,
   story_plan: 2,
   world: 3,
+  // 설계 추가 0019: the previous episode's end state is required for continuing the story; the story so far is
+  // dropped before canon_1hop but after glossary / 2-hop / candidates / recent_text
+  prev_handoff: 2,
+  story_so_far: 5,
 };
 
 export const SECTION_TITLE: Readonly<Record<ContextSectionKind, string>> = {
@@ -39,6 +43,8 @@ export const SECTION_TITLE: Readonly<Record<ContextSectionKind, string>> = {
   cast: "캐릭터 설정 (확정)",
   story_plan: "작품 구성 (결말·부·플롯·이번 화 계획)",
   world: "세계관 온톨로지 (승인된 설정 + 미확정 후보 표시)",
+  prev_handoff: "직전 화 끝 상태",
+  story_so_far: "지금까지의 줄거리",
 };
 
 /** only ranks 4–7 may be dropped (04 §9.5) */
@@ -60,13 +66,14 @@ export type BudgetDecision<T extends BudgetItem> = { ok: true; kept: T[]; droppe
 /**
  * Keep everything if it fits; otherwise drop droppable sections from the lowest priority (rank 7 → 4),
  * larger sections first within a rank. Ranks 1–3 alone over the limit → not ok (FR-AGT-10: never cut silently).
+ * `keep` (설계 추가 0019): sections the run marked as required are never dropped (e.g. recent_text for outline / draft).
  */
-export function fitSections<T extends BudgetItem>(items: T[], headerTokens: number, max: number): BudgetDecision<T> {
+export function fitSections<T extends BudgetItem>(items: T[], headerTokens: number, max: number, keep: readonly ContextSectionKind[] = []): BudgetDecision<T> {
   let total = headerTokens + items.reduce((s, i) => s + i.tokenEstimate, 0);
   if (total <= max) return { ok: true, kept: items, dropped: [], total };
   const order = items
     .map((it, idx) => ({ it, idx }))
-    .filter(({ it }) => isDroppable(it.section))
+    .filter(({ it }) => isDroppable(it.section) && !keep.includes(it.section))
     .sort((a, b) => SECTION_RANK[b.it.section] - SECTION_RANK[a.it.section] || b.it.tokenEstimate - a.it.tokenEstimate);
   const droppedIdx = new Set<number>();
   for (const { it, idx } of order) {

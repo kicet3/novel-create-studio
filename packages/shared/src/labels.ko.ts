@@ -177,6 +177,7 @@ export const LABELS_KO = {
     resolve_entities: "엔티티 판정 정리",
     adjust_length: "분량 맞추기",
     revision_chat_turn: "수정 대화",
+    summarize_episode: "화 정리(이어 쓰기)",
   }),
   task_status: labels("task_status", {
     pending: "대기",
@@ -415,6 +416,7 @@ export const LABELS_KO = {
     safety_minor_sexual: "미성년 성적 묘사",
     safety_real_person: "실존 인물",
     plan_deviation: "기획 이탈",
+    opening_continuity: "직전 화와 이어짐",
   }),
   issue_severity: labels("issue_severity", { high: "높음", medium: "중간", low: "낮음" }),
   continuity_issue_status: labels("continuity_issue_status", {

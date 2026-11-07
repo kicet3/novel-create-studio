@@ -174,6 +174,7 @@ export function basePriority(kind: TaskKind): number {
       return 900;
     case "plan_rework":
     case "revise_episode":
+    case "summarize_episode": // 설계 추가 0019: above the outline's reserve-scaled priority (max 750 at the default reserve)
       return 800;
     case "check_continuity":
     case "check_setups":

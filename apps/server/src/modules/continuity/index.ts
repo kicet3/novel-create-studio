@@ -26,6 +26,8 @@ export interface IssueEvidenceInput {
   glossaryTermId?: string | null;
   /** 설계 추가: plot (arc) of a plan_deviation issue */
   arcId?: string | null;
+  /** 설계 추가 0019: previous episode's text version of an opening_continuity issue */
+  manuscriptVersionId?: string | null;
   /** schema rule (CR-09~11) — stored on the evidence row */
   schemaRuleKey?: string | null;
   /** short quote / note (stored as evidence note; never copied to the audit log) */

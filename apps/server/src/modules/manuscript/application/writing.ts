@@ -58,18 +58,41 @@ import { settings, soft } from "./support.js";
 import { structureGateRef } from "./structure.js";
 
 type In = EpisodeTaskInput;
-const WRITING_SECTIONS: ContextSectionKind[] = ["instruction", "constraints", "story_plan", "assigned_beats", "outline", "cast", "entity_cards", "pov_names", "knowledge", "canon_1hop", "glossary", "recent_text"];
+const WRITING_SECTIONS: ContextSectionKind[] = [
+  "instruction",
+  "constraints",
+  "story_plan",
+  "assigned_beats",
+  "outline",
+  "prev_handoff",
+  "cast",
+  "entity_cards",
+  "pov_names",
+  "knowledge",
+  "canon_1hop",
+  "story_so_far",
+  "glossary",
+  "recent_text",
+];
+/** 설계 추가 0019: the outline / draft of episode N must see how N-1 ended — never dropped by the token budget */
+export const CONTINUITY_KEEP_SECTIONS: readonly ContextSectionKind[] = ["recent_text", "prev_handoff"];
+const KEEP_FOR: readonly TaskKind[] = ["outline_episode", "draft_episode"];
 
 const OUTLINE_INSTRUCTION = `당신은 웹소설 기획자(planner)입니다. 이번 화 아웃라인을 JSON으로 씁니다.
 - scenes[]마다 key(s1, s2 …)·summary·pov_entity_id·location_entity_id·participant_entity_ids·setup_beat_ids를 채웁니다. 엔티티는 ID로만 참조합니다.
 - 배정된 떡밥 비트는 모두 한 씬 이상에 배정합니다. 새 인물은 new_entity_proposals에 이름만 제안합니다.
 - 씬 수는 [작품 구성]의 이번 화 계획 씬 수를 따르고, 계획한 플롯 사건과 현재 부 목표를 벗어나지 않습니다.
-- target_chars는 이번 화 목표 분량(최소~최대 분량 사이)입니다. 아직 등장 전인 인물은 등장시키지 않습니다.`;
+- target_chars는 이번 화 목표 분량(최소~최대 분량 사이)입니다. 아직 등장 전인 인물은 등장시키지 않습니다.
+- 2화부터 첫 씬(s1)은 '직전 화 끝 상태'와 '직전 내용'의 마지막 장면에서 바로 이어집니다(시간·장소·등장 인물·몸과 마음 상태·열린 행동). 앞 화를 다시 요약하는 씬을 만들지 않고, 직전 화 끝 상태와 어긋나게 시작하지 않습니다.
+- 이번 화 계획상 시간·장소를 건너뛰어야 하면 s1 summary 첫머리에 그 전환(얼마 뒤·어디로·무엇이 정리됐는지)을 밝힙니다.`;
 const DRAFT_INSTRUCTION = `당신은 웹소설 작가(writer)입니다. 아웃라인의 씬을 순서대로 본문으로 씁니다.
 - 씬과 씬 사이에는 "${SCENE_SEPARATOR}" 한 줄만 둡니다. 다른 표기·주석은 넣지 않습니다.
 - 작품 연령 등급을 넘는 묘사를 쓰지 않습니다. 시점 인물이 모르는 이름은 쓰지 않습니다.
 - 분량은 허용 범위(최소~최대) 안에서 목표 분량에 맞춥니다. 최소 분량에 못 미치거나 최대 분량을 넘기지 않습니다.
-- [작품 구성]의 결말·현재 부 목표·플롯 핵심 사건·이번 화 계획을 벗어나지 않습니다.`;
+- [작품 구성]의 결말·현재 부 목표·플롯 핵심 사건·이번 화 계획을 벗어나지 않습니다.
+- 2화부터 첫 씬 첫 문단은 직전 화 마지막 장면에서 자연스럽게 이어집니다('직전 화 끝 상태'·'직전 내용'의 시간·장소·등장 인물·몸과 마음 상태·열린 행동).
+- 앞 화 줄거리를 되풀이하는 요약·회상 문단으로 시작하지 않습니다. 직전 화 끝 상태와 모순되게 쓰지 않습니다(다친 인물이 멀쩡하거나, 함께 있던 인물이 설명 없이 사라지는 등).
+- 아웃라인이 시간·장소를 건너뛰면 첫 문단에서 그 전환(얼마 뒤·어디로)을 분명히 밝힙니다.`;
 const CONTINUE_INSTRUCTION = `당신은 웹소설 작가(writer)입니다. 이 화의 초고가 최소 분량보다 짧습니다. 지금까지 쓴 본문 바로 뒤에 이어질 본문만 씁니다.
 - 앞 내용을 반복하거나 요약하지 않고, 이미 쓴 씬을 처음부터 다시 쓰지 않습니다. 아웃라인의 남은 씬을 이어서 쓰고, 씬이 바뀌면 "${SCENE_SEPARATOR}" 한 줄을 둡니다.
 - 부족한 분량만큼만 씁니다. 화 전체가 최대 분량을 넘지 않게 합니다.
@@ -118,7 +141,7 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
     return [...ids];
   };
 
-  const episodeContext = async (input: In, task: { novelId: string }) => {
+  const episodeContext = async (input: In, task: { novelId: string; kind?: TaskKind }) => {
     const scope = { novelId: task.novelId };
     const ep = await repo.getEpisode(db(), scope, input.episode_id);
     if (!ep) return null;
@@ -130,11 +153,25 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       episodeId: ep.id,
       manuscriptVersionId: versionId,
       seeds: { entityIds, setupIds: [], answerIds: input.answer_ids ?? [], mentionIds: [] },
+      ...(task.kind && KEEP_FOR.includes(task.kind) ? { keepSections: [...CONTINUITY_KEEP_SECTIONS] } : {}),
     };
   };
 
   /** E1 guard (INV-BIB-02, INV-ARC-02) as a pre-lease gate */
-  const planningGate = async (scope: NovelScope, task: { input: unknown }) => {
+  /**
+   * 설계 추가 0019: N's outline waits (defer, not block) while a summarize_episode of N-1 is queued / running, so the
+   * outline context carries N-1's handoff + summary. A failed / cancelled / blocked recap does not hold the outline —
+   * the outline then continues from recent_text (N-1's raw ending) alone.
+   */
+  const recapPending = async (scope: NovelScope, ep: { episodeNo: number }) => {
+    if (ep.episodeNo <= 1 || !ports.isRegistered("summarize_episode")) return false;
+    const prev = await repo.getEpisodeByNo(db(), scope, ep.episodeNo - 1);
+    if (!prev) return false;
+    const active = await ports.deps.orchestration.listTasks(scope, { kinds: ["summarize_episode"], episodeId: prev.id, statuses: ["pending", "ready", "running"], limit: 5 });
+    return active.length > 0;
+  };
+
+  const planningGate = async (scope: NovelScope, task: { input: unknown; kind?: TaskKind }) => {
     const input = episodeTaskInputSchema.safeParse(task.input);
     if (!input.success) return { ok: true as const };
     const ep = await repo.getEpisode(db(), scope, input.data.episode_id);
@@ -151,6 +188,7 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
         ? { ok: false as const, blockReason: "approval" as const, blockedRef: { refType: "approval" as const, refId: arc.planApprovalId } }
         : { ok: false as const, blockReason: "approval" as const };
     }
+    if (task.kind === "outline_episode" && (await recapPending(scope, ep))) return { ok: false as const, defer: true as const };
     return { ok: true as const };
   };
 

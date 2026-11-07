@@ -668,6 +668,7 @@ export function createOrchestrationEngine(deps: EngineDeps): OrchestrationEngine
     if (task.arcId && (await novel.getArc(scope, task.arcId)).pausedAt) return null;
     if (handler.gate) {
       const g = await handler.gate(scope, task);
+      if (!g.ok && g.defer) return null; // stays ready: re-evaluated next tick
       if (!g.ok) {
         await blockReady(task, g.blockReason, g.blockedRef ? { refType: g.blockedRef.refType, refId: g.blockedRef.refId } : null, SYS);
         return null;

@@ -232,7 +232,7 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder &
     }
 
     const system = headerText(n, run) + (entityIds.length ? "\n\n엔티티는 이름 대신 핸들(E1, E2 …)로 가리킵니다. 핸들은 이 컨텍스트 안에서만 유효합니다." : "");
-    const decision = fitSections(built, estimateTokens(system), spec.maxInputTokens);
+    const decision = fitSections(built, estimateTokens(system), spec.maxInputTokens, spec.keepSections ?? []);
     if (!decision.ok) {
       throw new TaskFailure("internal", `컨텍스트 상한 초과: 필수 섹션만으로 ${decision.required} 토큰이 필요하지만 상한은 ${decision.max} 토큰입니다.`, false);
     }
