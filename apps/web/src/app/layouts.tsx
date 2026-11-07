@@ -97,11 +97,6 @@ export function NovelLayout() {
           <AutopilotBanner novelId={novelId} autonomyLevel={novel.data.autonomyLevel} timezone={novel.data.timezone} compact />
         </div>
       )}
-      {!home && novel.data?.autonomyLevel === "full_auto" && (
-        <div className="mb-3">
-          <AutopilotBanner novelId={novelId} autonomyLevel={novel.data.autonomyLevel} timezone={novel.data.timezone} compact />
-        </div>
-      )}
       <Outlet />
     </AppShell>
   );

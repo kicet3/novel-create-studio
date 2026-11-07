@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { atBottom } from "./chat-scroll.js";
 import { labelKo, type ConceptMessageDto, type ConceptSessionViewDto } from "@ncs/shared";
 import { errorMessage } from "../../api/client.js";
 import { Avatar, Badge, Button, Callout, Checkbox, Field, formatDateTime, Kbd, Spinner, Textarea, WebSources } from "../../components/ui/index.js";
@@ -50,11 +51,29 @@ export function ChatPanel({
   /** 자동 승인 중에는 보낸 메시지를 대기열에 넣습니다(서버가 지금 답 다음에 먼저 반영) */
   const locked = sendLocked(busy, auto, importMode) || post.isPending;
 
-  useEffect(() => {
+  /**
+   * Follow new messages / the growing live reply only while the reader is at the bottom. `pinned` is tracked from the
+   * reader's own scrolling (not re-measured after the content grew), so polling, auto-approve turns and streaming never
+   * yank the log back down while someone is reading older messages.
+   */
+  const pinned = useRef(true);
+  const [unseen, setUnseen] = useState(false);
+  const toBottom = () => {
     const el = logRef.current;
     if (!el) return;
-    // follow the growing live reply only while the reader is already at the bottom
-    if (el.scrollHeight - el.scrollTop - el.clientHeight < 120 || !liveVisible) el.scrollTop = el.scrollHeight;
+    el.scrollTop = el.scrollHeight;
+    pinned.current = true;
+    setUnseen(false);
+  };
+  const onLogScroll = () => {
+    const el = logRef.current;
+    if (!el) return;
+    pinned.current = atBottom(el.scrollHeight, el.scrollTop, el.clientHeight);
+    if (pinned.current) setUnseen(false);
+  };
+  useEffect(() => {
+    if (pinned.current) toBottom();
+    else setUnseen(true);
   }, [lastSeq, thinking, live.text, liveVisible]);
 
   const lastAgent = [...messages].reverse().find((m) => m.authorKind === "agent" && !m.isSuperseded);
@@ -63,12 +82,12 @@ export function ChatPanel({
   const send = () => {
     const body = draft.trim();
     if (!body || locked) return;
-    post.mutate({ body, kind: importMode ? "import_text" : "text" }, { onSuccess: () => { setDraft(""); setImportMode(false); } });
+    post.mutate({ body, kind: importMode ? "import_text" : "text" }, { onSuccess: () => { setDraft(""); setImportMode(false); toBottom(); } });
   };
 
   const pick = (m: ConceptMessageDto, o: NonNullable<ConceptMessageDto["options"]>[number]) => {
     if (o.source === "control" && o.idx === 900) {
-      inputRef.current?.focus();
+      inputRef.current?.focus({ preventScroll: true });
       return;
     }
     if (busy) return;
@@ -148,7 +167,7 @@ export function ChatPanel({
           )}
         </div>
       )}
-      <div ref={logRef} role="log" aria-live="polite" aria-label="대화 기록" tabIndex={0} className="flex max-h-[60dvh] min-h-[280px] flex-1 flex-col gap-3 overflow-y-auto px-4 py-3 min-[861px]:max-h-none min-[861px]:min-h-0">
+      <div ref={logRef} onScroll={onLogScroll} role="log" aria-live="polite" aria-label="대화 기록" tabIndex={0} className="flex max-h-[60dvh] min-h-[280px] flex-1 flex-col gap-3 overflow-y-auto px-4 py-3 min-[861px]:max-h-none min-[861px]:min-h-0">
         {messages.length === 0 && <p className="m-0 text-[13px] text-muted">컨셉 파트너가 첫 질문을 준비하고 있습니다.</p>}
         {messages.map((m) => (
           <MessageBubble key={m.id} m={m} timezone={timezone} highlight={m.id === highlightId} pickable={pickable?.id === m.id && !post.isPending} onPick={(o) => pick(m, o)} />
@@ -160,6 +179,13 @@ export function ChatPanel({
           </p>
         )}
       </div>
+      {unseen && (
+        <div className="relative">
+          <Button size="sm" className="absolute -top-10 left-1/2 -translate-x-1/2 shadow-card" onClick={toBottom}>
+            새 메시지 ↓
+          </Button>
+        </div>
+      )}
       {/* screen readers: one announcement per turn state, not per token (the final message is read by the log) */}
       <p role="status" className="sr-only">
         {thinking ? "컨셉 파트너가 답변을 작성하고 있습니다. 답변이 끝나면 메시지를 보낼 수 있습니다." : ""}

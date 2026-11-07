@@ -695,6 +695,14 @@ export function createAutopilotService(deps: AutopilotDeps): { service: Autopilo
     const recent = await audit.list(scope, { actionPrefix: "autopilot.", limit: 30 });
     const active = isActive(n);
     const phase: AutopilotView["phase"] = n.autonomyLevel !== "full_auto" ? "off" : n.autopilotHaltedAt ? "halted" : n.pausedAt ? "paused" : (st.phase ?? "off");
+    const started = await startedToday(scope, n, at);
+    // the scheduler stops starting new episodes at the daily cap (manuscript planning) without a stored throttle:
+    // surface it so the banner says "내일 이어 갑니다" instead of "진행 중 · 다음: 6화 아웃라인 대기"
+    const waitingPlanned = eps.some((e) => e.status === "planned") && !eps.some((e) => ["outlining", "drafting", "checking", "polishing", "revising"].includes(e.status));
+    const capThrottle =
+      n.autonomyLevel === "full_auto" && !n.autopilotHaltedAt && started >= s.maxEpisodesPerDay && waitingPlanned
+        ? { until: nextLocalMidnight(at, n.timezone).toISOString(), reason: "daily_episodes" as const }
+        : null;
     return {
       active,
       level: n.autonomyLevel,
@@ -706,9 +714,9 @@ export function createAutopilotService(deps: AutopilotDeps): { service: Autopilo
       next: n.autonomyLevel === "full_auto" ? (st.next ?? null) : null,
       waitingHuman: n.autonomyLevel === "full_auto" ? (st.waiting ?? []) : [],
       scheduled: n.autonomyLevel === "full_auto" ? (st.scheduled ?? []) : [],
-      throttle: throttled(st, at) ?? null,
+      throttle: throttled(st, at) ?? capThrottle,
       today: {
-        startedEpisodes: await startedToday(scope, n, at),
+        startedEpisodes: started,
         maxEpisodes: s.maxEpisodesPerDay,
         approvedEpisodes: eps.filter((e) => e.approvedAt && e.approvedAt.getTime() >= since.getTime()).length,
         spentMicros: events.reduce((m, e) => m + Number(e.amountMicros ?? 0), 0),

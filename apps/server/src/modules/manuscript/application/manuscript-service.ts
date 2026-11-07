@@ -518,13 +518,15 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
     if (pre.status !== "checking" || !pre.currentVersionId) return { kind: "not_checking" };
     const tasks = await listCheckTasks(scope, pre, pre.currentVersionId);
     return uow.run(async (tx) => {
-      const ep = await mustEpisode(tx, scope, episodeId, true);
+      let ep = await mustEpisode(tx, scope, episodeId, true);
       if (ep.status !== "checking" || ep.currentVersionId !== pre.currentVersionId) return { kind: "not_checking" } as const;
+      const extractionFailed = tasks.failed.some((k) => ["split_scenes", "extract_facts", "link_mentions"].includes(k));
       if (tasks.failed.length) {
-        const extraction = tasks.failed.some((k) => ["split_scenes", "extract_facts", "link_mentions"].includes(k));
-        if (extraction && !ep.blockReasons.includes("extraction_failure")) await setBlock(tx, scope, ep, "extraction_failure", true, orchestrator);
+        if (extractionFailed && !ep.blockReasons.includes("extraction_failure")) await setBlock(tx, scope, ep, "extraction_failure", true, orchestrator);
         return { kind: "wait", reason: `failed: ${tasks.failed.join(",")}` } as const;
       }
+      // a retried split/extract/link task succeeded: the "사실 추출 실패" block is stale
+      if (ep.blockReasons.includes("extraction_failure")) ep = await setBlock(tx, scope, ep, "extraction_failure", false, orchestrator);
       const verdicts = await evaluateContributors(scope, ep, ep.currentVersionId!, tx);
       const d = decideGate({ tasksPending: tasks.pending, verdicts, autoRewriteCount: ep.autoRewriteCount, maxAutoRewrites: cfg.maxAutoRewrites });
       if (d.kind === "wait") return d;
