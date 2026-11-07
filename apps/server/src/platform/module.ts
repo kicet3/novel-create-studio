@@ -23,6 +23,7 @@ export const MODULE_NAMES = [
   "continuity",
   "concept",
   "export",
+  "publication",
   "imaging",
   "cast",
   "world",

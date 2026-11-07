@@ -16,6 +16,7 @@ import { NovelBasicsSection } from "./sections/NovelBasicsSection.js";
 import { WebSearchSection } from "./sections/WebSearchSection.js";
 import { EntityResolutionSection } from "./sections/EntityResolutionSection.js";
 import { SequentialEpisodesSection } from "./sections/SequentialEpisodesSection.js";
+import { PublicSiteSection } from "./sections/PublicSiteSection.js";
 
 /** `/novels/:novelId/settings` — 작품 단위 설정 (08 §9.8, FR-UI-09). 모든 변경은 감사 로그에 남습니다. */
 export function NovelSettingsPage() {
@@ -48,6 +49,7 @@ export function NovelSettingsPage() {
               <ChannelsSection novelId={novelId} timezone={n.timezone} />
               <HealthChecksSection novelId={novelId} timezone={n.timezone} />
               <NotificationSection novelId={novelId} />
+              <PublicSiteSection novelId={novelId} />
             </div>
             <div className="min-w-0 min-[861px]:col-span-2">
               <ModelBindingsSection novelId={novelId} />

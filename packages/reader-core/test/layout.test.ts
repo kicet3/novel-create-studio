@@ -14,7 +14,7 @@ import {
   scrollYForAnchor,
   swipeAction,
   tapZone,
-} from "./reader-layout.js";
+} from "../src/layout.js";
 
 describe("page geometry", () => {
   it("fits a phone edge to edge minus the side margin", () => {

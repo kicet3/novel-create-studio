@@ -9,5 +9,5 @@
   },
   "include": ["src/**/*.ts", "src/**/*.json"],
   "exclude": ["src/**/*.test.ts"],
-  "references": [{ "path": "../../packages/shared" }, { "path": "../../packages/db" }]
+  "references": [{ "path": "../../packages/shared" }, { "path": "../../packages/db" }, { "path": "../../packages/reader-core" }]
 }

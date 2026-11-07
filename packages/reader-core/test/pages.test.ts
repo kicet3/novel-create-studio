@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { insertBlocks, readingBlocks, type ReadingBlock } from "./reader-model.js";
+import { insertBlocks, readingBlocks, type ReadingBlock } from "../src/model.js";
 import {
   anchorForPage,
   estimatePageChars,
@@ -11,7 +11,7 @@ import {
   wordBoundaries,
   type PageItem,
   type ReaderPage,
-} from "./reader-pages.js";
+} from "../src/pages.js";
 
 const para = (n: number, sentence = "가나다라마바사아자차카타파하 거너더러머버서어저처커터퍼허다. ") => {
   let s = "";

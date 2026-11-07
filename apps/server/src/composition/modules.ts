@@ -27,6 +27,7 @@ import { createCastModule, type CastService } from "../modules/cast/index.js";
 import { createWorldModule, type WorldService } from "../modules/world/index.js";
 import { createAutopilotModule, type AutopilotService } from "../modules/autopilot/index.js";
 import { createRevisionModule, type RevisionService } from "../modules/revision/index.js";
+import { createPublicationModule, type PublicationService } from "../modules/publication/index.js";
 
 export interface Modules {
   audit: ServerModule<AuditService>;
@@ -45,6 +46,8 @@ export interface Modules {
   continuity: ServerModule<ContinuityService>;
   concept: ServerModule<ConceptService>;
   export: ServerModule<ExportService>;
+  /** 설계 추가 0021: 공개 사이트 정적 스냅숏(공개된 화만) */
+  publication: ServerModule<PublicationService>;
   imaging: ServerModule<ImagingService>;
   cast: ServerModule<CastService>;
   world: ServerModule<WorldService>;
@@ -145,6 +148,7 @@ export function buildModules({ platform, runtime, databaseMode, database, llmAda
     hitl: hitl.service,
   });
   const exportModule = createExportModule({ platform, audit: a, novel: n, manuscript: manuscript.service });
+  const publication = createPublicationModule({ platform, audit: a, novel: n, manuscript: manuscript.service });
   const imaging = createImagingModule({ platform, audit: a, novel: n, budget: budget.service, llm: llm.service });
   // 설계 추가: 세계관 온톨로지 (N2 → build_world_ontology); before cast so the cast draft can read it
   const world = createWorldModule({ platform, audit: a, novel: n, ontology: ontology.service, orchestration: o, agents: agents.service, llm: llm.service, concept: concept.service });
@@ -205,6 +209,7 @@ export function buildModules({ platform, runtime, databaseMode, database, llmAda
     continuity,
     concept,
     export: exportModule,
+    publication,
     imaging,
     cast,
     world,

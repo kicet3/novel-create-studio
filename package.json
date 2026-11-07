@@ -17,7 +17,9 @@
     "test:supabase": "vitest run --config vitest.supabase.config.ts",
     "lint": "pnpm -r run typecheck",
     "db:check-embedded": "pnpm --filter @ncs/db run check-embedded",
-    "ncs": "pnpm --filter @ncs/cli dev --"
+    "ncs": "pnpm --filter @ncs/cli dev --",
+    "public:build": "pnpm --filter @ncs/public-reader... build",
+    "public:serve": "pnpm --filter @ncs/public-reader serve"
   },
   "devDependencies": {
     "@types/node": "^22.19.0",

@@ -71,6 +71,8 @@ export const ACTIVITY_ACTIONS = [
   // 설계 추가 0018: 화별 수정 대화(module revision)
   "revision_chat.proposal_accepted", "revision_chat.proposal_rejected", "revision_chat.setting_change_requested",
   "revision_chat.setting_changed", "revision_chat.author_note_saved", "revision_chat.handed_off", "revision_chat.closed",
+  // 설계 추가 0021: 공개 사이트(module publication)
+  "publication.settings_changed",
 ] as const;
 
 export type ActivityAction = (typeof ACTIVITY_ACTIONS)[number];

@@ -10,6 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@ncs/reader-core": "workspace:*",
     "@ncs/shared": "workspace:*",
     "@tanstack/react-query": "^5.106.1",
     "pretendard": "^1.3.9",

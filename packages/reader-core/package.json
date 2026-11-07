@@ -1,0 +1,21 @@
+{
+  "name": "@ncs/reader-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Pure, UI-framework-agnostic reader logic shared by the studio reader (apps/web) and the public reader (apps/public-reader).",
+  "exports": {
+    ".": { "@ncs/source": "./src/index.ts", "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+    "./model": { "@ncs/source": "./src/model.ts", "types": "./dist/model.d.ts", "default": "./dist/model.js" },
+    "./pages": { "@ncs/source": "./src/pages.ts", "types": "./dist/pages.d.ts", "default": "./dist/pages.js" },
+    "./layout": { "@ncs/source": "./src/layout.ts", "types": "./dist/layout.d.ts", "default": "./dist/layout.js" },
+    "./snapshot": { "@ncs/source": "./src/snapshot.ts", "types": "./dist/snapshot.d.ts", "default": "./dist/snapshot.js" },
+    "./themes.css": "./src/themes.css"
+  },
+  "files": ["dist", "src/themes.css"],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json",
+    "test": "vitest run --project reader-core"
+  }
+}

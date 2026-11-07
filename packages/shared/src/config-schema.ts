@@ -192,6 +192,8 @@ export const installConfigSchema = z
       })
       .prefault({}),
     auth: z.object({ session_secret_id: z.string().optional() }).prefault({}),
+    /** 설계 추가 0021: 공개 사이트 정적 스냅숏(공개된 화만) 출력 폴더 (default `<home>/public-site/data`) */
+    public_site: z.object({ output_dir: z.string().min(1).optional() }).prefault({}),
     logging: z
       .object({
         level: z.enum(["trace", "debug", "info", "warn", "error", "fatal", "silent"]).default("info"),
@@ -368,6 +370,7 @@ export function installConfigFromEnv(env: Record<string, string | undefined>): I
   if (env.NCS_CLAUDE_MAX_CONCURRENT) set("llm", "claude_code", { max_concurrent: Number(env.NCS_CLAUDE_MAX_CONCURRENT) });
   if (env.NCS_LLM_CALL_TIMEOUT_SECONDS) set("llm", "call_timeout_seconds", Number(env.NCS_LLM_CALL_TIMEOUT_SECONDS));
   if (env.NCS_LOG_LEVEL) set("logging", "level", env.NCS_LOG_LEVEL);
+  if (env.NCS_PUBLIC_SITE_DATA_DIR) set("public_site", "output_dir", env.NCS_PUBLIC_SITE_DATA_DIR);
   if (env.NCS_SECRETS_MASTER_KEY_FILE) set("secrets", "master_key_file", env.NCS_SECRETS_MASTER_KEY_FILE);
   return out as InstallConfigInput;
 }
@@ -391,6 +394,11 @@ export function mergeConfigLayers(...layers: Array<InstallConfigInput | undefine
 
 export function parseInstallConfig(input: unknown): InstallConfig {
   return installConfigSchema.parse(input ?? {});
+}
+
+/** 공개 사이트 스냅숏 폴더: explicit config, else `<home>/public-site/data`. `~` is NOT expanded here. */
+export function resolvePublicSiteDataDir(cfg: InstallConfig): string {
+  return cfg.public_site.output_dir ?? `${cfg.home.replace(/\/+$/, "")}/public-site/data`;
 }
 
 /** Embedded PG data dir: explicit config, else `<home>/data/pg`. `~` is NOT expanded here (no fs/os access). */

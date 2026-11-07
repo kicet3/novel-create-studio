@@ -2,6 +2,7 @@
   "files": [],
   "references": [
     { "path": "packages/shared" },
+    { "path": "packages/reader-core" },
     { "path": "packages/db" },
     { "path": "packages/test-kit" },
     { "path": "apps/server" },

@@ -18,6 +18,8 @@ export default defineConfig({
       { ...shared, test: { name: "test-kit", root: "packages/test-kit", include: ["test/**/*.test.ts"], passWithNoTests: true } },
       { ...shared, test: { name: "server", root: "apps/server", include: ["test/**/*.test.ts"], passWithNoTests: true, testTimeout: 60_000 } },
       { ...shared, test: { name: "cli", root: "apps/cli", include: ["test/**/*.test.ts"], passWithNoTests: true } },
+      { ...shared, test: { name: "reader-core", root: "packages/reader-core", include: ["test/**/*.test.ts"] } },
+      { ...shared, test: { name: "public-reader", root: "apps/public-reader", include: ["src/**/*.test.{ts,tsx}", "server/**/*.test.ts"] } },
       { ...shared, test: { name: "web", root: "apps/web", include: ["src/**/*.test.{ts,tsx}"], passWithNoTests: true } },
     ],
   },

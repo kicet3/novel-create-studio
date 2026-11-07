@@ -1,6 +1,10 @@
 # deps / build
 node_modules/
 dist/
+dist-server/
+*.db
+*.db-wal
+*.db-shm
 coverage/
 *.tsbuildinfo
 .vite/
@@ -55,7 +59,3 @@ tmp/
 .idea/
 .vscode/
 *.swp
-
-# Claude Code local state (agent worktrees, local settings)
-.claude/worktrees/
-.claude/settings.local.json

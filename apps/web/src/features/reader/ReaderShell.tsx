@@ -38,6 +38,7 @@ import {
   type ReaderSolidTheme,
   type TocRowKind,
 } from "./reader-model.js";
+import "@ncs/reader-core/themes.css";
 import "./reader.css";
 
 export function browserStore(): KeyValueStore | null {

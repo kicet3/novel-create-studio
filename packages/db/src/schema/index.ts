@@ -15,6 +15,7 @@ export * from "./manuscript.js";
 export * from "./messaging.js";
 export * from "./novel.js";
 export * from "./ontology.js";
+export * from "./publication.js";
 export * from "./orchestration.js";
 export * from "./revision.js";
 export * from "./system.js";
