@@ -14,14 +14,26 @@ export const metadata: Metadata = {
   alternates: { canonical: "/" },
 };
 
+/** schema not created yet (studio never synced) or DB unreachable → a calm "준비 중" instead of a 500 */
+async function loadNovels(): Promise<Awaited<ReturnType<typeof cachedNovelList>> | null> {
+  try {
+    return await cachedNovelList();
+  } catch (err) {
+    const code = (err as { code?: string } | null)?.code ?? "unknown";
+    console.error(`[snowpage] novel list unavailable (code ${code})`); // no message: it may contain connection details
+    return null;
+  }
+}
+
 export default async function NovelListPage() {
-  const novels = await cachedNovelList();
+  const loaded = await loadNovels();
+  const novels = loaded ?? [];
   return (
     <div className="pr-page">
       <AppHeader />
       <main className="pr-main" id="main">
         <h1 className="pr-h1">작품</h1>
-        {!novels.length && <Message>아직 공개된 작품이 없습니다.</Message>}
+        {loaded === null ? <Message>사이트를 준비하고 있습니다. 잠시 후 다시 들러 주세요.</Message> : !novels.length && <Message>아직 공개된 작품이 없습니다.</Message>}
         <ul className="pr-novel-grid">
           {novels.map((n) => (
             <li key={n.slug}>
