@@ -112,7 +112,7 @@ describe("install settings → 모델: profile model edits", () => {
     await t.http("PATCH", `/api/novels/${novelId}/model-bindings/scene_director`, { modelId: "claude-sonnet-5-5" });
     const reset = await t.http("POST", `/api/llm/provider-profiles/${add.body.id}/reset-models`);
     expect(reset.status).toBe(200);
-    expect(reset.body.models.map((x: { id: string }) => x.id)).toEqual(["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]);
+    expect(reset.body.models.map((x: { id: string }) => x.id)).toEqual(["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"]);
     expect(reset.body.versionNo).toBe(add.body.versionNo + 1);
   });
 });

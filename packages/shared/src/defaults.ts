@@ -238,6 +238,11 @@ export const DEFAULT_MODELS = {
   haiku: "claude-haiku-5-5",
 } as const;
 
+/** Claude models offered in addition to the defaults (selectable, never a default binding). Fable 5.1 = top tier. */
+export const EXTRA_CLAUDE_MODELS = {
+  fable: "claude-fable-5-1",
+} as const;
+
 // ── Money (ADR-016): micro-USD integers ──
 export const MICROS_PER_USD = 1_000_000;
 

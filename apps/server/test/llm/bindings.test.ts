@@ -15,7 +15,7 @@ describe("llm HTTP: provider profiles, bindings, connection test", () => {
     const r = await t.http("GET", "/api/llm/provider-profiles");
     expect(r.status).toBe(200);
     const claude = r.body.items.find((p: { provider: string; isActive: boolean }) => p.provider === "anthropic" && p.isActive);
-    expect(claude.models.map((m: { id: string }) => m.id)).toEqual(["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]);
+    expect(claude.models.map((m: { id: string }) => m.id)).toEqual(["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1"]);
     expect(claude.models[0].input_price_micros_per_mtok).toBe(4_000_000);
     const llmProviders = new Set(r.body.items.filter((p: { providerKind?: string }) => (p.providerKind ?? "llm") === "llm").map((p: { provider: string }) => p.provider));
     expect([...llmProviders].sort()).toEqual(["anthropic", "claude_code", "google", "openai", "xai"]);

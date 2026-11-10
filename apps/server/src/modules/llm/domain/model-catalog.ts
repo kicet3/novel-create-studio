@@ -3,7 +3,7 @@
  * Every edit returns the NEW models list; the service stores it as a new profile version (INV-PP-01) so cost events
  * keep the version they were priced with.
  */
-import { DEFAULT_MODELS } from "@ncs/shared";
+import { DEFAULT_MODELS, EXTRA_CLAUDE_MODELS } from "@ncs/shared";
 import { DomainValidationError } from "../../../platform/index.js";
 import { defaultProfileModels, parseProfileModels, type ProfileModelEntry } from "./pricing.js";
 
@@ -103,6 +103,7 @@ export function claudeCliKnownModels(): Array<{ id: string; label: string }> {
     { id: DEFAULT_MODELS.opus, label: "Claude Opus 5.5" },
     { id: DEFAULT_MODELS.sonnet, label: "Claude Sonnet 5.5" },
     { id: DEFAULT_MODELS.haiku, label: "Claude Haiku 5.5" },
+    { id: EXTRA_CLAUDE_MODELS.fable, label: "Claude Fable 5.1 (최상위)" },
     { id: "opus", label: "opus (CLI 별칭: 최신 Opus)" },
     { id: "sonnet", label: "sonnet (CLI 별칭: 최신 Sonnet)" },
     { id: "fable", label: "fable (CLI 별칭: 최신 Fable)" },

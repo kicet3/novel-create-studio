@@ -3,8 +3,12 @@
  * Prices: micro-USD per 1M tokens (so cost_micros = tokens * price / 1e6).
  * Source: Anthropic pricing (claude-api reference, cached 2026-10-06):
  *   Opus 5.5 $4 / $20, Sonnet 5.5 $2 / $10, Haiku 5.5 $0.10 / $0.50 per MTok; cache reads Opus/Sonnet $0.20.
+ *   Fable 5.1 $10 / $50 per MTok, cache reads $0.25 (claude-api reference models.md, checked 2026-11-10).
  */
-import { DEFAULT_MODELS } from "@ncs/shared";
+import { DEFAULT_MODELS, EXTRA_CLAUDE_MODELS } from "@ncs/shared";
+
+/** every Claude id this version offers: the defaults + the extras (Fable 5.1) */
+export const CLAUDE_MODEL_IDS: readonly string[] = [...Object.values(DEFAULT_MODELS), ...Object.values(EXTRA_CLAUDE_MODELS)];
 
 export interface ModelPrice {
   input: number | null;
@@ -16,6 +20,7 @@ export const MODEL_PRICES_MICROS_PER_MTOK: Readonly<Record<string, ModelPrice>> 
   [DEFAULT_MODELS.opus]: { input: 4_000_000, output: 20_000_000, cachedInput: 200_000 },
   [DEFAULT_MODELS.sonnet]: { input: 2_000_000, output: 10_000_000, cachedInput: 200_000 },
   [DEFAULT_MODELS.haiku]: { input: 100_000, output: 500_000, cachedInput: 10_000 },
+  [EXTRA_CLAUDE_MODELS.fable]: { input: 10_000_000, output: 50_000_000, cachedInput: 250_000 },
 };
 
 /** Profile `models[]` entry as stored in provider_profiles.models (jsonb). */
@@ -34,6 +39,7 @@ export const MODEL_LIMITS: Readonly<Record<string, { maxOutputTokens: number; ma
   [DEFAULT_MODELS.opus]: { maxOutputTokens: 128_000, maxContextTokens: 1_000_000 },
   [DEFAULT_MODELS.sonnet]: { maxOutputTokens: 128_000, maxContextTokens: 1_000_000 },
   [DEFAULT_MODELS.haiku]: { maxOutputTokens: 128_000, maxContextTokens: 1_000_000 },
+  [EXTRA_CLAUDE_MODELS.fable]: { maxOutputTokens: 128_000, maxContextTokens: 1_000_000 },
 };
 
 const M = (usd: number) => Math.round(usd * 1_000_000);
@@ -76,6 +82,7 @@ const CLAUDE_MODEL_LABELS: Readonly<Record<string, string>> = {
   [DEFAULT_MODELS.opus]: "Claude Opus 5.5",
   [DEFAULT_MODELS.sonnet]: "Claude Sonnet 5.5",
   [DEFAULT_MODELS.haiku]: "Claude Haiku 5.5",
+  [EXTRA_CLAUDE_MODELS.fable]: "Claude Fable 5.1",
 };
 
 /**
@@ -84,7 +91,7 @@ const CLAUDE_MODEL_LABELS: Readonly<Record<string, string>> = {
  * provider_calls.usage.reportedCostMicros and shown as an estimate only.
  */
 export function claudeSubscriptionModels(): ProfileModelEntry[] {
-  return Object.values(DEFAULT_MODELS).map((id) => ({
+  return CLAUDE_MODEL_IDS.map((id) => ({
     id,
     label: `${CLAUDE_MODEL_LABELS[id] ?? id} (구독)`,
     input_price_micros_per_mtok: 0,
@@ -100,7 +107,7 @@ export function defaultProfileModels(provider: string): ProfileModelEntry[] {
   if (provider === "claude_code") return claudeSubscriptionModels();
   const other = PROVIDER_DEFAULT_MODELS[provider];
   if (other) return other.map((m) => ({ ...m }));
-  return Object.values(DEFAULT_MODELS).map((id) => {
+  return CLAUDE_MODEL_IDS.map((id) => {
     const p = MODEL_PRICES_MICROS_PER_MTOK[id]!;
     const lim = MODEL_LIMITS[id]!;
     return {
