@@ -21,6 +21,8 @@ export const episodes = pgTable(
     currentVersionId: text("current_version_id"),
     approvedVersionId: text("approved_version_id"),
     publishedVersionId: text("published_version_id"),
+    /** 설계 추가 0024: pending [문체 다듬기] candidate (a version that is not current; the author keeps or discards it) */
+    rhythmCandidateVersionId: text("rhythm_candidate_version_id"),
     rejectionCount: integer("rejection_count").notNull().default(0),
     autoRewriteCount: integer("auto_rewrite_count").notNull().default(0),
     lastReworkFrom: text("last_rework_from", { enum: ENUMS.rework_from }),
@@ -86,6 +88,8 @@ export const manuscriptVersions = pgTable(
     isFallbackModel: boolean("is_fallback_model").notNull().default(false),
     attributionSpans: jsonb("attribution_spans").$type<unknown>().notNull().default([]),
     writerAnnotations: jsonb("writer_annotations").$type<unknown>(),
+    /** 설계 추가 0024: 문장 리듬 지표 (+ [문체 다듬기] 후보 상태) */
+    rhythm: jsonb("rhythm").$type<unknown>(),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
 );

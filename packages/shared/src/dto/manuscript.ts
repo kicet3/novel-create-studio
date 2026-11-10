@@ -9,6 +9,8 @@
  *   GET  …/versions/:versionId?with=spans,scenes,issues,beats,lines → manuscriptVersionDetailDtoSchema
  *   POST …/episodes/:episodeNo/versions        humanEditRequestSchema        → 201 manuscriptVersionDtoSchema (E16)
  *   POST …/episodes/:episodeNo/revision-request revisionRequestSchema        → 201 episodeRejectionDtoSchema (E11)
+ *   POST …/episodes/:episodeNo/rhythm-polish                                  → 202 { taskId } ([문체 다듬기] 후보 버전)
+ *   POST …/episodes/:episodeNo/rhythm-polish/decision rhythmCandidateDecisionSchema → episodeDtoSchema (keep = E16 사람 수정 규칙)
  *   POST …/episodes/:episodeNo/publish                                        → episodeDtoSchema (E13)
  *   POST …/episodes/:episodeNo/unpublish       unpublishRequestSchema         → episodeDtoSchema (E14)
  *   POST …/episodes/:episodeNo/pause|resume                                   → episodeDtoSchema
@@ -29,6 +31,7 @@ import { isoDateTime } from "./common.js";
 import { arcDtoSchema, storyStructureDtoSchema } from "./novel.js";
 import { castCompletenessSchema } from "./cast.js";
 import { EPISODE_TITLE_MODES } from "../episode-title.js";
+import { PROSE_RHYTHMS } from "../prose-rhythm.js";
 
 const csv = <T extends readonly [string, ...string[]]>(values: T) =>
   z
@@ -77,6 +80,8 @@ export const episodeDtoSchema = z.object({
   currentVersionId: z.string().nullable(),
   approvedVersionId: z.string().nullable(),
   publishedVersionId: z.string().nullable(),
+  /** 설계 추가 0024: pending [문체 다듬기] candidate version (not current) */
+  rhythmCandidateVersionId: z.string().nullable().optional(),
   rejectionCount: z.number().int(),
   autoRewriteCount: z.number().int(),
   lastReworkFrom: z.enum(ENUMS.rework_from).nullable(),
@@ -109,6 +114,30 @@ export const attributionSpanDtoSchema = z.object({
 });
 export type AttributionSpanDto = z.infer<typeof attributionSpanDtoSchema>;
 
+/** 설계 추가 0024: 문장 리듬 지표 (narration only; dialogue excluded) */
+export const rhythmMetricDtoSchema = z.object({
+  setting: z.enum(PROSE_RHYTHMS),
+  paragraphCount: z.number().int(),
+  narrationSentences: z.number().int(),
+  dialogueSentences: z.number().int(),
+  avgSentenceLength: z.number(),
+  shortRatio: z.number(),
+  longestShortRun: z.number().int(),
+  longestEndingRun: z.number().int(),
+  flaggedParagraphs: z.array(z.number().int()),
+  /** targeted rhythm pass that produced this version (pipeline / manual) */
+  pass: z
+    .object({
+      mode: z.enum(["pipeline", "manual"]),
+      baseVersionId: z.string(),
+      rewrittenBlocks: z.number().int(),
+      keptBlocks: z.number().int(),
+      before: z.object({ shortRatio: z.number(), longestShortRun: z.number().int(), flaggedParagraphs: z.number().int() }),
+    })
+    .optional(),
+});
+export type RhythmMetricDto = z.infer<typeof rhythmMetricDtoSchema>;
+
 const versionBase = {
   id: z.string(),
   novelId: z.string(),
@@ -127,6 +156,8 @@ const versionBase = {
   runId: z.string().nullable(),
   isHumanEdit: z.boolean(),
   isFallbackModel: z.boolean(),
+  /** 설계 추가 0024 (null on versions saved before 0024 / outlines) */
+  rhythm: rhythmMetricDtoSchema.nullable().optional(),
   createdAt: isoDateTime,
 };
 
@@ -193,6 +224,8 @@ export const episodeDetailDtoSchema = episodeDtoSchema.extend({
       belowFloor: z.boolean(),
     })
     .nullable(),
+  /** 설계 추가 0024: 문장 리듬 of the current version under the novel's current setting */
+  rhythm: rhythmMetricDtoSchema.nullable().optional(),
 });
 export type EpisodeDetailDto = z.infer<typeof episodeDetailDtoSchema>;
 
@@ -250,6 +283,13 @@ export const humanEditRequestSchema = z.object({
   baseVersionId: z.string().regex(/^mnv_/),
 });
 export type HumanEditRequest = z.infer<typeof humanEditRequestSchema>;
+
+/** 설계 추가 0024: [문체 다듬기] decision on the pending candidate */
+export const rhythmCandidateDecisionSchema = z.object({
+  versionId: z.string().regex(/^mnv_/),
+  decision: z.enum(["keep", "discard"]),
+});
+export type RhythmCandidateDecision = z.infer<typeof rhythmCandidateDecisionSchema>;
 
 /** E11 (approved, before publish) */
 export const revisionRequestSchema = z.object({

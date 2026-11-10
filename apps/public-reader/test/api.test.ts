@@ -13,6 +13,8 @@ import type { CommentListDto, EpisodeStatsDto, NovelStatsDto, SessionDto } from 
 import { createReaderApi, type ReaderApi } from "../src/server/api";
 import { parseEnv } from "../src/server/env";
 import { getEpisode, getNovel, listNovels, sitemapRows } from "../src/server/content";
+import { href } from "../src/lib/href";
+import { isPublicSlug } from "@ncs/reader-core/snapshot";
 
 const SCHEMA = "ncs_public_rt";
 const ORIGIN = "https://novel.snowlink.team";
@@ -102,6 +104,30 @@ describe("content reads", () => {
     expect(e1).toMatchObject({ episodeNo: 1, prev: null, next: { episodeNo: 2, title: "2화" }, novelTitle: "공개 작품" });
     expect(await getEpisode(db, SCHEMA, "pub-novel", 3)).toBeNull();
     expect((await sitemapRows(db, SCHEMA)).length).toBe(3);
+  });
+});
+
+describe("studio slugs (lowercased novel id)", () => {
+  it("accepts underscore slugs in content reads, the sitemap and API routes; still rejects malformed ones", async () => {
+    const slug = "nov_01m6qxdwfxeahe006mnnhf9j5j";
+    await pg.exec(`
+      INSERT INTO ${SCHEMA}.novels (slug, title, author_name, content_hash) VALUES ('${slug}', '밑줄 작품', '새벽눈길', 'hu');
+      INSERT INTO ${SCHEMA}.episodes (novel_slug, episode_no, title, body, char_count, published_at, content_hash) VALUES ('${slug}', 1, '1화', '본문', 2, '2026-11-03T00:00:00Z', 'hu1');
+    `);
+    try {
+      expect(isPublicSlug(slug)).toBe(true);
+      for (const bad of ["_nov", "nov_", "NOV_01", "a--b", "a.b", "../etc"]) expect(isPublicSlug(bad), bad).toBe(false);
+      expect(await getNovel(db, SCHEMA, slug)).toMatchObject({ slug, title: "밑줄 작품", authorName: "새벽눈길" });
+      expect(await getEpisode(db, SCHEMA, slug, 1)).toMatchObject({ slug, episodeNo: 1 });
+      expect((await sitemapRows(db, SCHEMA)).filter((r) => r.slug === slug).map((r) => r.episodeNo)).toEqual([null, 1]);
+      expect(href.novel(slug)).toBe(`/novels/${slug}`);
+      const b = new Browser(api);
+      expect((await b.call("GET", `novels/${slug}/stats`)).status).toBe(200);
+      expect((await b.call("GET", `novels/${slug}/episodes/1/comments`)).status).toBe(200);
+      expect((await b.call("GET", "novels/_bad_/stats")).status).toBe(404);
+    } finally {
+      await pg.exec(`DELETE FROM ${SCHEMA}.novels WHERE slug = '${slug}'`);
+    }
   });
 });
 

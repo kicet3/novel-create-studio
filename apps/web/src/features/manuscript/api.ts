@@ -11,12 +11,14 @@ import {
   manuscriptVersionDtoSchema,
   manuscriptVersionSummaryDtoSchema,
   setupBeatDtoSchema,
+  taskDtoSchema,
   type ArcDto,
   type ContinuityIssueDto,
   type CreateExportRequest,
   type EpisodeDto,
   type ExportJobDto,
   type HumanEditRequest,
+  type RhythmCandidateDecision,
   type ManuscriptVersionDetailDto,
   type ManuscriptVersionSummaryDto,
   type RevisionRequest,
@@ -143,6 +145,30 @@ export function useUnpublish(novelId: string, episodeNo: number) {
 export function usePauseEpisode(novelId: string, episodeNo: number) {
   return useEpisodeMutation(novelId, (pause: boolean) =>
     api.post(`/novels/${novelId}/episodes/${episodeNo}/${pause ? "pause" : "resume"}`, {}, { schema: episodeDtoSchema }),
+  );
+}
+
+/** 설계 추가 0024: [문체 다듬기] — 202 { taskId }; the candidate shows up as episode.rhythmCandidateVersionId */
+export function useRhythmPolish(novelId: string, episodeNo: number) {
+  return useEpisodeMutation(novelId, (_: void) => api.post<{ taskId: string }>(`/novels/${novelId}/episodes/${episodeNo}/rhythm-polish`, {}));
+}
+
+const TASK_TERMINAL = ["done", "failed", "cancelled"];
+
+/** the [문체 다듬기] task while it runs (polls until it ends; null id = idle) */
+export function useRhythmTask(novelId: string, taskId: string | null) {
+  return useQuery({
+    queryKey: [...queryKeys.novel(novelId).tasks(), "rhythm", taskId] as const,
+    queryFn: ({ signal }) => api.get(`/novels/${novelId}/tasks/${taskId}`, { signal, schema: taskDtoSchema }),
+    enabled: !!taskId,
+    refetchInterval: (q) => (q.state.data && TASK_TERMINAL.includes(q.state.data.status) ? false : 3000),
+  });
+}
+
+/** keep = the candidate becomes a human-edit version (re-check; an approved episode loses its approval), discard = cleared */
+export function useDecideRhythmCandidate(novelId: string, episodeNo: number) {
+  return useEpisodeMutation(novelId, (body: RhythmCandidateDecision) =>
+    api.post(`/novels/${novelId}/episodes/${episodeNo}/rhythm-polish/decision`, body, { schema: episodeDtoSchema }),
   );
 }
 

@@ -316,6 +316,12 @@ export interface ManuscriptService {
   getRetitle(scope: NovelScope, arcId: string): Promise<RetitleProposalView>;
   /** applies (or rejects) the pending proposal; published 화 change only when listed + confirmed (422 published_rename_confirmation_required) */
   applyRetitle(scope: NovelScope, arcId: string, input: RetitleApplyRequest, actor: ActorRef): Promise<RetitleApplyResult>;
+
+  // ── 설계 추가 0024: 문장 리듬 [문체 다듬기] ──
+  /** 202: rhythm-only polish of an awaiting_approval / approved episode → candidate version (current unchanged); 422 rhythm_ok when nothing is flagged */
+  requestRhythmPolish(scope: NovelScope, episodeNo: number, actor: ActorRef): Promise<{ taskId: string }>;
+  /** keep = E16 human-edit rules with the candidate text; discard = candidate cleared; 409 rhythm_candidate_stale / stale_base_version */
+  decideRhythmCandidate(scope: NovelScope, episodeNo: number, input: { versionId: string; decision: "keep" | "discard" }, actor: ActorRef): Promise<Episode>;
 }
 
 /** 설계 추가 0023 */

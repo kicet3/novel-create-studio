@@ -3,7 +3,7 @@
  * Applied by the studio (module publication) over the writer connection; every statement is qualified with the
  * schema (`s` = the quoted schema identifier), so nothing outside it is created or changed.
  *
- *   novels / episodes      — written ONLY by the studio: published versions of opted-in novels (allow-listed columns)
+ *   novels / episodes      — written ONLY by the studio: published versions of non-archived novels (allow-listed columns)
  *   visitors               — anonymous visitor ids (random, issued as an httpOnly cookie on the first write; no PII)
  *   novel_likes / episode_likes / ratings / comments — anonymous reactions, written by the reader API
  *   rate_limits            — fixed-window counters (serverless-safe abuse limits)
@@ -157,6 +157,16 @@ ${PUBLIC_ALL_TABLES.map((t) => `ALTER TABLE ${s}.${t} ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ${s}.episodes ADD COLUMN IF NOT EXISTS unit_title text;
 ALTER TABLE ${s}.episodes ADD COLUMN IF NOT EXISTS unit_part_no integer;
 ALTER TABLE ${s}.episodes ADD COLUMN IF NOT EXISTS unit_part_count integer;
+`,
+  },
+  {
+    // widens the slug rule to allow '_' (the public address is now the lowercased studio novel id, e.g.
+    // nov_01m6qxdwfxeahe006mnnhf9j5j). Every slug valid under v1 stays valid, so existing rows pass the new check.
+    version: 3,
+    name: "slug_underscore",
+    sql: (s) => `
+ALTER TABLE ${s}.novels DROP CONSTRAINT IF EXISTS novels_slug_format;
+ALTER TABLE ${s}.novels ADD CONSTRAINT novels_slug_format CHECK (slug ~ '^[a-z0-9]([a-z0-9_-]{0,62}[a-z0-9])?$' AND position('--' in slug) = 0);
 `,
   },
 ];

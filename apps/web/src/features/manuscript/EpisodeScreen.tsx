@@ -44,6 +44,7 @@ import { EpisodeActionBar } from "./EpisodeActionBar.js";
 import { PublishDialog, RevisionDialog, UnpublishDialog } from "./EpisodeDialogs.js";
 import { ExportDialog } from "./ExportDialog.js";
 import { RevisionChat } from "../revision/RevisionChatPanel.js";
+import { RhythmCard } from "./RhythmCard.js";
 import { AttributionLegend, beatSort, DEFAULT_TOGGLES, issueSort, markerDomId, VersionViewer, type ViewerToggles } from "./VersionViewer.js";
 
 const FLOW: readonly EpisodeStatus[] = ["outlining", "drafting", "checking", "polishing", "awaiting_approval", "approved", "published"];
@@ -97,6 +98,20 @@ export function EpisodeScreen({ novelId, episodeNo }: { novelId: string; episode
       (p) => {
         const n = new URLSearchParams(p);
         n.set("v", id);
+        n.delete("at");
+        n.delete("end");
+        return n;
+      },
+      { replace: false },
+    );
+
+  /** 설계 추가 0024: open the [문체 다듬기] candidate in 버전 비교 (base = its parent, the current version) */
+  const compareVersion = (id: string) =>
+    setParams(
+      (p) => {
+        const n = new URLSearchParams(p);
+        n.set("v", id);
+        n.set("mode", "diff");
         n.delete("at");
         n.delete("end");
         return n;
@@ -212,7 +227,7 @@ export function EpisodeScreen({ novelId, episodeNo }: { novelId: string; episode
           <ChatTabs value={mode} onChange={setMode} versionsCount={sortedVersions.length} hasText={!!ep.currentVersionId} />
           <div className={cx("mt-3 flex min-h-0 flex-1 flex-col", mode !== "read" && "min-[1100px]:overflow-y-auto")}>
             {mode === "diff" ? (
-              <QueryView query={versions}>{(vs) => <DiffView novelId={novelId} versions={vs} defaultTargetId={selectedId} me={me} />}</QueryView>
+              <QueryView query={versions}>{(vs) => <DiffView key={selectedId ?? "-"} novelId={novelId} versions={vs} defaultTargetId={selectedId} me={me} />}</QueryView>
             ) : !selectedId ? (
               <Callout tone="info" title="아직 원고가 없습니다">
                 아웃라인이 작성되면 이곳에 표시됩니다.
@@ -234,7 +249,8 @@ export function EpisodeScreen({ novelId, episodeNo }: { novelId: string; episode
 
         <aside className="grid content-start gap-3" aria-label="원고 정보">
           <LengthCard detail={ep.length} />
-          <VersionsCard versions={versions} selectedId={selectedId} currentId={ep.currentVersionId} approvedId={ep.approvedVersionId} publishedId={ep.publishedVersionId} onSelect={selectVersion} tz={tz} me={me} />
+          <RhythmCard novelId={novelId} episode={ep} onCompare={compareVersion} />
+          <VersionsCard versions={versions} selectedId={selectedId} currentId={ep.currentVersionId} approvedId={ep.approvedVersionId} publishedId={ep.publishedVersionId} candidateId={ep.rhythmCandidateVersionId ?? null} onSelect={selectVersion} tz={tz} me={me} />
           {detail.data && <IssuesCard detail={detail.data} />}
           {detail.data && <BeatsCard detail={detail.data} setupLabel={setupLabel} setupTitle={(id) => setupMap.get(id)?.title} novelId={novelId} />}
           <RejectionsCard novelId={novelId} episodeNo={episodeNo} count={ep.rejectionCount} tz={tz} />
@@ -391,6 +407,7 @@ function VersionsCard({
   currentId,
   approvedId,
   publishedId,
+  candidateId,
   onSelect,
   tz,
   me,
@@ -400,6 +417,7 @@ function VersionsCard({
   currentId: string | null;
   approvedId: string | null;
   publishedId: string | null;
+  candidateId: string | null;
   onSelect: (id: string) => void;
   tz?: string;
   me: { id: string; displayName: string } | null;
@@ -429,6 +447,7 @@ function VersionsCard({
                         {v.id === currentId && <Badge tone="info">현재</Badge>}
                         {v.id === approvedId && <Badge tone="accent">승인본</Badge>}
                         {v.id === publishedId && <Badge tone="ok">공개본</Badge>}
+                        {v.id === candidateId && <Badge tone="warn">문체 다듬기 후보</Badge>}
                       </div>
                       <div className="text-xs text-muted">
                         {labelKo("episode_status", v.stage)} 단계 · {v.charCountWithSpaces.toLocaleString("ko-KR")}자 · <span title={formatDateTime(v.createdAt, tz)}>{formatRelative(v.createdAt)}</span>

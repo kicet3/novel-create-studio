@@ -21,6 +21,8 @@ export const ACTIVITY_ACTIONS = [
   "episode.created", "episode.status_changed", "episode.rejected", "episode.approved", "episode.published", "episode.unpublished",
   "episode.blocked", "episode.unblocked", "episode.paused", "episode.resumed",
   "manuscript.version_created", "manuscript.human_edited", "scene.resegmented",
+  // 설계 추가 0024: [문체 다듬기] 후보 버전과 작가의 적용·버리기
+  "manuscript.rhythm_candidate_created", "manuscript.rhythm_candidate_decided", "manuscript.rhythm_no_change",
   // 작업·실행
   "task.created", "task.status_changed", "task.lease_acquired", "task.lease_reclaimed", "task.blocked", "task.unblocked", "task.paused",
   "task.resumed", "task.cancelled", "task.reassigned",

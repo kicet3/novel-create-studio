@@ -17,6 +17,13 @@
   under any budget; `getEpisodeEnd` gives continuity the latest N-1 text for the opening-continuity check.
   N's `outline_episode` gate defers (stays ready, re-tried next tick — `{ ok: false, defer: true }`) while a summarize_episode
   of N-1 is pending / ready / running; a failed / blocked recap does not hold it. Recap priority 800 > outline max.
+- 설계 추가 0024 문장 리듬 (`domain/rhythm.ts` pure metric, `application/rhythm-polish.ts`): every saved text version stores
+  `manuscript_versions.rhythm` (narration-only sentence stats under `novels.prose_rhythm` 간결/보통/유려 + flagged paragraphs).
+  Polishing points the flagged paragraphs out per scene; a polished version still flagged gets one targeted pass
+  (`polish_episode` with `rhythm_only`, `rhythm_mode=pipeline`) that rewrites only the flagged blocks (human paragraphs never
+  sent; ±5% per block and per episode; facts / dialogue unchanged) before the length / approval steps. [문체 다듬기]
+  (`POST …/episodes/:no/rhythm-polish`, `rhythm_mode=manual`) saves a candidate next to the current version
+  (`episodes.rhythm_candidate_version_id`); `…/rhythm-polish/decision` keep = E16 human edit, discard = cleared.
 
 ## Owned tables (`@ncs/db/schema/manuscript.ts`)
 - episodes

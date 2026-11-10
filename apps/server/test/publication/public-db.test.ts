@@ -1,14 +1,15 @@
 /**
  * 공개 사이트 → Supabase 동기화 (an in-process PGlite with unrelated objects stands in for the user's Supabase DB):
  * the writer URL is an encrypted secret (never returned / logged), the studio applies the public schema itself,
- * only published versions of opted-in novels are upserted (allow-listed columns), unpublish / opt-out deletes rows,
+ * only published versions of non-archived novels are upserted (allow-listed columns, slug = lowercased novel id, author
+ * fixed), unpublishing (the last episode) deletes rows, rows under slugs no longer generated are removed,
  * reactions are left alone, unchanged novels are skipped, errors are sanitized.
  */
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "@ncs/db/orm";
 import { episodeUnits, episodes, novels } from "@ncs/db/schema";
-import { PUBLIC_EPISODE_COLUMNS, PUBLIC_NOVEL_COLUMNS, PUBLIC_SCHEMA_LATEST_VERSION, pgliteSqlClient } from "@ncs/public-schema";
+import { PUBLIC_EPISODE_COLUMNS, PUBLIC_NOVEL_COLUMNS, PUBLIC_SCHEMA_LATEST_VERSION, applyPublicSchema, pgliteSqlClient } from "@ncs/public-schema";
 import { publicSiteCheckDtoSchema, publicSiteRoleSqlDtoSchema, publicSiteStatusDtoSchema } from "@ncs/shared";
 import { createTestCore, type TestCore } from "../support/test-core.js";
 import { PUBLIC_SITE_DB_SECRET, type PublicDbConnector } from "../../src/modules/publication/index.js";
@@ -24,6 +25,7 @@ describe("publication → Supabase public schema", () => {
   let t: TestCore;
   let pg: PGlite;
   let novelId: string;
+  let slug: string;
   let ids: string[] = [];
   const connected: string[] = [];
   const q = async <T = Record<string, unknown>>(sql: string, params: unknown[] = []) => (await pg.query<T>(sql, params)).rows;
@@ -43,6 +45,7 @@ describe("publication → Supabase public schema", () => {
     };
     t = await createTestCore({ publicDbConnector: connector });
     novelId = (await t.modules.novel.service.createNovel({ title: "동기화 작품" }, t.owner)).id;
+    slug = novelId.toLowerCase();
     await t.platform.uow.db.update(novels).set({ genre: "로맨스" }).where(eq(novels.id, novelId));
     const scope = { novelId };
     const ms = t.modules.manuscript.service;
@@ -92,14 +95,18 @@ describe("publication → Supabase public schema", () => {
   });
 
   it("stores the writer URL encrypted, never returns it, and migrates + syncs on save", async () => {
-    // opt the novel in first (files target for now)
-    expect((await t.http("PATCH", `/api/novels/${novelId}/public-site`, { enabled: true, slug: "sync-novel", authorName: "작가", intro: "소개" })).status).toBe(200);
+    // no opt-in: the novel is public because it has published episodes; only the intro is set here
+    expect((await t.http("PATCH", `/api/novels/${novelId}/public-site`, { intro: "소개" })).status).toBe(200);
+    // a row left from the old opt-in era (custom slug) is no longer generated → deleted on sync
+    await applyPublicSchema(pgliteSqlClient(pg), SCHEMA);
+    await q(`INSERT INTO ${SCHEMA}.novels (slug, title, content_hash) VALUES ('old-custom-slug', '옛 주소', 'h')`);
+    await q(`INSERT INTO ${SCHEMA}.episodes (novel_slug, episode_no, body, content_hash) VALUES ('old-custom-slug', 1, '옛 본문', 'h')`);
     const r = await t.http("PUT", "/api/public-site/config", { databaseUrl: URL_OK });
     expect(r.status).toBe(200);
     const s = publicSiteStatusDtoSchema.parse(r.body);
     expect(s).toMatchObject({ target: "supabase", targetSource: "default", lastError: null, novelCount: 1, episodeCount: 2 });
     expect(s.supabase).toEqual({ configured: true, schema: SCHEMA, host: "aws-0-ap-northeast-2.pooler.supabase.com", schemaVersion: PUBLIC_SCHEMA_LATEST_VERSION, latestSchemaVersion: PUBLIC_SCHEMA_LATEST_VERSION });
-    expect(s.lastRun).toMatchObject({ upsertedNovels: 1, upsertedEpisodes: 2, deletedNovels: 0, deletedEpisodes: 0 });
+    expect(s.lastRun).toMatchObject({ upsertedNovels: 1, upsertedEpisodes: 2, deletedNovels: 1, deletedEpisodes: 1 });
     expect(JSON.stringify(r.body)).not.toContain(PASSWORD);
 
     // encrypted at rest; the secrets API lists metadata only
@@ -121,14 +128,13 @@ describe("publication → Supabase public schema", () => {
     expect((await cols("episodes")).sort()).toEqual([...PUBLIC_EPISODE_COLUMNS].sort());
     const n = await q(`SELECT * FROM ${SCHEMA}.novels`);
     expect(n).toHaveLength(1);
-    expect(n[0]).toMatchObject({ slug: "sync-novel", title: "동기화 작품", author_name: "작가", intro: "소개", genre: "로맨스", episode_count: 2 });
+    expect(n[0]).toMatchObject({ slug, title: "동기화 작품", author_name: "새벽눈길", intro: "소개", genre: "로맨스", episode_count: 2 });
     const e = await q<{ episode_no: number; body: string }>(`SELECT * FROM ${SCHEMA}.episodes ORDER BY episode_no`);
     expect(e.map((x) => x.episode_no)).toEqual([1, 2]);
     expect(e[0]!.body).toContain("공개 1화 본문.");
     const dump = JSON.stringify([n, e]);
     expect(dump).not.toContain(SECRET_NOTE);
-    expect(dump).not.toContain(novelId);
-    for (const id of ids) expect(dump).not.toContain(id);
+    for (const id of ids) expect(dump.toLowerCase()).not.toContain(id.toLowerCase());
     // the user's other objects are untouched
     expect(await q("SELECT * FROM public.other_app")).toEqual([{ id: 1, v: "theirs" }]);
   });
@@ -164,7 +170,7 @@ describe("publication → Supabase public schema", () => {
 
   it("deletes an unpublished episode's row but keeps its reactions", async () => {
     await q(`INSERT INTO ${SCHEMA}.visitors (id) VALUES ('v_aaaaaaaaaaaaaaaaaaaaaaaa')`);
-    await q(`INSERT INTO ${SCHEMA}.comments (novel_slug, episode_no, visitor_id, body, body_hash, ip_hash) VALUES ('sync-novel', 2, 'v_aaaaaaaaaaaaaaaaaaaaaaaa', '좋아요', 'h', 'ih')`);
+    await q(`INSERT INTO ${SCHEMA}.comments (novel_slug, episode_no, visitor_id, body, body_hash, ip_hash) VALUES ($1, 2, 'v_aaaaaaaaaaaaaaaaaaaaaaaa', '좋아요', 'h', 'ih')`, [slug]);
     await t.platform.uow.db.update(episodes).set({ status: "approved", publishedVersionId: null, publishedAt: null }).where(eq(episodes.id, ids[1]!));
     await t.platform.uow.db.update(episodes).set({ title: "새 1화" }).where(eq(episodes.id, ids[0]!));
     const s = publicSiteStatusDtoSchema.parse(await t.modules.publication.service.rebuild());
@@ -173,8 +179,9 @@ describe("publication → Supabase public schema", () => {
     expect(await q(`SELECT count(*)::int AS n FROM ${SCHEMA}.comments`)).toEqual([{ n: 1 }]);
   });
 
-  it("opt-out deletes the novel and its episodes", async () => {
-    expect((await t.http("PATCH", `/api/novels/${novelId}/public-site`, { enabled: false })).status).toBe(200);
+  it("unpublishing the last episode deletes the novel and its episodes", async () => {
+    await t.platform.uow.db.update(episodes).set({ status: "approved", publishedVersionId: null, publishedAt: null }).where(eq(episodes.id, ids[0]!));
+    await t.modules.publication.service.rebuild();
     expect(await q(`SELECT count(*)::int AS n FROM ${SCHEMA}.novels`)).toEqual([{ n: 0 }]);
     expect(await q(`SELECT count(*)::int AS n FROM ${SCHEMA}.episodes`)).toEqual([{ n: 0 }]);
     expect(t.modules.publication.service.status()).toMatchObject({ novelCount: 0, episodeCount: 0, lastError: null });

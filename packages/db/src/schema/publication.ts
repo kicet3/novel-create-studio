@@ -2,7 +2,10 @@
 // Owning module: publication (0021_public_site.sql, 설계 추가: 공개 사이트).
 import { boolean, pgTable, text, timestamp } from "drizzle-orm/pg-core";
 
-/** public_site_novels — per-novel opt-in to the read-only public site (default off) */
+/**
+ * public_site_novels — per-novel public intro. Since 0025 exposure is automatic (≥1 published episode), the address is
+ * the lowercased novel id and the author name is fixed: enabled / slug / author_name are legacy, never read or written.
+ */
 export const publicSiteNovels = pgTable("public_site_novels", {
   novelId: text("novel_id").notNull().primaryKey(),
   enabled: boolean("enabled").notNull().default(false),

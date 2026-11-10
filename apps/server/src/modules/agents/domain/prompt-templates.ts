@@ -9,7 +9,7 @@
  * ({min,max} → "목표 분량: min~max자(공백 포함|공백 제외 — `countBasis` var)"), `userMessage` (quoted as the author's words).
  * `{{name}}` placeholders in the instruction are replaced by the var value when present.
  */
-import { LABELS_KO, type AgentRole, type TaskKind } from "@ncs/shared";
+import { LABELS_KO, PROSE_RHYTHM_RULES, type AgentRole, type TaskKind } from "@ncs/shared";
 import type { ContextPack, PromptTemplate } from "../index.js";
 
 export const TEMPLATE_VERSION = "0.1.0";
@@ -36,6 +36,8 @@ const DRAFT_RULES = [
   `- ${CONTINUATION_RULE}`,
   "- 분량은 아래 목표 분량 범위(최소~최대) 안에 맞춥니다. 최소 분량에 못 미치거나 최대 분량을 넘기지 않습니다(한 화 절대 하한 3,000자).",
   "- 모바일 가독성: 1~3문장 문단, 대사는 따로 줄을 바꿉니다.",
+  // 설계 추가 0024: 문장 리듬 — 짧은 평서문을 연달아 끊지 않고 연결어미로 잇기
+  PROSE_RHYTHM_RULES,
   "- 아웃라인의 비트와 씬 순서를 지키고, 배정된 떡밥 비트를 자연스럽게 넣습니다.",
   "- 마지막 문단은 다음 화가 궁금해지는 훅으로 끝냅니다.",
   "- '서술·대사에 쓰면 안 되는 표기' 목록의 이름은 쓰지 않습니다. 엔티티 핸들(E1 등)은 본문에 쓰지 않습니다.",
@@ -115,7 +117,7 @@ export const PROMPT_TEMPLATE_DATA: readonly PromptTemplateData[] = [
   T(
     "line_editor",
     "polish_episode",
-    `검사를 통과한 {{episodeLabel}} 원고의 문장·리듬·분량·훅을 다듬습니다. 사건·사실·인물 지식은 바꾸지 않습니다.\n${DRAFT_RULES}`,
+    `검사를 통과한 {{episodeLabel}} 원고의 문장·리듬·분량·훅을 다듬습니다. 사건·사실·인물 지식은 바꾸지 않습니다. 문장 리듬 지적 문단이 주어지면 그 문단만 리듬을 고치고(분량 ±5% 안, 사건·사실·대사 유지) 다른 문단은 그대로 둡니다.\n${DRAFT_RULES}`,
     "다듬은 본문 전체만 출력합니다.",
   ),
   T(
@@ -132,6 +134,7 @@ export const PROMPT_TEMPLATE_DATA: readonly PromptTemplateData[] = [
       "- 줄이기: 겹치는 묘사·설명·늘어지는 대사를 덜어 냅니다. 플롯 비트·떡밥·복선·훅은 남기고 요약으로 바꾸지 않습니다.",
       "- 늘리기: 장면 묘사·감각·내면·대사를 보탭니다. 새 사건·인물·설정은 만들지 않습니다.",
       "- 사람이 쓴 구간과 사건·사실·고유명사는 바꾸지 않습니다.",
+      PROSE_RHYTHM_RULES,
     ].join("\n"),
     "고친 씬 본문만 출력합니다.",
   ),

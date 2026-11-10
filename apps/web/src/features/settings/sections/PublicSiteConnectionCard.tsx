@@ -77,7 +77,7 @@ function PublicSiteConnection({ status: s }: { status: PublicSiteStatusDto }) {
   return (
     <div className="flex flex-col gap-3">
       <p className="m-0 text-xs text-muted">
-        스튜디오(이 컴퓨터)에서 쓰고, 공개 독자 사이트는 공개된 화만 받아서 보여 줍니다. 켠 작품의 <strong>공개된 화</strong>만 Supabase 공개 스키마로 동기화하며, 초안·설정 자료·비밀은 보내지 않습니다.
+        스튜디오(이 컴퓨터)에서 쓰고, 공개 독자 사이트는 공개된 화만 받아서 보여 줍니다. 작품마다 <strong>공개된 화</strong>만 Supabase 공개 스키마로 자동 동기화하며(공개된 화가 있는 작품만 목록에 오르고, 작가 이름은 새벽눈길), 초안·설정 자료·비밀은 보내지 않습니다.
       </p>
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <Badge tone={s.target === "supabase" ? "info" : "neutral"}>지금 대상: {TARGET_LABEL[s.target]}</Badge>

@@ -49,7 +49,10 @@ import {
   TRAILING_SEPARATOR,
   type LengthCheck,
 } from "../domain/text.js";
-import { EPISODE_HARD_MIN_CHARS, type CountBasis } from "@ncs/shared";
+import { EPISODE_HARD_MIN_CHARS, PROSE_RHYTHM_LABELS, proseRhythmBlock, type CountBasis, type ProseRhythm } from "@ncs/shared";
+import { z } from "zod";
+import { applyBlocks, hasSeparatorLine, measureRhythm, rhythmBlocks, rhythmChars, rhythmParagraphs, withinLengthBound, type RhythmMetric } from "../domain/rhythm.js";
+import type { RhythmPassInfo } from "./manuscript-service.js";
 import { REWORK_TARGET } from "../domain/transitions.js";
 import type { Episode, ManuscriptService, SceneDraft } from "../index.js";
 import { promptOf, type PipelineHandler, type PipelineLlm } from "./agent-task.js";
@@ -123,6 +126,18 @@ const EXPAND_INSTRUCTION = `당신은 분량 편집자(expand)입니다. 주어�
 - 장면 묘사·감각·인물의 내면·대사 주고받기를 보탭니다.
 - 새 사건·새 인물·새 설정을 만들지 않고, 다음 씬 내용을 앞당겨 쓰지 않습니다.
 - 사건·인물·숫자·고유명사는 바꾸지 않습니다. 늘린 씬 본문만 출력합니다.`;
+/** 설계 추가 0024: targeted rhythm pass — only the flagged paragraph blocks, one call per episode */
+const RHYTHM_INSTRUCTION = `당신은 문장 교정자(line_editor)입니다. 표시된 문단 묶음(block)의 문장 리듬만 고칩니다.
+- 짧은 평서문('~였다. ~다.')이 연달아 끊기는 곳을 연결어미로 잇고, 문장 길이와 어미를 고르게 섞습니다.
+- 사건·사실·인물·숫자·고유명사·대사(따옴표 안)는 바꾸지 않습니다. 내용을 보태거나 빼지 않고 순서를 지킵니다.
+- 묶음마다 분량은 원문의 ±5% 안으로 유지합니다. 앞뒤 문단(before·after)은 맥락일 뿐 고치지 않습니다.
+- 묶음 번호(block)와 고친 본문(text)만 JSON으로 답합니다. 고칠 필요가 없는 묶음은 빼도 됩니다.`;
+const rhythmRewriteSchema = z.object({ rewrites: z.array(z.object({ block: z.number().int(), text: z.string() })).default([]) });
+/** the most blocks one rhythm pass sends */
+const RHYTHM_MAX_BLOCKS = 40;
+const withRhythm = (instruction: string, mode: ProseRhythm | null | undefined) => `${instruction}
+${proseRhythmBlock(mode)}`;
+const quotesOf = (t: string) => [...t.matchAll(/["“「『][^"”」』]*["”」』]/gu)].map((m) => m[0]);
 const REWORK_INSTRUCTION = `당신은 쇼러너(showrunner)입니다. 사람이 반려한 사유를 읽고 다시 쓸 씬 번호와 작업 지시를 JSON으로 정합니다. 원고는 쓰지 않습니다.`;
 const SAFETY_INSTRUCTION = `당신은 원고 안전 검수자입니다. 씬마다 (1) 작품 연령 등급을 넘는 성적·폭력·언어 수위 (2) 미성년 인물의 성적 묘사 (3) 실존 인물 사칭·명예훼손이 있는지 판정해 violations JSON으로만 답합니다. 문제가 없으면 빈 배열입니다.`;
 
@@ -133,6 +148,8 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
   const cfg = settings();
   const scopeOf = (run: RunHandle): NovelScope => ({ novelId: run.novelId });
   const skip = (): CommitOutcome => ({ kind: "done", outputRefs: [] });
+  /** 설계 추가 0024: the novel's 문장 리듬 setting (prompt rules + metric thresholds) */
+  const proseRhythmOf = async (scope: NovelScope): Promise<ProseRhythm> => (await soft(() => novel.getNovel(scope), null))?.proseRhythm ?? "normal";
 
   /**
    * entity seeds of the writing contexts (04 §9.5 entity_cards / canon_1hop): the cast referenced by the episode's
@@ -344,7 +361,7 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
         purpose: "draft",
         ...promptOf(
           context,
-          unit ? `${DRAFT_INSTRUCTION}\n${unitRule(unit, ep.episodeNo)}` : DRAFT_INSTRUCTION,
+          withRhythm(unit ? `${DRAFT_INSTRUCTION}\n${unitRule(unit, ep.episodeNo)}` : DRAFT_INSTRUCTION, n.proseRhythm),
           `목표 분량: ${target}자 안팎 — 허용 범위 ${rangeOf(profile)}. 최소 ${profile.minChars}자 미만으로 끝내지 않고 최대 ${profile.maxChars}자를 넘기지 않습니다.\n${data}`,
         ),
         output: { kind: "text" },
@@ -375,7 +392,7 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
           purpose: "draft_continue",
           ...promptOf(
             context,
-            CONTINUE_INSTRUCTION,
+            withRhythm(CONTINUE_INSTRUCTION, n.proseRhythm),
             `부족한 분량: ${profile.minChars - before}자 이상(${basis}) — 현재 ${before}자, 이어 쓴 뒤 화 전체는 ${rangeOf(profile)} 사이여야 합니다(추가는 최대 ${Math.max(0, profile.maxChars - before)}자).\n${payload}`,
           ),
           output: { kind: "text" },
@@ -561,7 +578,7 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
         base,
         scenes,
         (s) => whole || targets.has(s.id),
-        REVISE_INSTRUCTION,
+        withRhythm(REVISE_INSTRUCTION, await proseRhythmOf(scope)),
         (s) => {
           const t = byOrd.get(s.ord) ?? { count: countChars(s.text.trim(), profile.countBasis), target: countChars(s.text.trim(), profile.countBasis) };
           return `${sceneLengthLine(profile, total, t.count, t.target)} 이 씬(${s.ord}/${scenes.length})만 고쳐 씁니다.\n${JSON.stringify({ sceneOrd: s.ord, summary: s.summary, issues, instructions: input.instructions ?? null, text: s.text })}`;
@@ -620,7 +637,7 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
           base,
           scenes,
           () => true,
-          action === "trim" ? TRIM_INSTRUCTION : EXPAND_INSTRUCTION,
+          withRhythm(action === "trim" ? TRIM_INSTRUCTION : EXPAND_INSTRUCTION, await proseRhythmOf(scope)),
           (s) => {
             const t = byOrd.get(s.ord)!;
             return `분량 ${action === "trim" ? "줄이기" : "늘리기"}: ${sceneLengthLine(profile, before, t.count, t.target)}\n${JSON.stringify({ sceneOrd: s.ord, summary: s.summary, text: s.text })}`;
@@ -864,10 +881,175 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
     return true;
   };
 
-  const polishEpisode: PipelineHandler<
-    In,
-    { content: string; modelId: string; baseVersionId: string; factDiff: boolean; changed: string[]; skipped: string[]; sceneDrafts: SceneDraft[]; rejected: "length_floor" | null; lengthKept: string[] }
-  > = {
+  // ── 설계 추가 0024: targeted rhythm pass (문장 리듬) ──
+  type RhythmRewrite = { content: string; improved: boolean; info: RhythmPassInfo; after: RhythmMetric; modelId: string };
+  /**
+   * rewrites only the flagged paragraph blocks of `base` in one call; paragraphs with human-written text are never sent.
+   * A block whose rewrite leaves the length bound (±5%), changes fact tokens (numbers, names) or the dialogue keeps
+   * the original; the whole episode stays within ±5% of the base. Counts only when the metric improves.
+   */
+  const rhythmRewrite = async (
+    run: RunHandle,
+    llm: PipelineLlm,
+    context: import("../../agents/index.js").ContextPack,
+    base: { id: string; content: string; attributionSpans: unknown },
+    setting: ProseRhythm,
+    mode: RhythmPassInfo["mode"],
+    names: readonly string[],
+  ): Promise<RhythmRewrite> => {
+    const before = measureRhythm(base.content, setting);
+    const human = userRanges((base.attributionSpans as never) ?? []);
+    const blocks = rhythmBlocks(base.content, before.flaggedParagraphs, human).slice(0, RHYTHM_MAX_BLOCKS);
+    const info = (rewritten: number): RhythmPassInfo => ({
+      mode,
+      baseVersionId: base.id,
+      rewrittenBlocks: rewritten,
+      keptBlocks: blocks.length - rewritten,
+      before: { shortRatio: before.shortRatio, longestShortRun: before.longestShortRun, flaggedParagraphs: before.flaggedParagraphs.length },
+    });
+    if (!blocks.length) return { content: base.content, improved: false, info: info(0), after: before, modelId: "none" };
+    const paragraphs = rhythmParagraphs(base.content);
+    const payload = blocks.map((b) => ({
+      block: b.no,
+      before: paragraphs[b.paragraphs[0]! - 1]?.text ?? null,
+      text: b.text,
+      after: paragraphs[b.paragraphs[b.paragraphs.length - 1]! + 1]?.text ?? null,
+      chars: rhythmChars(b.text),
+    }));
+    // the rhythm call is optional: a provider / schema failure keeps the base text and the pipeline moves on
+    let out: { value?: unknown; modelId: string };
+    try {
+      out = await llm.call({
+      run,
+      purpose: "rhythm_polish",
+      ...promptOf(
+        context,
+        withRhythm(RHYTHM_INSTRUCTION, setting),
+        `문장 리듬 다듬기(기준 '${PROSE_RHYTHM_LABELS[setting]}'): 지적 문단 ${before.flaggedParagraphs.length}개, 묶음 ${blocks.length}개. 지금 서술 단문 비율 ${Math.round(before.shortRatio * 100)}%, 최장 단문 연속 ${before.longestShortRun}문장. 묶음마다 분량은 원문(chars, 공백·줄바꿈 제외)의 ±5% 안입니다. 장면 구분선(---, * * * 등)은 묶음에 없으며 새로 넣지 않습니다.\n${JSON.stringify({ blocks: payload })}`,
+        ),
+        output: { kind: "object", schemaName: "RhythmRewrite", schema: rhythmRewriteSchema },
+      });
+    } catch (err) {
+      // a stop (lease lost, shutdown, budget gate) still ends the run; only a failed model call is skipped
+      if (run.signal.aborted || (err instanceof Error && err.name === "RunStop")) throw err;
+      platform.log.warn({ err: err instanceof Error ? err.message : String(err), runId: run.runId }, "rhythm pass failed; keeping the base text");
+      return { content: base.content, improved: false, info: info(0), after: before, modelId: "none" };
+    }
+    const value = rhythmRewriteSchema.safeParse(out.value ?? {});
+    const byNo = new Map(blocks.map((b) => [b.no, b]));
+    const accepted: Array<{ start: number; end: number; text: string }> = [];
+    const seen = new Set<number>();
+    for (const r of value.success ? value.data.rewrites : []) {
+      const b = byNo.get(r.block);
+      if (!b || seen.has(b.no)) continue;
+      seen.add(b.no);
+      const text = normalizeText(r.text).trim();
+      if (!text || text === b.text || hasSeparatorLine(text)) continue;
+      if (!withinLengthBound(b.text, text)) continue;
+      if (!signaturesEqual(factSignature(b.text, names), factSignature(text, names))) continue;
+      if (JSON.stringify(quotesOf(b.text)) !== JSON.stringify(quotesOf(text))) continue;
+      accepted.push({ start: b.start, end: b.end, text });
+    }
+    let content = accepted.length ? normalizeText(applyBlocks(base.content, accepted)) : base.content;
+    // the whole episode never moves more than ±5% off the base
+    if (accepted.length && !withinLengthBound(base.content, content, 0.05, 0)) {
+      content = base.content;
+      accepted.length = 0;
+    }
+    const after = measureRhythm(content, setting);
+    const improved =
+      accepted.length > 0 && (after.flaggedParagraphs.length < before.flaggedParagraphs.length || after.longestShortRun < before.longestShortRun || after.shortRatio < before.shortRatio);
+    return improved ? { content, improved, info: info(accepted.length), after, modelId: out.modelId } : { content: base.content, improved: false, info: info(0), after: before, modelId: out.modelId };
+  };
+
+  /** after polishing: one targeted rhythm pass (polish_episode rhythm_only) when the polished version still has flagged paragraphs */
+  const queueRhythmPass = async (tx: Tx, scope: NovelScope, ep: Episode, agent: import("../../../platform/index.js").ActorRef, version: { id: string; content: string; attributionSpans: unknown; rhythm: unknown }, checkedVersionId: string) => {
+    const metric = version.rhythm as RhythmMetric | null;
+    if (!metric?.flaggedParagraphs?.length) return false;
+    if (!rhythmBlocks(version.content, metric.flaggedParagraphs, userRanges((version.attributionSpans as never) ?? [])).length) return false;
+    await followUp(
+      tx,
+      scope,
+      ep,
+      "polish_episode",
+      { manuscript_version_id: version.id, checked_version_id: checkedVersionId, cycle_key: `${version.id}:rhythm`, rhythm_only: true, rhythm_mode: "pipeline" },
+      agent,
+      600,
+    );
+    return true;
+  };
+
+  type PolishProposal = { content: string; modelId: string; baseVersionId: string; factDiff: boolean; changed: string[]; skipped: string[]; sceneDrafts: SceneDraft[]; rejected: "length_floor" | null; lengthKept: string[] };
+  type RhythmProposal = {
+    rhythm: { mode: RhythmPassInfo["mode"]; baseVersionId: string; checkedVersionId: string; content: string; improved: boolean; info: RhythmPassInfo | null; factDiff: boolean; sceneDrafts: SceneDraft[]; modelId: string };
+  };
+  const rhythmModeOf = (input: In): RhythmPassInfo["mode"] | null => {
+    const x = input as { rhythm_only?: unknown; rhythm_mode?: unknown };
+    return x.rhythm_only === true ? (x.rhythm_mode === "manual" ? "manual" : "pipeline") : null;
+  };
+
+  const rhythmExecute = async (run: RunHandle, input: In, context: import("../../agents/index.js").ContextPack, llm: PipelineLlm, mode: RhythmPassInfo["mode"]): Promise<RhythmProposal> => {
+    const scope = scopeOf(run);
+    const ep = await getService().getEpisode(scope, input.episode_id);
+    const base = await loadVersion(scope, ep.currentVersionId);
+    if (!base) throw new DomainValidationError("no_manuscript", "다듬을 원고 버전이 없습니다.");
+    const checkedVersionId = (input as { checked_version_id?: string }).checked_version_id ?? base.id;
+    const empty = { mode, baseVersionId: base.id, checkedVersionId, content: base.content, improved: false, info: null, factDiff: false, sceneDrafts: [], modelId: "none" };
+    // superseded: the episode moved on to another version since this pass was queued
+    if (input.manuscript_version_id && input.manuscript_version_id !== base.id) return { rhythm: empty };
+    const setting = await proseRhythmOf(scope);
+    const names = (await soft(() => ontology.listEntities(scope, { limit: 500 }), [])).map((e) => e.preferredName);
+    const r = await rhythmRewrite(run, llm, context, base, setting, mode, names);
+    let factDiff = false;
+    let sceneDrafts: SceneDraft[] = [];
+    if (mode === "pipeline") {
+      // the checked version (polish base) is what the scenes and facts were checked against
+      const checked = (await loadVersion(scope, checkedVersionId)) ?? base;
+      factDiff = !signaturesEqual(factSignature(checked.content, names), factSignature(r.content, names));
+      sceneDrafts = r.content === checked.content ? [] : await scenesThrough(scope, ep, checked.content, r.content);
+    }
+    return { rhythm: { ...empty, content: r.content, improved: r.improved, info: r.info, factDiff, sceneDrafts, modelId: r.modelId } };
+  };
+
+  const rhythmCommit = async (tx: Tx, run: RunHandle, input: In, p: RhythmProposal["rhythm"]): Promise<CommitOutcome> => {
+    const scope = scopeOf(run);
+    const agent = actors.agent("line_editor", run.runId);
+    const ep = await m.mustEpisode(tx, scope, input.episode_id, true);
+    if (ep.currentVersionId !== p.baseVersionId) return skip();
+    if (p.mode === "manual") {
+      // [문체 다듬기]: a candidate next to the current version — the author compares it and keeps (E16) or discards it
+      if (ep.status !== "awaiting_approval" && ep.status !== "approved") return skip();
+      if (!p.improved || !p.info) {
+        // nothing usable came back (no improvement / every rewrite rejected / the call failed): the text stays as is
+        await ports.deps.audit.record(tx, {
+          novelId: scope.novelId,
+          actor: agent,
+          action: "manuscript.rhythm_no_change",
+          target: { type: "episode", id: ep.id },
+          details: { episodeId: ep.id, episodeNo: ep.episodeNo, baseVersionId: p.baseVersionId, keptBlocks: p.info?.keptBlocks ?? 0 },
+        });
+        return skip();
+      }
+      const v = await m.saveVersion(tx, scope, ep.id, { kind: "revision", content: p.content, author: agent, modelId: p.modelId, keepPointer: true, rhythmPass: p.info });
+      await ports.deps.audit.record(tx, {
+        novelId: scope.novelId,
+        actor: agent,
+        action: "manuscript.rhythm_candidate_created",
+        target: { type: "manuscript_version", id: v.id },
+        details: { episodeId: ep.id, episodeNo: ep.episodeNo, baseVersionId: p.baseVersionId, rewrittenBlocks: p.info.rewrittenBlocks, before: p.info.before },
+      });
+      return { kind: "done", outputRefs: [{ refType: "manuscript_version", refId: v.id }] };
+    }
+    if (ep.status !== "polishing") return skip();
+    const version = p.improved && p.info ? await m.saveVersion(tx, scope, ep.id, { kind: "revision", content: p.content, author: agent, modelId: p.modelId, rhythmPass: p.info }) : null;
+    const target = version ?? { id: p.baseVersionId, content: p.content };
+    if (!(await adjustAfterPolish(tx, scope, ep, agent, target.id, target.content, p.checkedVersionId))) {
+      await finishPolished(tx, scope, ep, agent, target, p.factDiff, p.sceneDrafts, { countRewrite: true });
+    }
+    return { kind: "done", outputRefs: [{ refType: "manuscript_version", refId: target.id }] };
+  };
+
+  const polishEpisode: PipelineHandler<In, PolishProposal | RhythmProposal> = {
     kind: "polish_episode",
     role: "line_editor",
     promptTemplateVersion: "line_editor.polish_episode@0.1.0",
@@ -875,6 +1057,8 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
     allowedWrites: ["manuscript.createVersion(kind=revision)"],
     context: episodeContext,
     async execute(run, input, context, llm) {
+      const rhythmMode = rhythmModeOf(input);
+      if (rhythmMode) return rhythmExecute(run, input, context, llm, rhythmMode);
       const scope = scopeOf(run);
       const ep = await getService().getEpisode(scope, input.episode_id);
       const base = (await loadVersion(scope, ep.currentVersionId))!;
@@ -882,6 +1066,17 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       const profile = await m.lengthProfile(scope);
       const total = countChars(base.content, profile.countBasis);
       const byOrd = targetsByOrd(base, scenes, profile.countBasis, goalFor(profile, total));
+      // 설계 추가 0024: the checked text's flagged paragraphs (문장 리듬) are pointed out scene by scene
+      const setting = await proseRhythmOf(scope);
+      const flagged = new Set(measureRhythm(base.content, setting).flaggedParagraphs);
+      const paragraphs = rhythmParagraphs(base.content);
+      const sceneByOrd = new Map(scenes.map((s) => [s.ord, s]));
+      const rhythmHint = (ord: number) => {
+        const sc = sceneByOrd.get(ord);
+        if (!sc || !flagged.size) return "";
+        const nos = paragraphs.filter((p) => p.start >= sc.start && p.end <= sc.end).flatMap((p, i) => (flagged.has(p.index) ? [i + 1] : []));
+        return nos.length ? ` 문장 리듬: 이 씬의 ${nos.join("·")}번째 문단은 짧은 평서문이 이어집니다. 그 문단은 연결어미로 문장을 이어 리듬을 살립니다.` : "";
+      };
       let modelId = "none";
       const r = await rewriteScenes(
         run,
@@ -890,10 +1085,10 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
         base,
         scenes,
         () => true,
-        POLISH_INSTRUCTION,
+        withRhythm(POLISH_INSTRUCTION, setting),
         (s) => {
           const t = byOrd.get(s.ord) ?? { count: countChars(s.text.trim(), profile.countBasis), target: countChars(s.text.trim(), profile.countBasis) };
-          return `${sceneLengthLine(profile, total, t.count, t.target)} 문장만 다듬고 분량을 늘리지 않습니다.\n${JSON.stringify({ sceneOrd: s.ord, instructions: input.instructions ?? null, text: s.text })}`;
+          return `${sceneLengthLine(profile, total, t.count, t.target)} 문장만 다듬고 분량을 늘리지 않습니다.${rhythmHint(s.ord)}\n${JSON.stringify({ sceneOrd: s.ord, instructions: input.instructions ?? null, text: s.text })}`;
         },
         "polish",
         // polishing never takes an episode under the profile minimum (it only edits sentences); revise keeps the 3,000 floor.
@@ -906,7 +1101,9 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       const sceneDrafts = await scenesThrough(scope, ep, base.content, content);
       return { content, modelId, baseVersionId: base.id, factDiff, changed: r.changed, skipped: r.skipped, sceneDrafts, rejected: r.rejected, lengthKept: r.lengthKept };
     },
-    async commit(tx, run, input, p) {
+    async commit(tx, run, input, proposal) {
+      if ("rhythm" in proposal) return rhythmCommit(tx, run, input, proposal.rhythm);
+      const p = proposal;
       const scope = scopeOf(run);
       const agent = actors.agent("line_editor", run.runId);
       const ep = await m.mustEpisode(tx, scope, input.episode_id, true);
@@ -920,6 +1117,8 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
         return { kind: "done", outputRefs: [{ refType: "manuscript_version", refId: base.id }] };
       }
       const version = await m.saveVersion(tx, scope, ep.id, { kind: "revision", content: p.content, author: agent, modelId: p.modelId });
+      // 설계 추가 0024: still flagged after polishing → one targeted rhythm pass (then length / approval as before)
+      if (await queueRhythmPass(tx, scope, ep, agent, version, p.baseVersionId)) return { kind: "done", outputRefs: [{ refType: "manuscript_version", refId: version.id }] };
       if (!(await adjustAfterPolish(tx, scope, ep, agent, version.id, version.content, p.baseVersionId))) {
         await finishPolished(tx, scope, ep, agent, version, p.factDiff, p.sceneDrafts, { countRewrite: true });
       }

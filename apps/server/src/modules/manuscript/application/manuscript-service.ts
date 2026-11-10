@@ -35,12 +35,25 @@ import type {
   Scene,
   SceneDraft,
 } from "../index.js";
+import { measureRhythm } from "../domain/rhythm.js";
 import { CHECK_PHASE_KINDS, isNotImplemented, settings, sha256, soft, WRITING_KINDS, type Ports } from "./support.js";
 
 export interface InternalSaveVersion extends SaveVersionInput {
   stage?: EpisodeStatus;
   /** copy spans verbatim (E9 final copy) */
   inheritSpansFrom?: ManuscriptVersion | null;
+  /** 설계 추가 0024: the targeted rhythm pass that produced this version (stored with the metric) */
+  rhythmPass?: RhythmPassInfo;
+  /** 설계 추가 0024: [문체 다듬기] candidate — saved without moving the episode's current version */
+  keepPointer?: boolean;
+}
+
+export interface RhythmPassInfo {
+  mode: "pipeline" | "manual";
+  baseVersionId: string;
+  rewrittenBlocks: number;
+  keptBlocks: number;
+  before: { shortRatio: number; longestShortRun: number; flaggedParagraphs: number };
 }
 
 export interface TransitionOpts {
@@ -171,8 +184,12 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
       isFallbackModel: input.isFallbackModel ?? false,
       attributionSpans: spans,
       writerAnnotations: input.writerAnnotations ?? null,
+      // 설계 추가 0024: 문장 리듬 지표 under the novel's setting at save time (versions are append-only)
+      rhythm: input.kind === "outline" ? null : { ...measureRhythm(content, (await novel.getNovel(scope, tx)).proseRhythm), ...(input.rhythmPass ? { pass: input.rhythmPass } : {}) },
     });
-    const pointer = input.kind === "outline" ? { outlineVersionId: id } : input.kind === "final" ? {} : { currentVersionId: id };
+    // 0024: a [문체 다듬기] candidate is pointed at separately; a new working copy makes a pending candidate stale
+    const pointer =
+      input.kind === "outline" ? { outlineVersionId: id } : input.kind === "final" ? {} : input.keepPointer ? { rhythmCandidateVersionId: id } : { currentVersionId: id, ...(ep.rhythmCandidateVersionId ? { rhythmCandidateVersionId: null } : {}) };
     if (Object.keys(pointer).length) await repo.updateEpisode(tx.db, scope, episodeId, pointer);
     const length = input.kind === "outline" ? null : checkLength(content, await lengthProfile(scope, tx));
     await audit.record(tx, {
@@ -919,6 +936,13 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
       throw new Error("wired in module.ts");
     },
     applyRetitle: () => {
+      throw new Error("wired in module.ts");
+    },
+    // 설계 추가 0024: [문체 다듬기] (application/rhythm-polish.ts)
+    requestRhythmPolish: () => {
+      throw new Error("wired in module.ts");
+    },
+    decideRhythmCandidate: () => {
       throw new Error("wired in module.ts");
     },
     registerIssueSink: (sink) => void reg.issueSinks.push(sink),

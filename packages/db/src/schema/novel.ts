@@ -67,6 +67,8 @@ export const novels = pgTable(
     sequentialEpisodes: boolean("sequential_episodes").notNull().default(true),
     /** 설계 추가 0023: 제목 방식 — unit = 에피소드 묶음 "제목 (1)(2)" (새 작품 기본), per_episode = 화별 제목 */
     episodeTitleMode: text("episode_title_mode", { enum: ["unit", "per_episode"] }).notNull().default("unit"),
+    /** 설계 추가 0024: 문장 리듬 — concise 간결 / normal 보통(기본) / flowing 유려 (리듬 지표 기준값) */
+    proseRhythm: text("prose_rhythm", { enum: ["concise", "normal", "flowing"] }).notNull().default("normal"),
     defaultNarrationMode: text("default_narration_mode", { enum: ENUMS.narration_mode }).notNull().default("third_limited"),
     timezone: text("timezone").notNull().default("Asia/Seoul"),
     lengthProfileId: text("length_profile_id").notNull(),

@@ -1,6 +1,6 @@
 /**
  * Writes the 공개 사이트 snapshot into the output dir: atomic per file (tmp + rename), unchanged files untouched,
- * files that are no longer public (unpublished episode, opted-out novel) removed.
+ * files that are no longer public (unpublished episode, novel with no published episode left) removed.
  *
  * Safety: the writer only manages `novels.json`, `novels/**` and its marker file. It refuses a non-empty
  * directory without the marker (a mis-configured output_dir must never lose someone else's files).
@@ -8,6 +8,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile, readdir, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
+import { isPublicSlug } from "@ncs/reader-core/snapshot";
 
 export const SITE_MARKER = ".ncs-public-site";
 
@@ -84,7 +85,8 @@ export interface WriteResult {
 /** files: relative POSIX path → content (must be `novels.json` or under `novels/`) */
 export async function writeSite(dir: string, files: ReadonlyMap<string, string>): Promise<WriteResult> {
   for (const rel of files.keys()) {
-    if (!(rel === "novels.json" || /^novels\/[a-z0-9-]+\/(index\.json|episodes\/\d+\.json)$/.test(rel))) throw new SiteDirError(`bad snapshot path: ${rel}`);
+    const m = /^novels\/([^/]+)\/(?:index\.json|episodes\/\d+\.json)$/.exec(rel);
+    if (!(rel === "novels.json" || (m && isPublicSlug(m[1])))) throw new SiteDirError(`bad snapshot path: ${rel}`);
   }
   await ensureOwnedDir(dir);
   let written = 0;

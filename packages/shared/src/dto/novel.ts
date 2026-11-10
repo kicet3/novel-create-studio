@@ -3,6 +3,7 @@ import { z } from "zod";
 import { ENUMS } from "../enum-registry.js";
 import { isoDateTime } from "./common.js";
 import { EPISODE_TITLE_MODES } from "../episode-title.js";
+import { PROSE_RHYTHMS } from "../prose-rhythm.js";
 
 /** 한 화의 절대 최소 분량(작품 count_basis 기준). 프로필 minChars는 이 값 이상이어야 합니다. */
 export const EPISODE_HARD_MIN_CHARS = 3000;
@@ -58,6 +59,8 @@ export const novelDtoSchema = z.object({
   sequentialEpisodes: z.boolean().default(true),
   /** 설계 추가 0023: 제목 방식 — unit = 에피소드 묶음 "제목 (1)(2)"(새 작품 기본), per_episode = 화별 제목(이전 방식) */
   episodeTitleMode: z.enum(EPISODE_TITLE_MODES).default("unit"),
+  /** 설계 추가 0024: 문장 리듬 — concise 간결 / normal 보통(기본) / flowing 유려 */
+  proseRhythm: z.enum(PROSE_RHYTHMS).default("normal"),
   defaultNarrationMode: z.enum(ENUMS.narration_mode),
   timezone: z.string(),
   lengthProfileId: z.string(),
@@ -201,6 +204,8 @@ export const updateNovelSettingsRequestSchema = z
     sequentialEpisodes: z.boolean(),
     /** 설계 추가 0023: 제목 방식(앞으로 계획하는 화에 적용, 이미 있는 제목은 [제목 정리]로 바꿈) */
     episodeTitleMode: z.enum(EPISODE_TITLE_MODES),
+    /** 설계 추가 0024: 문장 리듬(리듬 지표 기준값·집필 프롬프트) */
+    proseRhythm: z.enum(PROSE_RHYTHMS),
   })
   .partial()
   .refine((v) => Object.keys(v).length > 0, "변경할 항목이 없습니다.");

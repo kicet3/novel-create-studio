@@ -157,6 +157,8 @@ export interface NovelSettingsPatch {
   sequentialEpisodes?: boolean;
   /** 설계 추가 0023: 제목 방식 */
   episodeTitleMode?: "unit" | "per_episode";
+  /** 설계 추가 0024: 문장 리듬 */
+  proseRhythm?: "concise" | "normal" | "flowing";
 }
 
 export interface ChangeAutonomyInput {

@@ -1,17 +1,22 @@
 /**
- * 공개 사이트 use cases: per-novel opt-in settings, the install-level target (Supabase public schema or static
+ * 공개 사이트 use cases: per-novel public intro, the install-level target (Supabase public schema or static
  * files) and the published-only sync to it.
  *
- * Only PUBLISHED episodes (status published + published_version_id) of opted-in, non-archived novels ever leave the
- * studio, through allow-listed fields. Drafts, settings, secrets and the studio DB stay on this PC.
+ * No opt-in: every non-archived novel with at least one PUBLISHED episode (status published + published_version_id)
+ * is on the public site, at the lowercased novel id, under the fixed author name PUBLIC_AUTHOR_NAME. Unpublishing the
+ * last episode (or archiving / deleting the novel) takes it off at the next sync. Only allow-listed fields leave the
+ * studio; drafts, settings, secrets and the studio DB stay on this PC.
  */
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
-import { and, eq, ne } from "@ncs/db/orm";
+import { eq } from "@ncs/db/orm";
 import { publicSiteConfig, publicSiteNovels, type PublicSiteNovelsRow } from "@ncs/db/schema";
 import { applyPublicSchema, buildReaderRoleSql, isSafeSchemaName, PUBLIC_READER_ROLE_DEFAULT, PUBLIC_SCHEMA_DEFAULT, PUBLIC_SCHEMA_LATEST_VERSION, publicSchemaVersion } from "@ncs/public-schema";
 import {
+  PUBLIC_AUTHOR_NAME,
+  publicNovelUrl,
+  publicSlugOf,
   resolvePublicSiteDataDir,
   type PublicSiteCheckDto,
   type PublicSiteNovelDto,
@@ -23,7 +28,7 @@ import {
   type UpdatePublicSiteNovelRequest,
 } from "@ncs/shared";
 import { isPublicSlug } from "@ncs/reader-core/snapshot";
-import { ConflictError, DomainValidationError, type ActorRef, type NovelScope } from "../../../platform/index.js";
+import { DomainValidationError, type ActorRef, type NovelScope } from "../../../platform/index.js";
 import { buildReadingText } from "../../manuscript/domain/reader.js";
 import type { PublicationModuleDeps } from "../module.js";
 import type { PublicationService } from "../index.js";
@@ -56,11 +61,6 @@ function resolveOutputDir(deps: PublicationModuleDeps): string {
   const raw = expandHome(resolvePublicSiteDataDir(deps.platform.config));
   return isAbsolute(raw) ? raw : resolve(raw);
 }
-
-const isUniqueViolation = (err: unknown) => {
-  const e = err as { code?: string; cause?: { code?: string } };
-  return e?.code === "23505" || e?.cause?.code === "23505";
-};
 
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 
@@ -147,27 +147,44 @@ export function createPublicationService(deps: PublicationModuleDeps): Publicati
       (await manuscript.listEpisodes(scope)).filter((e) => e.status === "published" && !!e.publishedVersionId).sort((a, b) => a.episodeNo - b.episodeNo),
     );
 
-  const toDto = async (scope: NovelScope, row: PublicSiteNovelsRow | null): Promise<PublicSiteNovelDto> => ({
-    novelId: scope.novelId,
-    enabled: row?.enabled ?? false,
-    slug: row?.slug ?? null,
-    intro: row?.intro ?? "",
-    authorName: row?.authorName ?? "",
-    publishedEpisodeCount: (await publishedEpisodes(scope)).length,
-    updatedAt: row?.updatedAt.toISOString() ?? null,
-  });
+  const toDto = async (scope: NovelScope, row: PublicSiteNovelsRow | null): Promise<PublicSiteNovelDto> => {
+    const n = await novel.getNovel(scope);
+    const slug = publicSlugOf(scope.novelId);
+    const publishedEpisodeCount = (await publishedEpisodes(scope)).length;
+    const archived = n.status === "archived";
+    return {
+      novelId: scope.novelId,
+      slug,
+      publicUrl: publicNovelUrl(slug),
+      exposed: !archived && publishedEpisodeCount > 0 && isPublicSlug(slug),
+      archived,
+      intro: row?.intro ?? "",
+      authorName: PUBLIC_AUTHOR_NAME,
+      publishedEpisodeCount,
+      lastSyncedAt: lastBuiltAt?.toISOString() ?? null,
+      updatedAt: row?.updatedAt.toISOString() ?? null,
+    };
+  };
 
-  /** opted-in, non-archived novels with what the public content depends on (no manuscript bodies) */
+  /**
+   * every non-archived novel with at least one published episode, with what the public content depends on (no
+   * manuscript bodies). Ordered by id so the fingerprint does not depend on novel edit times.
+   */
   async function collect() {
-    const rows = await db.select().from(publicSiteNovels).where(eq(publicSiteNovels.enabled, true));
-    const out: Array<{ row: PublicSiteNovelsRow & { slug: string }; scope: NovelScope; n: Awaited<ReturnType<typeof novel.getNovel>>; basis: string; eps: Awaited<ReturnType<typeof publishedEpisodes>> }> = [];
-    for (const row of rows) {
-      if (!row.slug || !isPublicSlug(row.slug)) continue;
-      const scope = { novelId: row.novelId };
-      const n = await novel.getNovel(scope);
-      if (n.status === "archived") continue;
-      const [profile, eps] = await Promise.all([novel.getLengthProfile(scope), publishedEpisodes(scope)]);
-      out.push({ row: row as PublicSiteNovelsRow & { slug: string }, scope, n, basis: profile.countBasis, eps });
+    const intros = new Map((await db.select({ novelId: publicSiteNovels.novelId, intro: publicSiteNovels.intro }).from(publicSiteNovels)).map((r) => [r.novelId, r.intro]));
+    const all = (await novel.listNovels()).filter((n) => n.status !== "archived").sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    const out: Array<{ slug: string; intro: string; scope: NovelScope; n: (typeof all)[number]; basis: string; eps: Awaited<ReturnType<typeof publishedEpisodes>> }> = [];
+    for (const n of all) {
+      const slug = publicSlugOf(n.id);
+      if (!isPublicSlug(slug)) {
+        log.warn({ novelId: n.id }, "novel id is not a valid public slug; skipped");
+        continue;
+      }
+      const scope = { novelId: n.id };
+      const eps = await publishedEpisodes(scope);
+      if (!eps.length) continue;
+      const profile = await novel.getLengthProfile(scope);
+      out.push({ slug, intro: intros.get(n.id) ?? "", scope, n, basis: profile.countBasis, eps });
     }
     return out;
   }
@@ -175,8 +192,9 @@ export function createPublicationService(deps: PublicationModuleDeps): Publicati
   function fingerprint(items: Awaited<ReturnType<typeof collect>>, dest: string): string {
     const h = createHash("sha256");
     h.update(dest);
-    for (const { row, n, basis, eps } of items) {
-      h.update(JSON.stringify([row.slug, row.intro, row.authorName, n.title, n.genre, n.ageRating, basis, eps.map((e) => [e.episodeNo, e.title, e.publishedVersionId, e.publishedAt?.toISOString() ?? null, e.unitTitle, e.unitPartNo, e.unitPartCount])]));
+    h.update(PUBLIC_AUTHOR_NAME);
+    for (const { slug, intro, n, basis, eps } of items) {
+      h.update(JSON.stringify([slug, intro, n.title, n.genre, n.ageRating, basis, eps.map((e) => [e.episodeNo, e.title, e.publishedVersionId, e.publishedAt?.toISOString() ?? null, e.unitTitle, e.unitPartNo, e.unitPartCount])]));
     }
     return h.digest("hex");
   }
@@ -184,7 +202,7 @@ export function createPublicationService(deps: PublicationModuleDeps): Publicati
   /** published versions only, as reading text */
   async function inputs(items: Awaited<ReturnType<typeof collect>>): Promise<SnapshotNovelInput[]> {
     const novels: SnapshotNovelInput[] = [];
-    for (const { row, scope, n, basis, eps } of items) {
+    for (const { slug, intro, scope, n, basis, eps } of items) {
       const episodes: SnapshotNovelInput["episodes"] = [];
       for (const e of eps) {
         const version = await manuscript.getVersion(scope, e.publishedVersionId!);
@@ -200,7 +218,7 @@ export function createPublicationService(deps: PublicationModuleDeps): Publicati
           unitPartCount: e.unitPartCount,
         });
       }
-      novels.push({ slug: row.slug, title: n.title, genre: n.genre, ageRating: n.ageRating, authorName: row.authorName, intro: row.intro, episodes });
+      novels.push({ slug, title: n.title, genre: n.genre, ageRating: n.ageRating, authorName: PUBLIC_AUTHOR_NAME, intro, episodes });
     }
     return novels;
   }
@@ -356,40 +374,22 @@ export function createPublicationService(deps: PublicationModuleDeps): Publicati
     async updateNovelSettings(scope, patch, actor) {
       await novel.getNovel(scope);
       const before = await rowOf(scope.novelId);
-      const slug = patch.slug === undefined ? (before?.slug ?? null) : patch.slug;
-      const enabled = patch.enabled ?? before?.enabled ?? false;
-      if (slug !== null && !isPublicSlug(slug)) throw new DomainValidationError("invalid_slug", "공개 주소 형식이 올바르지 않습니다.");
-      if (enabled && !slug) throw new DomainValidationError("slug_required", "공개 사이트에 노출하려면 공개 주소를 정해 주세요.");
-      if (slug) {
-        const taken = await db.select({ id: publicSiteNovels.novelId }).from(publicSiteNovels).where(and(eq(publicSiteNovels.slug, slug), ne(publicSiteNovels.novelId, scope.novelId)));
-        if (taken.length) throw new ConflictError("slug_taken", "이미 다른 작품이 쓰는 공개 주소입니다.");
-      }
-      const values = {
-        enabled,
-        slug,
-        intro: patch.intro ?? before?.intro ?? "",
-        authorName: patch.authorName ?? before?.authorName ?? "",
-        updatedAt: platform.clock.date(),
-      };
-      try {
-        await platform.uow.run(async (tx) => {
-          await tx.db
-            .insert(publicSiteNovels)
-            .values({ novelId: scope.novelId, ...values })
-            .onConflictDoUpdate({ target: publicSiteNovels.novelId, set: values });
-          await audit.record(tx, {
-            novelId: scope.novelId,
-            actor,
-            action: "publication.settings_changed",
-            target: { type: "novel", id: scope.novelId },
-            before: before ? { enabled: before.enabled, slug: before.slug, introLength: before.intro.length, authorName: before.authorName } : null,
-            after: { enabled: values.enabled, slug: values.slug, introLength: values.intro.length, authorName: values.authorName },
-          });
+      // only the intro is per-novel: exposure (≥1 published episode), address (lowercased id) and author are fixed
+      const values = { intro: patch.intro ?? before?.intro ?? "", updatedAt: platform.clock.date() };
+      await platform.uow.run(async (tx) => {
+        await tx.db
+          .insert(publicSiteNovels)
+          .values({ novelId: scope.novelId, ...values })
+          .onConflictDoUpdate({ target: publicSiteNovels.novelId, set: values });
+        await audit.record(tx, {
+          novelId: scope.novelId,
+          actor,
+          action: "publication.settings_changed",
+          target: { type: "novel", id: scope.novelId },
+          before: before ? { introLength: before.intro.length } : null,
+          after: { introLength: values.intro.length },
         });
-      } catch (err) {
-        if (isUniqueViolation(err)) throw new ConflictError("slug_taken", "이미 다른 작품이 쓰는 공개 주소입니다.");
-        throw err;
-      }
+      });
       await rebuild();
       return toDto(scope, await rowOf(scope.novelId));
     },

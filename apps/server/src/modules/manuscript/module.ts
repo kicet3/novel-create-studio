@@ -21,6 +21,7 @@ import { createStructure } from "./application/structure.js";
 import { createPorts, createRegistries } from "./application/support.js";
 import { createWriting } from "./application/writing.js";
 import { createEpisodeUnits } from "./application/episode-units.js";
+import { createRhythmPolish } from "./application/rhythm-polish.js";
 
 export interface ManuscriptModuleDeps {
   platform: Platform;
@@ -65,6 +66,10 @@ export function createManuscriptModule(deps: ManuscriptModuleDeps): ServerModule
   service.proposeRetitle = units.proposeRetitle;
   service.getRetitle = units.getRetitle;
   service.applyRetitle = units.applyRetitle;
+  // 설계 추가 0024: [문체 다듬기]
+  const rhythm = createRhythmPolish(ports, getService);
+  service.requestRhythmPolish = rhythm.requestRhythmPolish;
+  service.decideRhythmCandidate = rhythm.decideRhythmCandidate;
 
   // registrations (CONVENTIONS §6): context sections, task kinds, approval handlers, N3 hook
   const sections = [...createContextSections(ports), ...handoff.sections, structure.section, pending.section];

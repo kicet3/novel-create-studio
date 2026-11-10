@@ -1,6 +1,6 @@
 /**
  * 공개 사이트 스냅숏 — the static JSON contract between the studio (writer: apps/server module `publication`)
- * and the public reader (reader: apps/public-reader). Only PUBLISHED episodes of novels opted in to the public site
+ * and the public reader (reader: apps/public-reader). Only PUBLISHED episodes of non-archived novels
  * are ever written; nothing here may carry internal ids, notes, outlines, bible or ontology data.
  *
  *   <data>/novels.json                         → PublicNovelList
@@ -11,8 +11,12 @@
  */
 export const PUBLIC_SNAPSHOT_VERSION = 1;
 
-/** public address of a novel: lowercase letters, digits and inner hyphens, 1–64 chars */
-export const PUBLIC_SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+/**
+ * public address of a novel: lowercase letters, digits and inner hyphens / underscores, 1–64 chars (no "--").
+ * The studio uses the lowercased novel id (e.g. nov_01m6qxdwfxeahe006mnnhf9j5j). Same rule as the public schema
+ * check (v3) and PUBLIC_SITE_SLUG_RE in @ncs/shared.
+ */
+export const PUBLIC_SLUG_RE = /^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$/;
 export const isPublicSlug = (s: unknown): s is string => typeof s === "string" && PUBLIC_SLUG_RE.test(s) && !s.includes("--");
 
 export type PublicAgeRating = "all" | "age_12" | "age_15" | "age_19";

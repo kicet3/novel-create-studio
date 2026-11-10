@@ -13,10 +13,12 @@ import {
   structureDecisionRequestSchema,
   arcReplanRequestSchema,
   retitleApplyRequestSchema, retitleProposeRequestSchema,
+  rhythmCandidateDecisionSchema,
 } from "@ncs/shared";
 import type { ApiRouters } from "../../../../platform/index.js";
 import { actorOf, created, scopeOf, valid, validate } from "../../../../http/kit.js";
 import { checkLength } from "../../domain/text.js";
+import { measureRhythm } from "../../domain/rhythm.js";
 import type { ManuscriptService, ManuscriptVersion } from "../../index.js";
 import type { NovelService } from "../../../novel/index.js";
 
@@ -44,10 +46,13 @@ export function mountManuscriptRoutes({ novel }: ApiRouters, svc: ManuscriptServ
     const current = ep.currentVersionId ? await svc.getVersion(scope, ep.currentVersionId) : null;
     const profile = current ? await novels.getLengthProfile(scope) : null;
     const [flagged] = await svc.withUnitInfo(scope, await svc.withLengthFlags(scope, [ep]));
+    // 설계 추가 0024: 문장 리듬 of the working copy under the current setting (the stored metric is the save-time one)
+    const rhythm = current ? measureRhythm(current.content, (await novels.getNovel(scope)).proseRhythm) : null;
     res.json({
       ...flagged,
       currentVersion: current ? summarizeVersion(current) : null,
       length: current && profile ? checkLength(current.content, profile) : null,
+      rhythm,
     });
   });
   novel.get("/episodes/:episodeNo/versions", validate({ params: episodeNoParamsSchema }), async (_req, res) => {
@@ -75,6 +80,15 @@ export function mountManuscriptRoutes({ novel }: ApiRouters, svc: ManuscriptServ
   novel.post("/episodes/:episodeNo/versions", validate({ params: episodeNoParamsSchema, body: humanEditRequestSchema }), async (_req, res) => {
     const { params, body } = valid<P & { body: z.output<typeof humanEditRequestSchema> }>(res);
     created(res, await svc.saveHumanEdit(scopeOf(res), params.episodeNo, body, actorOf(res)));
+  });
+  // 설계 추가 0024: [문체 다듬기] — candidate version, then the author keeps (E16) or discards it
+  novel.post("/episodes/:episodeNo/rhythm-polish", validate({ params: episodeNoParamsSchema }), async (_req, res) => {
+    const { params } = valid<P>(res);
+    res.status(202).json(await svc.requestRhythmPolish(scopeOf(res), params.episodeNo, actorOf(res)));
+  });
+  novel.post("/episodes/:episodeNo/rhythm-polish/decision", validate({ params: episodeNoParamsSchema, body: rhythmCandidateDecisionSchema }), async (_req, res) => {
+    const { params, body } = valid<P & { body: z.output<typeof rhythmCandidateDecisionSchema> }>(res);
+    res.json(await svc.decideRhythmCandidate(scopeOf(res), params.episodeNo, body, actorOf(res)));
   });
   novel.post("/episodes/:episodeNo/revision-request", validate({ params: episodeNoParamsSchema, body: revisionRequestSchema }), async (_req, res) => {
     const { params, body } = valid<P & { body: z.output<typeof revisionRequestSchema> }>(res);

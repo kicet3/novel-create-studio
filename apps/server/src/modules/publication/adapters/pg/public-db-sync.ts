@@ -1,7 +1,7 @@
 /**
  * Upserts the published content into the public schema (Supabase): one transaction per changed novel, episodes in
  * batches, unchanged rows skipped by content hash, rows that are no longer public deleted (episode unpublished, novel
- * opted out / archived / slug changed). Reaction tables are never touched here (comments of a removed episode stay;
+ * archived / no published episode left / slug no longer generated). Reaction tables are never touched here (comments of a removed episode stay;
  * the reader API serves nothing for a target that is not published).
  *
  * Every value goes as a bind parameter (row sets as one JSON text parameter → jsonb_to_recordset); the schema is a

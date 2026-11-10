@@ -1,8 +1,8 @@
 /**
  * 공개 사이트(설계 추가 0021, module publication). `…` = /api/novels/:novelId
  *
- *   GET   …/public-site          → publicSiteNovelDtoSchema      (작품별 노출 설정 + 공개된 화 수)
- *   PATCH …/public-site          ← updatePublicSiteNovelRequestSchema → publicSiteNovelDtoSchema
+ *   GET   …/public-site          → publicSiteNovelDtoSchema      (공개 주소·노출 여부·공개된 화 수)
+ *   PATCH …/public-site          ← updatePublicSiteNovelRequestSchema → publicSiteNovelDtoSchema (공개 소개만)
  *   GET   /api/public-site            → publicSiteStatusDtoSchema     (대상·연결 상태·마지막 동기화)
  *   PUT   /api/public-site/config     ← updatePublicSiteConfigRequestSchema → publicSiteStatusDtoSchema
  *   POST  /api/public-site/build      → publicSiteStatusDtoSchema     ([지금 동기화]: 강제로 다시 맞추기)
@@ -11,39 +11,54 @@
  *
  * Targets: "supabase" (default once a writer URL is saved) upserts the published content into the public schema of the
  * user's Supabase database; "files" writes the static JSON snapshot (offline / dev fallback). Either way only published
- * episodes (status published, published_version_id) of opted-in novels leave the studio. The writer connection string
+ * episodes (status published, published_version_id) of non-archived novels leave the studio. There is no opt-in: a
+ * novel is on the public site exactly while it has at least one published episode; its address is the lowercased
+ * novel id and its author name is PUBLIC_AUTHOR_NAME. The writer connection string
  * is a studio secret (`public_site.database_url`, encrypted): it is never returned — only `configured`.
  */
 import { z } from "zod";
 import { isoDateTime } from "./common.js";
 
-/** same rule as `PUBLIC_SLUG_RE` in @ncs/reader-core/snapshot (DB check: 0021_public_site.sql) */
-export const PUBLIC_SITE_SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
-export const publicSiteSlugSchema = z
-  .string()
-  .trim()
-  .toLowerCase()
-  .regex(PUBLIC_SITE_SLUG_RE, "공개 주소는 영문 소문자·숫자·하이픈(-)으로 1~64자, 하이픈으로 시작하거나 끝날 수 없습니다.")
-  .refine((s) => !s.includes("--"), "하이픈(-)을 연달아 쓸 수 없습니다.");
+/**
+ * same rule as `PUBLIC_SLUG_RE` in @ncs/reader-core/snapshot (public schema v3 check; studio DB: 0025_public_site_auto.sql):
+ * lowercase letters, digits and inner hyphens / underscores, 1–64 chars, no "--".
+ */
+export const PUBLIC_SITE_SLUG_RE = /^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$/;
+export const isPublicSiteSlug = (s: string) => PUBLIC_SITE_SLUG_RE.test(s) && !s.includes("--");
+
+/** 작가 표시 이름 — fixed for every novel on the public site (never per-novel input) */
+export const PUBLIC_AUTHOR_NAME = "새벽눈길";
+/** origin of the public reader (snowpage) */
+export const PUBLIC_SITE_ORIGIN = "https://novel.snowlink.team";
+
+/** public address of a novel: its studio id, lowercased (e.g. nov_01m6qxdwfxeahe006mnnhf9j5j) */
+export const publicSlugOf = (novelId: string) => novelId.toLowerCase();
+export const publicNovelUrl = (slug: string) => `${PUBLIC_SITE_ORIGIN}/novels/${slug}`;
 
 export const publicSiteNovelDtoSchema = z.object({
   novelId: z.string(),
-  enabled: z.boolean(),
-  slug: z.string().nullable(),
+  /** always the lowercased novel id */
+  slug: z.string(),
+  /** https://novel.snowlink.team/novels/<slug> */
+  publicUrl: z.string(),
+  /** on the public site now-or-at-next-sync: not archived AND at least one published episode (automatic, no opt-in) */
+  exposed: z.boolean(),
+  archived: z.boolean(),
   intro: z.string(),
+  /** always PUBLIC_AUTHOR_NAME */
   authorName: z.string(),
-  /** episodes that would be on the public site (status published with a published version) */
+  /** episodes that are on the public site (status published with a published version) */
   publishedEpisodeCount: z.number().int(),
+  /** last successful sync of the install-level target (any novel) */
+  lastSyncedAt: isoDateTime.nullable(),
   updatedAt: isoDateTime.nullable(),
 });
 export type PublicSiteNovelDto = z.infer<typeof publicSiteNovelDtoSchema>;
 
+/** only the public intro is editable: exposure, address and author name are fixed by rule */
 export const updatePublicSiteNovelRequestSchema = z
   .object({
-    enabled: z.boolean().optional(),
-    slug: publicSiteSlugSchema.nullable().optional(),
     intro: z.string().max(2000).optional(),
-    authorName: z.string().trim().max(40).optional(),
   })
   .strict();
 export type UpdatePublicSiteNovelRequest = z.input<typeof updatePublicSiteNovelRequestSchema>;

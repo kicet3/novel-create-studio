@@ -7,8 +7,10 @@
  *     of the user's Supabase database — the studio applies that schema's own migrations (@ncs/public-schema).
  *   target "files": writes the static JSON snapshot (offline / dev fallback).
  *
- * Source of truth for "public": novel opted in (public_site_novels.enabled, default off) AND episode status
- * `published` with a `published_version_id`. Drafts, awaiting_approval and approved-but-unpublished never leave.
+ * Source of truth for "public" (no opt-in): novel not archived AND episode status `published` with a
+ * `published_version_id`; a novel with no such episode is not listed. Address = lowercased novel id, author name =
+ * PUBLIC_AUTHOR_NAME ("새벽눈길"); only the public intro (public_site_novels.intro) is per-novel.
+ * Drafts, awaiting_approval and approved-but-unpublished never leave.
  * Syncs: after a settings change (awaited), on audit hints (episode published / unpublished, novel edits;
  * debounced) and a periodic reconcile that syncs only when the cheap fingerprint changed.
  * The writer connection string is the secret `public_site.database_url` (encrypted); it is never returned or logged.
@@ -25,7 +27,7 @@ import type { ActorRef, NovelScope } from "../../platform/index.js";
 
 export interface PublicationService {
   getNovelSettings(scope: NovelScope): Promise<PublicSiteNovelDto>;
-  /** records publication.settings_changed, then syncs */
+  /** public intro only; records publication.settings_changed, then syncs */
   updateNovelSettings(scope: NovelScope, patch: UpdatePublicSiteNovelRequest, actor: ActorRef): Promise<PublicSiteNovelDto>;
   status(): PublicSiteStatusDto;
   /** sync now (force: even when the fingerprint is unchanged) */

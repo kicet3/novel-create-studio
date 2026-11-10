@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   PUBLIC_ALL_TABLES,
   PUBLIC_EPISODE_COLUMNS,
+  PUBLIC_MIGRATIONS,
   PUBLIC_NOVEL_COLUMNS,
   PUBLIC_SCHEMA_LATEST_VERSION,
   ROLE_PASSWORD_PLACEHOLDER,
@@ -74,13 +75,30 @@ describe("public schema migrations", () => {
     const before = await outside(c, SCHEMA);
     expect(await publicSchemaVersion(c, SCHEMA)).toBeNull();
     const first = await applyPublicSchema(c, SCHEMA);
-    expect(first).toEqual({ schema: SCHEMA, applied: [1, 2], version: PUBLIC_SCHEMA_LATEST_VERSION });
+    expect(first).toEqual({ schema: SCHEMA, applied: [1, 2, 3], version: PUBLIC_SCHEMA_LATEST_VERSION });
     const second = await applyPublicSchema(c, SCHEMA);
     expect(second.applied).toEqual([]);
     expect(second.version).toBe(PUBLIC_SCHEMA_LATEST_VERSION);
     expect(await outside(c, SCHEMA)).toBe(before);
     const tables = await c.query<{ table_name: string }>("SELECT table_name FROM information_schema.tables WHERE table_schema = $1 ORDER BY 1", [SCHEMA]);
     expect(tables.map((t) => t.table_name)).toEqual([...PUBLIC_ALL_TABLES].sort());
+  });
+
+  it("v3 widens the slug rule to '_' on a v2 schema with existing rows, idempotently and confined", async () => {
+    const S2 = "ncs_public_v2";
+    await applyPublicSchema(c, S2, PUBLIC_MIGRATIONS.filter((m) => m.version <= 2));
+    await pg.exec(`INSERT INTO ${S2}.novels (slug, title, content_hash) VALUES ('old-slug', 't', 'h')`);
+    await expect(pg.exec(`INSERT INTO ${S2}.novels (slug, title, content_hash) VALUES ('nov_01abc', 't', 'h')`)).rejects.toThrow(/novels_slug_format/);
+    const before = await outside(c, S2);
+    expect((await applyPublicSchema(c, S2)).applied).toEqual([3]);
+    expect((await applyPublicSchema(c, S2)).applied).toEqual([]);
+    expect(await outside(c, S2)).toBe(before);
+    await pg.exec(`INSERT INTO ${S2}.novels (slug, title, content_hash) VALUES ('nov_01m6qxdwfxeahe006mnnhf9j5j', 't', 'h')`);
+    for (const bad of ["_a", "a_", "a--b", "A_b", "a.b"]) {
+      await expect(pg.exec(`INSERT INTO ${S2}.novels (slug, title, content_hash) VALUES ('${bad}', 't', 'h')`), bad).rejects.toThrow(/novels_slug_format/);
+    }
+    expect((await c.query<{ slug: string }>(`SELECT slug FROM ${S2}.novels ORDER BY 1`)).map((r) => r.slug)).toEqual(["nov_01m6qxdwfxeahe006mnnhf9j5j", "old-slug"]);
+    await pg.exec(`DROP SCHEMA ${S2} CASCADE`);
   });
 
   it("refuses an unsafe schema name before sending any SQL", async () => {
