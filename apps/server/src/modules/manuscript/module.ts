@@ -20,6 +20,7 @@ import { createPlanning } from "./application/planning.js";
 import { createStructure } from "./application/structure.js";
 import { createPorts, createRegistries } from "./application/support.js";
 import { createWriting } from "./application/writing.js";
+import { createEpisodeUnits } from "./application/episode-units.js";
 
 export interface ManuscriptModuleDeps {
   platform: Platform;
@@ -37,7 +38,7 @@ export interface ManuscriptModuleDeps {
 /** test seam: approval handlers / scheduler of a built module (tests only; other modules use index.ts) */
 export const manuscriptTestHooks = new WeakMap<
   ManuscriptService,
-  { approvalHandlers: ReturnType<typeof createPlanning>["approvalHandlers"] & ReturnType<typeof createStructure>["approvalHandlers"] }
+  { approvalHandlers: ReturnType<typeof createPlanning>["approvalHandlers"] & ReturnType<typeof createStructure>["approvalHandlers"] & { episode_titles: ReturnType<typeof createEpisodeUnits>["decideRetitle"] } }
 >();
 
 export function createManuscriptModule(deps: ManuscriptModuleDeps): ServerModule<ManuscriptService> {
@@ -47,7 +48,9 @@ export function createManuscriptModule(deps: ManuscriptModuleDeps): ServerModule
   const getService = () => service;
   const structure = createStructure(internals, getService);
   const handoff = createHandoff(ports);
-  const planning = createPlanning(internals, getService, structure, handoff);
+  // 설계 추가 0023: 에피소드 묶음 (story episodes, "제목 (1)(2)") + [제목 정리]
+  const units = createEpisodeUnits(ports);
+  const planning = createPlanning(internals, getService, structure, handoff, units);
   const writing = createWriting(internals, getService);
   service.requestArcPlanApproval = planning.requestArcPlanApproval;
   service.schedule = planning.schedule;
@@ -56,6 +59,12 @@ export function createManuscriptModule(deps: ManuscriptModuleDeps): ServerModule
   const pending = createPendingCanon(ports);
   service.listPendingPriorFacts = pending.listPendingPriorFacts;
   Object.assign(service, structure.service);
+  service.listEpisodeUnits = units.listUnits;
+  service.withUnitInfo = units.withUnitInfo;
+  service.getEpisodeUnitContext = units.unitContext;
+  service.proposeRetitle = units.proposeRetitle;
+  service.getRetitle = units.getRetitle;
+  service.applyRetitle = units.applyRetitle;
 
   // registrations (CONVENTIONS §6): context sections, task kinds, approval handlers, N3 hook
   const sections = [...createContextSections(ports), ...handoff.sections, structure.section, pending.section];
@@ -65,7 +74,7 @@ export function createManuscriptModule(deps: ManuscriptModuleDeps): ServerModule
   // 설계 추가 0019: summarize_episode (continuity_editor) + its triggers on episode transitions
   deps.orchestration.registerTaskKind(deps.agents.defineAgentTask(handoff.handler));
   reg.transitionHooks.push((ctx) => handoff.onTransition(ctx));
-  const approvalHandlers = { ...planning.approvalHandlers, ...structure.approvalHandlers };
+  const approvalHandlers = { ...planning.approvalHandlers, ...structure.approvalHandlers, episode_titles: units.decideRetitle };
   for (const [type, handler] of Object.entries(approvalHandlers)) {
     deps.hitl.registerApprovalHandler(type as keyof typeof approvalHandlers, handler);
   }

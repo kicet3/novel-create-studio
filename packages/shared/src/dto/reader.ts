@@ -31,6 +31,11 @@ export const readerTocEpisodeDtoSchema = z.object({
   approved: z.object({ source: z.enum(["published", "approved"]), charCount: z.number().int() }).nullable(),
   /** current draft that differs from the approved text (null = none, or it is the approved text) */
   draft: z.object({ charCount: z.number().int() }).nullable(),
+  /** 설계 추가 0023: 에피소드 묶음(없으면 null) — title은 이미 "묶음 제목 (n)" 표시 제목 */
+  unitId: z.string().nullable().optional(),
+  unitTitle: z.string().nullable().optional(),
+  unitPartNo: z.number().int().nullable().optional(),
+  unitPartCount: z.number().int().nullable().optional(),
 });
 export type ReaderTocEpisodeDto = z.infer<typeof readerTocEpisodeDtoSchema>;
 
@@ -44,6 +49,10 @@ export const readerTocDtoSchema = z.object({
   /** 플롯(아크) */
   plots: z.array(z.object({ id: z.string(), ord: z.number().int(), title: z.string(), partId: z.string().nullable() })),
   episodes: z.array(readerTocEpisodeDtoSchema),
+  /** 설계 추가 0023: 에피소드 묶음별 화 번호(목차 묶음 표시용 데이터, 플롯·순서 차례) */
+  units: z
+    .array(z.object({ id: z.string(), arcId: z.string(), title: z.string(), ord: z.number().int(), episodeNos: z.array(z.number().int()) }))
+    .optional(),
 });
 export type ReaderTocDto = z.infer<typeof readerTocDtoSchema>;
 
@@ -71,6 +80,10 @@ export const readerEpisodeDtoSchema = z.object({
   /** nearest readable episodes in the same mode (`skipped` lists the unreadable ones in between) */
   prev: neighbor,
   next: neighbor,
+  /** 설계 추가 0023: 에피소드 묶음(없으면 null) — title은 이미 표시 제목 */
+  unitTitle: z.string().nullable().optional(),
+  unitPartNo: z.number().int().nullable().optional(),
+  unitPartCount: z.number().int().nullable().optional(),
 });
 export type ReaderEpisodeDto = z.infer<typeof readerEpisodeDtoSchema>;
 

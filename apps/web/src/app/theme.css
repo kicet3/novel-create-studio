@@ -1,4 +1,6 @@
 @import "tailwindcss";
+/* shared 읽기 viewer components (@ncs/reader-ui) use Tailwind classes too */
+@source "../../../../packages/reader-ui/src";
 
 /* Theme tokens ported from docs/mockups-src/base.css (light default, dark via OS or [data-theme="dark"]). */
 :root{

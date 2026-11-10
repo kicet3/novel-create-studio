@@ -22,6 +22,7 @@ import { cx } from "../../lib/cx.js";
 import { useNovel } from "../novels/api.js";
 import { useArcs, useEpisodes, type ArcDto, type EpisodeDto } from "./api.js";
 import { ExportDialog, type ExportTarget } from "./ExportDialog.js";
+import { RetitleDialog } from "../structure/RetitleDialog.js";
 
 /** `/novels/:novelId/manuscript` — episodes grouped by arc, filterable by status (08 §9.4). */
 export function EpisodeList({ novelId }: { novelId: string }) {
@@ -112,6 +113,7 @@ function Grouped({
   onExportArc: (a: ArcDto) => void;
 }) {
   const navigate = useNavigate();
+  const [retitle, setRetitle] = useState<ArcDto | null>(null);
   const groups = useMemo(() => {
     const byArc = new Map<string, EpisodeDto[]>();
     for (const e of [...episodes].sort((a, b) => a.episodeNo - b.episodeNo)) {
@@ -143,6 +145,9 @@ function Grouped({
             g.arc && (
               <>
                 <StatusBadge enum="arc_status" value={g.arc.status} />
+                <Button size="sm" onClick={() => setRetitle(g.arc as ArcDto)}>
+                  제목 정리
+                </Button>
                 <Button size="sm" onClick={() => onExportArc(g.arc as ArcDto)}>
                   플롯 내보내기
                 </Button>
@@ -205,6 +210,7 @@ function Grouped({
           </TableWrap>
         </Card>
       ))}
+      {retitle && <RetitleDialog novelId={novelId} arcId={retitle.id} title={retitle.title} onClose={() => setRetitle(null)} />}
     </div>
   );
 }

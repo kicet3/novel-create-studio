@@ -8,8 +8,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { episodeLabel, loadHistory, loadResume, markHistory, readingBlocks, resumeAnchorFor, saveHistory, saveResume } from "@ncs/reader-core";
-import type { PublicEpisode } from "@ncs/reader-core/snapshot";
-import { browserStore, useMounted, useReaderSettings, useViewport } from "../lib/hooks";
+import type { PublicEpisode, PublicTocEntry } from "@ncs/reader-core/snapshot";
+import { browserStore, useDesktopReader, useMounted, useReaderSettings, useViewport } from "../lib/hooks";
+import { DesktopReader } from "../desktop/DesktopReader";
 import { href } from "../lib/href";
 import { CommentsSheet, LikeButton, useEpisodeStats, useWritable } from "../components/social";
 import { SettingsSheet } from "../components/SettingsSheet";
@@ -21,13 +22,18 @@ import { ScrollView } from "./ScrollView";
 export interface EpisodeReaderProps {
   ep: PublicEpisode;
   novelTitle: string;
+  /** published episodes of the novel (PC 목차 drawer) */
+  toc: PublicTocEntry[];
   /** ?at=end (coming back from the next episode) */
   startAtEnd: boolean;
 }
 
 export function EpisodeReader(props: EpisodeReaderProps) {
   const mounted = useMounted();
+  const desktop = useDesktopReader();
   if (!mounted) return <StaticEpisode ep={props.ep} novelTitle={props.novelTitle} />;
+  // PC (≥ 1024px, not folded): the studio viewer; phones / tablets / foldables: the mobile reader below
+  if (desktop) return <DesktopReader key={`${props.ep.slug}/${props.ep.episodeNo}`} {...props} />;
   return <Reader key={`${props.ep.slug}/${props.ep.episodeNo}`} {...props} />;
 }
 

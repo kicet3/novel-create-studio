@@ -13,7 +13,21 @@
  * (`registerCheckGateContributor`) so neither needs to import the other. Episode transitions invoke
  * `onEpisodeTransition` hooks in the same transaction (E9/E13/E14 fact & beat promotion, etc.).
  */
-import type { CastCompleteness, CharacterRole, CountBasis, EpisodeBlockReason, EpisodeStatus, IssueFixScope, ManuscriptVersionKind, ReworkFrom, StructureView } from "@ncs/shared";
+import type {
+  CastCompleteness,
+  CharacterRole,
+  CountBasis,
+  EpisodeBlockReason,
+  EpisodeStatus,
+  EpisodeUnitDto,
+  IssueFixScope,
+  ManuscriptVersionKind,
+  RetitleApplyRequest,
+  RetitleApplyResult,
+  RetitleProposalView,
+  ReworkFrom,
+  StructureView,
+} from "@ncs/shared";
 import type { EpisodesRow, EpisodeRejectionsRow, ManuscriptVersionsRow, ScenesRow } from "@ncs/db/schema";
 import type { ActorRef, NovelScope, Tx } from "../../platform/index.js";
 import type { EpisodeFact } from "../ontology/index.js";
@@ -289,6 +303,37 @@ export interface ManuscriptService {
    * not in conflict with canon, not held; relevant to `entityIds` when given; newest source episode first, bounded
    */
   listPendingPriorFacts(scope: NovelScope, episodeNo: number, opts?: { entityIds?: string[]; limit?: number }, tx?: Tx): Promise<PendingPriorFact[]>;
+
+  // ── 설계 추가 0023: 에피소드 묶음 "제목 (1)(2)" ──
+  /** active story episodes (에피소드 묶음) of the novel / a plot, in reading order */
+  listEpisodeUnits(scope: NovelScope, filter?: { arcId?: string }, tx?: Tx): Promise<EpisodeUnitDto[]>;
+  /** episode rows with unitTitle / unitPartNo / unitPartCount (null without a 묶음) — `title` is already the display title */
+  withUnitInfo<E extends Episode>(scope: NovelScope, episodes: E[], tx?: Tx): Promise<Array<E & EpisodeUnitInfo>>;
+  /** the 묶음 of a 화 for the writing prompts (null without one) */
+  getEpisodeUnitContext(scope: NovelScope, episode: Episode, tx?: Tx): Promise<EpisodeUnitContext | null>;
+  /** [제목 정리]: 202 plan_arc (retitle) — the running one when it exists */
+  proposeRetitle(scope: NovelScope, arcId: string, actor: ActorRef, note?: string): Promise<{ taskId: string }>;
+  getRetitle(scope: NovelScope, arcId: string): Promise<RetitleProposalView>;
+  /** applies (or rejects) the pending proposal; published 화 change only when listed + confirmed (422 published_rename_confirmation_required) */
+  applyRetitle(scope: NovelScope, arcId: string, input: RetitleApplyRequest, actor: ActorRef): Promise<RetitleApplyResult>;
+}
+
+/** 설계 추가 0023 */
+export interface EpisodeUnitInfo {
+  unitId: string | null;
+  unitTitle: string | null;
+  unitPartNo: number | null;
+  unitPartCount: number | null;
+}
+
+/** 설계 추가 0023: "이 화는 「X」 에피소드의 n/N화" */
+export interface EpisodeUnitContext {
+  title: string;
+  partNo: number;
+  partCount: number;
+  from: number;
+  to: number;
+  siblings: Array<{ episodeNo: number; partNo: number; title: string | null; planSummary: string; status: string }>;
 }
 
 /** 설계 추가(미확정 사실 선행 집필): a provisional fact of an earlier episode waiting for approval */

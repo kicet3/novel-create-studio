@@ -18,6 +18,10 @@ export interface SnapshotEpisodeInput {
   text: string;
   charCount: number;
   publishedAt: Date | null;
+  /** 설계 추가 0023: 에피소드 묶음 (title is already "묶음 제목 (n)"); omitted / null = none */
+  unitTitle?: string | null;
+  unitPartNo?: number | null;
+  unitPartCount?: number | null;
 }
 
 export interface SnapshotNovelInput {

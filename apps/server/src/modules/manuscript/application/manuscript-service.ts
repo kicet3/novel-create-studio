@@ -902,6 +902,25 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
     listPendingPriorFacts: () => {
       throw new Error("wired in module.ts");
     },
+    // 설계 추가 0023: 에피소드 묶음 (application/episode-units.ts)
+    listEpisodeUnits: () => {
+      throw new Error("wired in module.ts");
+    },
+    withUnitInfo: () => {
+      throw new Error("wired in module.ts");
+    },
+    getEpisodeUnitContext: () => {
+      throw new Error("wired in module.ts");
+    },
+    proposeRetitle: () => {
+      throw new Error("wired in module.ts");
+    },
+    getRetitle: () => {
+      throw new Error("wired in module.ts");
+    },
+    applyRetitle: () => {
+      throw new Error("wired in module.ts");
+    },
     registerIssueSink: (sink) => void reg.issueSinks.push(sink),
     registerPlannedBeatSource: (src) => void reg.beatSources.push(src),
     registerVersionAnnotator: (kind, a) => void reg.annotators[kind].push(a),

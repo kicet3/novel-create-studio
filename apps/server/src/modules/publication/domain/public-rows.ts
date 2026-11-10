@@ -25,6 +25,10 @@ export interface PublicEpisodeRow {
   body: string;
   char_count: number;
   published_at: string | null;
+  /** v2 (설계 추가 0023): 에피소드 묶음 */
+  unit_title: string | null;
+  unit_part_no: number | null;
+  unit_part_count: number | null;
   content_hash: string;
 }
 
@@ -42,7 +46,14 @@ export function toPublicRows(n: SnapshotNovelInput): PublicNovelRows {
   const eps = [...n.episodes].filter((e) => Number.isInteger(e.episodeNo) && e.episodeNo >= 1).sort((a, b) => a.episodeNo - b.episodeNo);
   const episodes = eps.map((e): PublicEpisodeRow => {
     const row = { novel_slug: n.slug, episode_no: e.episodeNo, title: cleanTitle(e.title), body: e.text, char_count: e.charCount, published_at: iso(e.publishedAt) };
-    return { ...row, content_hash: hashOf(row) };
+    const unitTitle = cleanTitle(e.unitTitle ?? null);
+    const unit = {
+      unit_title: unitTitle,
+      unit_part_no: unitTitle && e.unitPartNo ? e.unitPartNo : null,
+      unit_part_count: unitTitle && e.unitPartCount ? e.unitPartCount : null,
+    };
+    // the hash covers the unit fields only when there is a 묶음 (unchanged rows of older syncs are not rewritten)
+    return { ...row, ...unit, content_hash: hashOf(unitTitle ? { ...row, ...unit } : row) };
   });
   const latest = eps.reduce<Date | null>((m, e) => (e.publishedAt && (!m || e.publishedAt > m) ? e.publishedAt : m), null);
   const novel = {

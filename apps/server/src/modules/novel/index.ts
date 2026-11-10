@@ -155,6 +155,8 @@ export interface NovelSettingsPatch {
   entityAgentMinConfidence?: number;
   /** 설계 추가 0018: 한 화씩 진행 */
   sequentialEpisodes?: boolean;
+  /** 설계 추가 0023: 제목 방식 */
+  episodeTitleMode?: "unit" | "per_episode";
 }
 
 export interface ChangeAutonomyInput {

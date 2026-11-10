@@ -7,6 +7,7 @@ import { Badge, Button, Card, Chip, Dialog, Field, StatusBadge, Textarea } from 
 import { cx } from "../../lib/cx.js";
 import { useAcknowledgeArcFlags, usePlotDecision, useReplanArc } from "./api.js";
 import { PartEditorDialog } from "./PartEditorDialog.js";
+import { RetitleDialog } from "./RetitleDialog.js";
 import { nameOf, partTitle, rangeLabel, type PartNode, type PlotNode, type StructureTree } from "./tree.js";
 
 type Character = { id: string; name: string };
@@ -199,6 +200,7 @@ function PlotRow({ novelId, node, names, selected }: { novelId: string; node: Pl
   const p = node.plot;
   const [open, setOpen] = useState(selected);
   const [replanning, setReplanning] = useState(false);
+  const [retitling, setRetitling] = useState(false);
   const ref = useRef<HTMLLIElement>(null);
   const ack = useAcknowledgeArcFlags(novelId);
   useEffect(() => {
@@ -259,6 +261,14 @@ function PlotRow({ novelId, node, names, selected }: { novelId: string; node: Pl
       )}
       {p.status === "plan_awaiting_approval" && p.planApprovalId && <PlanDecision novelId={novelId} approvalId={p.planApprovalId} title="플롯 계획" blocked={!!p.castGaps} />}
       {p.replanApprovalId && <PlanDecision novelId={novelId} approvalId={p.replanApprovalId} title="재계획안" blocked={false} />}
+      {p.retitleApprovalId && (
+        <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md bg-surface-2 px-2.5 py-2 text-[13px]">
+          <span className="min-w-0 flex-1">제목 정리 제안이 기다리고 있습니다(에피소드 묶음 「제목 (1)(2)」).</span>
+          <Button size="sm" variant="primary" onClick={() => setRetitling(true)}>
+            전→후 보고 적용
+          </Button>
+        </div>
+      )}
       {node.flagged && (
         <div className="mt-2 flex flex-col gap-1.5 rounded-md bg-surface-2 px-2.5 py-2 text-[13px]">
           <p className="m-0">전체 구성이 바뀌었습니다. 이 플롯을 새 구성에 맞게 다시 계획할지, 지금 계획을 유지할지 정하세요. 정하기 전까지 이 플롯의 새 아웃라인을 만들지 않습니다(이미 시작한 작업은 끝까지 진행됩니다).</p>
@@ -308,15 +318,23 @@ function PlotRow({ novelId, node, names, selected }: { novelId: string; node: Pl
         ) : (
           <p className="m-0 text-faint">아직 화 계획이 없습니다. 차례가 되면 AI가 이 플롯의 화 목록을 계획합니다.</p>
         )}
-        {canReplan && !node.flagged && (
-          <div>
-            <Button size="sm" onClick={() => setReplanning(true)}>
-              화 계획 다시 짜기
-            </Button>
+        {(canReplan && !node.flagged) || (p.planningStage === "episodes_planned" && p.status !== "cancelled") ? (
+          <div className="flex flex-wrap gap-2">
+            {canReplan && !node.flagged && (
+              <Button size="sm" onClick={() => setReplanning(true)}>
+                화 계획 다시 짜기
+              </Button>
+            )}
+            {p.planningStage === "episodes_planned" && p.status !== "cancelled" && (
+              <Button size="sm" onClick={() => setRetitling(true)}>
+                제목 정리
+              </Button>
+            )}
           </div>
-        )}
+        ) : null}
       </div>
       {replanning && <ReplanDialog novelId={novelId} arcId={p.id} title={p.title} onClose={() => setReplanning(false)} />}
+      {retitling && <RetitleDialog novelId={novelId} arcId={p.id} title={p.title} onClose={() => setRetitling(false)} />}
     </li>
   );
 }

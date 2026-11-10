@@ -29,7 +29,20 @@ export const PUBLIC_ALL_TABLES = ["schema_migrations", ...PUBLIC_CONTENT_TABLES,
 
 /** allow-listed columns of the content tables (tests assert the schema has exactly these) */
 export const PUBLIC_NOVEL_COLUMNS = ["slug", "title", "author_name", "intro", "genre", "age_rating", "episode_count", "latest_published_at", "content_hash", "updated_at"] as const;
-export const PUBLIC_EPISODE_COLUMNS = ["novel_slug", "episode_no", "title", "body", "char_count", "published_at", "content_hash", "updated_at"] as const;
+export const PUBLIC_EPISODE_COLUMNS = [
+  "novel_slug",
+  "episode_no",
+  "title",
+  "body",
+  "char_count",
+  "published_at",
+  "content_hash",
+  "updated_at",
+  // v2 (설계 추가 0023): 에피소드 묶음 — title is already the display title "묶음 제목 (n)"
+  "unit_title",
+  "unit_part_no",
+  "unit_part_count",
+] as const;
 
 export const PUBLIC_MIGRATIONS: readonly PublicMigration[] = [
   {
@@ -134,6 +147,16 @@ CREATE TABLE IF NOT EXISTS ${s}.rate_limits (
 CREATE INDEX IF NOT EXISTS rate_limits_window_idx ON ${s}.rate_limits (window_start);
 
 ${PUBLIC_ALL_TABLES.map((t) => `ALTER TABLE ${s}.${t} ENABLE ROW LEVEL SECURITY;`).join("\n")}
+`,
+  },
+  {
+    // additive: 에피소드 묶음 (story episode) of each 화 — readers may group the TOC; NULL = no 묶음
+    version: 2,
+    name: "episode_units",
+    sql: (s) => `
+ALTER TABLE ${s}.episodes ADD COLUMN IF NOT EXISTS unit_title text;
+ALTER TABLE ${s}.episodes ADD COLUMN IF NOT EXISTS unit_part_no integer;
+ALTER TABLE ${s}.episodes ADD COLUMN IF NOT EXISTS unit_part_count integer;
 `,
   },
 ];

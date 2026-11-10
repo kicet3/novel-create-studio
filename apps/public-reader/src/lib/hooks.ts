@@ -14,6 +14,7 @@ import {
   type ReaderSolidTheme,
   type ViewportSegment,
 } from "@ncs/reader-core";
+import { usesDesktopReader } from "./layout";
 
 export function browserStore(): KeyValueStore | null {
   if (typeof window === "undefined") return null;
@@ -152,4 +153,22 @@ export function useMounted(): boolean {
     () => true,
     () => false,
   );
+}
+
+// ── PC reader switch ─────────────────────────────────────────────────────
+const SEGMENT_QUERIES = ["(horizontal-viewport-segments: 2)", "(vertical-viewport-segments: 2)"];
+function subscribeWide(fn: () => void) {
+  window.addEventListener("resize", fn);
+  const mqs = SEGMENT_QUERIES.map((q) => window.matchMedia(q));
+  for (const mq of mqs) mq.addEventListener?.("change", fn);
+  return () => {
+    window.removeEventListener("resize", fn);
+    for (const mq of mqs) mq.removeEventListener?.("change", fn);
+  };
+}
+const wideSnapshot = () => usesDesktopReader(window.innerWidth, SEGMENT_QUERIES.some((q) => window.matchMedia(q).matches) ? [0, 1] : null);
+
+/** ≥ 1024px flat screen: the PC reader (studio viewer); false during the server render / hydration */
+export function useDesktopReader(): boolean {
+  return useSyncExternalStore(subscribeWide, wideSnapshot, () => false);
 }

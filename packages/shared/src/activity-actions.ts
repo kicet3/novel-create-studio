@@ -73,6 +73,8 @@ export const ACTIVITY_ACTIONS = [
   "revision_chat.setting_changed", "revision_chat.author_note_saved", "revision_chat.handed_off", "revision_chat.closed",
   // 설계 추가 0021: 공개 사이트(module publication)
   "publication.settings_changed", "publication.config_changed",
+  // 설계 추가 0023: 에피소드 묶음 제목 (1)(2) — 플롯 계획·[제목 정리] 적용
+  "episode.retitled",
 ] as const;
 
 export type ActivityAction = (typeof ACTIVITY_ACTIONS)[number];

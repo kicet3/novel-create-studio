@@ -2,6 +2,7 @@
 import { z } from "zod";
 import { ENUMS } from "../enum-registry.js";
 import { isoDateTime } from "./common.js";
+import { EPISODE_TITLE_MODES } from "../episode-title.js";
 
 /** 한 화의 절대 최소 분량(작품 count_basis 기준). 프로필 minChars는 이 값 이상이어야 합니다. */
 export const EPISODE_HARD_MIN_CHARS = 3000;
@@ -55,6 +56,8 @@ export const novelDtoSchema = z.object({
   entityAgentMinConfidence: z.number().min(0).max(1).default(0.75),
   /** 설계 추가 0018: 한 화씩 진행 — 화별 승인에서 N화를 승인해야 N+1화를 씀(기본 켬) */
   sequentialEpisodes: z.boolean().default(true),
+  /** 설계 추가 0023: 제목 방식 — unit = 에피소드 묶음 "제목 (1)(2)"(새 작품 기본), per_episode = 화별 제목(이전 방식) */
+  episodeTitleMode: z.enum(EPISODE_TITLE_MODES).default("unit"),
   defaultNarrationMode: z.enum(ENUMS.narration_mode),
   timezone: z.string(),
   lengthProfileId: z.string(),
@@ -196,6 +199,8 @@ export const updateNovelSettingsRequestSchema = z
     entityAgentMinConfidence: z.number().min(0.3).max(1),
     /** 설계 추가 0018: 한 화씩 진행(화별 승인에서만 의미 있음) */
     sequentialEpisodes: z.boolean(),
+    /** 설계 추가 0023: 제목 방식(앞으로 계획하는 화에 적용, 이미 있는 제목은 [제목 정리]로 바꿈) */
+    episodeTitleMode: z.enum(EPISODE_TITLE_MODES),
   })
   .partial()
   .refine((v) => Object.keys(v).length > 0, "변경할 항목이 없습니다.");

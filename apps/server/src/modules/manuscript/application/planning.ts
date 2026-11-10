@@ -11,6 +11,7 @@ import {
   arcPlanProposalSchema,
   bibleProposalSchema,
   planArcInputSchema,
+  retitleProposalSchema,
   planSeriesBibleInputSchema,
   scheduleEpisodesInputSchema,
   type ArcPlanProposal,
@@ -27,6 +28,10 @@ import { castPortOf, settings, soft } from "./support.js";
 import { structureGateRef, type StructureApi } from "./structure.js";
 import { DomainValidationError } from "../../../platform/index.js";
 import type { PlotCharacterDraft } from "../index.js";
+import { callWithRepair } from "../../agents/index.js";
+import { TaskFailure } from "../../orchestration/index.js";
+import { assignStoryEpisodes, normalizeStoryEpisodes, pinnedGroupIssues, storyEpisodeIssues, type StoryEpisodeGroup } from "../domain/episode-units.js";
+import { isRetitleTask, retitleRange, type EpisodeUnitsApi, type RetitlePayload } from "./episode-units.js";
 
 const BIBLE_INSTRUCTION = `당신은 웹소설 기획자(planner)입니다. 승인된 컨셉과 목표를 바탕으로 연재 기획서를 JSON으로 작성합니다.
 - logline은 컨셉의 로그라인을 그대로 씁니다.
@@ -40,6 +45,22 @@ const ARC_INSTRUCTION = `당신은 웹소설 기획자(planner)입니다. 기획
 - core_event(핵심 사건), change_text(이 플롯이 만들어 내는 변화), involved_character_ids(roster id만), setup_plan(심을 떡밥 plant·회수할 떡밥 payoff)을 채웁니다.
 - 플롯이 전체 구성의 현재 부 목표와 결말 방향을 벗어나지 않게 합니다.
 - 새 인물이 필요하면 new_characters에 필수 항목을 모두 채워 제안합니다(주인공급: 나이·외형·성격(장점·결점)·목표·동기·두려움·과거사 2~3줄·말투 예시 1~2줄·주인공과의 관계·변화 아크 시작과 끝 / 조연·적대자: 이야기 속 역할·목표·주인공과의 관계). 첫 등장 화(first_appearance_episode_no)도 적습니다.`;
+
+/** 설계 추가 0023: plan_arc in the "unit" title mode — the plot's 화 grouped into story episodes (에피소드 묶음) */
+const UNIT_ARC_RULES = `- 이 작품은 에피소드 묶음 제목 방식입니다. 웹소설처럼 한 이야기(에피소드)를 여러 화로 나눠 「묶음 제목 (1)」「묶음 제목 (2)」로 올립니다.
+- story_episodes에 이번 플롯의 화 범위를 빠짐없이, 겹치지 않게, 순서대로 나눈 묶음을 적습니다. 묶음마다 title(소제목, 번호·"N화" 없이 짧게)·from·to(포함)를 씁니다.
+- 한 묶음은 보통 연속된 2~5화입니다(한 화로 끝나는 독립 사건만 1화). 묶음이 바뀌는 곳은 이야기 단위(사건·장소·목표)가 바뀌는 곳입니다.
+- writtenEpisodes가 있으면(진행 중인 플롯의 재계획) 그 화들은 이미 쓴 화라 제목이 바뀌지 않습니다. 각 화가 지금 묶음(unitTitle)의 몇 번째 화(unitPartNo)인지 그대로 유지되도록 같은 title·같은 시작 화로 묶고, 남은 계획 화만 그 묶음에 이어 붙이거나 새 묶음으로 나눕니다.
+- episodes의 title은 비워 두어도 됩니다(묶음 제목과 번호로 정해집니다). 화마다 summary·hook_note는 그 묶음 안에서의 역할(도입·전개·절정·마무리)에 맞게 씁니다. 묶음의 마지막 화가 아니면 다음 화로 이어지는 훅, 마지막 화면 묶음을 마무리하며 다음 이야기로 넘어가는 훅을 둡니다.`;
+
+/** 설계 추가 0023: [제목 정리] — group the existing 화 of a plot into story episodes from their plans / outlines */
+const RETITLE_INSTRUCTION = `당신은 웹소설 기획자(planner)입니다. 이 플롯의 화들은 지금 화마다 새 제목이 붙어 있습니다. 웹소설처럼 한 에피소드(이야기 단위)를 여러 화로 나눠 「묶음 제목 (1)」「묶음 제목 (2)」로 올리도록 화들을 에피소드 묶음으로 나눕니다.
+- story_episodes에 주어진 화 범위를 빠짐없이, 겹치지 않게, 순서대로 나눈 묶음을 적습니다. 묶음마다 title·from·to(포함)를 씁니다.
+- 각 화의 계획(plan)·아웃라인(outline)·지금 제목을 읽고, 같은 사건·장소·목표가 이어지는 연속된 화를 한 묶음으로 묶습니다. 보통 2~5화, 한 화로 끝나는 독립 사건만 1화입니다.
+- title은 그 묶음 전체를 대표하는 짧은 소제목입니다(번호·"N화"·괄호 없이). 지금 제목 중 묶음을 잘 대표하는 것이 있으면 그대로 써도 됩니다.
+- status=published인 화는 독자에게 이미 공개되어 기본으로 제목이 유지됩니다. 공개된 화가 묶음의 첫 화라면 그 화의 지금 제목을 묶음 제목으로 쓰세요(그러면 「제목」「제목 (2)」로 이어집니다). 어울리지 않으면 공개된 화만 따로 묶으세요. 그렇지 않으면 공개된 화는 묶음에서 빠지고 나머지 화가 (1)부터 다시 번호를 받습니다.
+- rejectionNote가 있으면 작가가 지난 제안을 반려하며 남긴 요청이니 반드시 반영합니다.
+- rationale에 나눈 이유를 한두 문장으로 적습니다.`;
 
 export interface PlanningApi {
   handlers: Array<PipelineHandler<any, any>>;
@@ -55,6 +76,8 @@ export function createPlanning(
   structure: StructureApi,
   /** 설계 추가 0019: before N+1's outline, N gets a handoff of its latest text (summarize_episode) */
   handoff?: { ensurePrevRecap(tx: import("../../../platform/index.js").Tx, scope: NovelScope, ep: { episodeNo: number }): Promise<unknown> },
+  /** 설계 추가 0023: 에피소드 묶음 */
+  units?: EpisodeUnitsApi,
 ): PlanningApi {
   const { ports } = m;
   const cast = () => castPortOf(ports.reg);
@@ -157,7 +180,7 @@ export function createPlanning(
         const eps = await repo.listEpisodes(platform.uow.db, scope);
         const count = (id: string) => eps.filter((e) => e.arcId === id).length;
         const active = await orchestration.listTasks(scope, { kinds: ["plan_arc"], statuses: ["pending", "ready", "running", "blocked"], limit: 50 });
-        const inPlanning = arcs.some((a) => a.status === "plan_awaiting_approval" || (a.status === "planned" && (count(a.id) > 0 || active.some((t) => t.targetId === a.id))));
+        const inPlanning = arcs.some((a) => a.status === "plan_awaiting_approval" || (a.status === "planned" && (count(a.id) > 0 || active.some((t) => t.targetId === a.id && !isRetitleTask(t)))));
         if (inPlanning || arcs.some((a) => (a.planFlags ?? []).length)) return { arc: null, note: "plot_in_planning" };
         const next = arcs.filter((a) => a.status === "planned" && count(a.id) === 0).sort((a, b) => a.plannedEpisodeFrom - b.plannedEpisodeFrom)[0];
         return { arc: null, planArcId: next?.id ?? null, note: next ? undefined : "all_plots_planned" };
@@ -195,7 +218,7 @@ export function createPlanning(
   };
 
   // ── B3 plan_arc ──
-  const planArc: PipelineHandler<import("../domain/schemas.js").PlanArcInput, { plan: ArcPlanProposal; modelId: string; newCharacters: PlotCharacterDraft[] }> = {
+  const planArc: PipelineHandler<import("../domain/schemas.js").PlanArcInput, ArcPlanResult | RetitleResult> = {
     kind: "plan_arc",
     role: "planner",
     promptTemplateVersion: "planner.plan_arc@0.1.0",
@@ -216,7 +239,12 @@ export function createPlanning(
     },
     async execute(run, input, context, llm) {
       const scope = { novelId: run.novelId };
+      if (input.retitle) return retitleExecute(run, input.arc_id, input.rejection_note ?? null, context, llm);
       const arc = await novel.getArc(scope, input.arc_id);
+      const unitMode = !!units && (await units.titleMode(scope)) === "unit";
+      // 설계 추가 0023: a re-plan keeps the 묶음 of the 화 already written (their titles do not change)
+      const current = unitMode ? await repo.listEpisodes(platform.uow.db, scope, { arcId: arc.id }) : [];
+      const written = unitMode && units ? (await units.withUnitInfo(scope, current.filter((e) => e.status !== "planned" && e.episodeNo >= arc.plannedEpisodeFrom && e.episodeNo <= arc.plannedEpisodeTo))) : [];
       const bible = await novel.getApprovedBible(scope);
       const st = await novel.getStructure(scope);
       const part = st && arc.partId ? st.parts.find((x) => x.id === arc.partId) : undefined;
@@ -233,19 +261,65 @@ export function createPlanning(
         maxScenesPerEpisode: cfg.maxScenes,
         previous,
         rejectionNote: input.rejection_note ?? null,
+        ...(written.length ? { writtenEpisodes: written.map((e) => ({ no: e.episodeNo, status: e.status, title: e.title, unitTitle: e.unitTitle, unitPartNo: e.unitPartNo })) } : {}),
       });
-      const out = await llm.call({
+      const pinnedWritten = written.filter((e) => e.unitId).map((e) => ({ episodeNo: e.episodeNo, title: e.title }));
+      const request = {
         run,
         purpose: "plan_arc",
-        ...promptOf(context, ARC_INSTRUCTION, data),
-        output: { kind: "object", schemaName: "ArcPlanProposal", schema: arcPlanProposalSchema },
-      });
-      const v = out.value as ArcPlanProposal;
+        ...promptOf(context, unitMode ? `${ARC_INSTRUCTION}\n${UNIT_ARC_RULES}` : ARC_INSTRUCTION, data),
+        output: { kind: "object" as const, schemaName: "ArcPlanProposal", schema: arcPlanProposalSchema },
+      };
+      // 설계 추가 0023: story episodes must cover the plot's range contiguously — a validator critique asks once to fix
+      const out =
+        unitMode && llm.port
+          ? (
+              await callWithRepair({
+                llm: llm.port,
+                request,
+                validate: (x) => ({
+                  result: null,
+                  issues: [...storyEpisodeIssues(x.story_episodes, arc.plannedEpisodeFrom, arc.plannedEpisodeTo), ...pinnedGroupIssues(x.story_episodes, pinnedWritten)],
+                }),
+                label: "에피소드 묶음 검사",
+                critic: "구성 검사 에이전트",
+                instruction: `story_episodes가 ${arc.plannedEpisodeFrom}~${arc.plannedEpisodeTo}화를 빠짐없이, 겹치지 않게 순서대로 덮도록 고치세요. 이미 쓴 화는 지금 묶음의 같은 자리에 두세요.`,
+                maxRounds: 1,
+                repairPurpose: "plan_arc_repair",
+              })
+            ).output
+          : await llm.call(request);
+      const v = arcPlanProposalSchema.parse(out.value);
       const synth = synthArcPlan(arc, outline ? { title: outline.title, summary: outline.summary ?? "" } : undefined);
       const byNo = new Map(v.episodes.filter((e) => e.episode_no >= arc.plannedEpisodeFrom && e.episode_no <= arc.plannedEpisodeTo).map((e) => [e.episode_no, e]));
       const known = new Set(roster.map((r) => r.id));
       const clampScenes = (n: number | null) => (n === null || !Number.isFinite(n) ? Math.min(cfg.maxScenes, 3) : Math.min(cfg.maxScenes, Math.max(1, Math.round(n))));
       const clampTarget = (n: number | null) => Math.min(profile.maxChars, Math.max(profile.minChars, n ?? Math.round((profile.minChars + profile.maxChars) / 2)));
+      const merged: ArcPlanProposal["episodes"] = synth.episodes.map((e) => {
+        const got = byNo.get(e.episode_no);
+        const mergedEp = { ...e, ...(got ?? {}) };
+        return { ...mergedEp, scene_count: clampScenes(mergedEp.scene_count), target_chars: clampTarget(mergedEp.target_chars) };
+      });
+      // 설계 추가 0023: unit mode — titles come from the story episode + part number (always a valid grouping)
+      let storyEpisodes: StoryEpisodeGroup[] = [];
+      if (unitMode) {
+        const llmTitle = (no: number) => byNo.get(no)?.title ?? null;
+        storyEpisodes = normalizeStoryEpisodes(v.story_episodes, arc.plannedEpisodeFrom, arc.plannedEpisodeTo, { titleOf: llmTitle, plotTitle: v.title || synth.title });
+        // titles as applyGroups will set them: written 화 keep theirs (and split a 묶음 they do not fit)
+        const state = new Map(current.map((e) => [e.episodeNo, e]));
+        const { slots } = assignStoryEpisodes(
+          storyEpisodes,
+          merged.map((e) => {
+            const cur = state.get(e.episode_no);
+            return { episodeNo: e.episode_no, title: cur?.title ?? null, renameable: !cur || cur.status === "planned" };
+          }),
+        );
+        for (const e of merged) {
+          const slot = slots.get(e.episode_no);
+          if (slot?.kind === "member") e.title = slot.title;
+          else if (slot?.kind === "pinned") e.title = state.get(e.episode_no)?.title ?? e.title;
+        }
+      }
       const plan: ArcPlanProposal = {
         title: v.title || synth.title,
         goal_text: v.goal_text || synth.goal_text,
@@ -257,11 +331,8 @@ export function createPlanning(
         setup_plan: { plant: v.setup_plan.plant.filter((x) => x.trim()).slice(0, 20), payoff: v.setup_plan.payoff.filter((x) => x.trim()).slice(0, 20) },
         new_characters: [],
         // INV-ARC-01: only the arc range
-        episodes: synth.episodes.map((e) => {
-          const got = byNo.get(e.episode_no);
-          const merged = { ...e, ...(got ?? {}) };
-          return { ...merged, scene_count: clampScenes(merged.scene_count), target_chars: clampTarget(merged.target_chars) };
-        }),
+        episodes: merged,
+        story_episodes: storyEpisodes.map((g) => ({ title: g.title, from: g.from, to: g.to })),
       };
       const names = new Set(roster.map((r) => r.name.replace(/\s+/g, "")));
       const newCharacters: PlotCharacterDraft[] = v.new_characters
@@ -290,6 +361,12 @@ export function createPlanning(
     async commit(tx, run, input, p) {
       const scope = { novelId: run.novelId };
       const agent = actors.agent("planner", run.runId);
+      if ("retitle" in p) {
+        // 설계 추가 0023: [제목 정리] proposal → episode_titles approval (nothing changes before the author decides)
+        if (!units) return { kind: "done", outputRefs: [] };
+        await units.requestRetitleApproval(tx, scope, input.arc_id, p.retitle, agent, run.taskId);
+        return { kind: "done", outputRefs: [{ refType: "arc", refId: input.arc_id }] };
+      }
       const arc = await novel.getArc(scope, input.arc_id, tx);
       const replanActive = input.replan === true && arc.status === "active";
       if (arc.status !== "planned" && !replanActive) return { kind: "done", outputRefs: [] }; // already decided elsewhere
@@ -307,6 +384,38 @@ export function createPlanning(
       return { kind: "done", outputRefs: [{ refType: "arc", refId: arc.id }, ...eps.map((e) => ({ refType: "episode" as const, refId: e.id }))] };
     },
   };
+
+  type RetitleResult = RetitlePayload & { modelId: string };
+
+  /** 설계 추가 0023: [제목 정리] proposal from the existing 화 (plans, outlines, current titles, states) */
+  async function retitleExecute(run: import("../../orchestration/index.js").RunHandle, arcId: string, rejectionNote: string | null, context: import("../../agents/index.js").ContextPack, llm: import("./agent-task.js").PipelineLlm): Promise<RetitleResult> {
+    const scope = { novelId: run.novelId };
+    const arc = await novel.getArc(scope, arcId);
+    const eps = await repo.listEpisodes(platform.uow.db, scope, { arcId });
+    const range = retitleRange(eps);
+    if (!range) throw new TaskFailure("internal", "제목을 정리할 화가 없습니다.", false);
+    const clip = (x: string | null | undefined, n: number) => ((x ?? "").length > n ? `${(x ?? "").slice(0, n)}…` : (x ?? ""));
+    const rows = [];
+    for (const e of eps) {
+      const outline = e.outlineVersionId ? await repo.getVersion(platform.uow.db, scope, e.outlineVersionId) : null;
+      rows.push({ no: e.episodeNo, status: e.status, title: e.title, plan: clip(e.planSummary, 300), outline: clip(outline?.content, 400), hook: clip(e.hookNote, 200) });
+    }
+    const data = JSON.stringify({ plot: { title: arc.title, coreEvent: arc.coreEvent, goal: arc.goalText, from: range.from, to: range.to }, episodes: rows, rejectionNote });
+    if (!llm.port) throw new TaskFailure("internal", "모델 호출 포트가 없습니다.", false);
+    const r = await callWithRepair({
+      llm: llm.port,
+      request: { run, purpose: "plan_arc_retitle", ...promptOf(context, RETITLE_INSTRUCTION, data), output: { kind: "object", schemaName: "RetitleProposal", schema: retitleProposalSchema } },
+      validate: (x) => ({ result: null, issues: storyEpisodeIssues(x.story_episodes, range.from, range.to) }),
+      label: "에피소드 묶음 검사",
+      critic: "구성 검사 에이전트",
+      instruction: `story_episodes가 ${range.from}~${range.to}화를 빠짐없이, 겹치지 않게 순서대로 덮도록 고치세요.`,
+      maxRounds: 2,
+      repairPurpose: "plan_arc_retitle_repair",
+    });
+    const titleOf = (no: number) => eps.find((e) => e.episodeNo === no)?.title ?? null;
+    const groups = normalizeStoryEpisodes(r.value.story_episodes, range.from, range.to, { titleOf, plotTitle: arc.title });
+    return { retitle: { groups, from: range.from, to: range.to, rationale: r.value.rationale }, modelId: r.output.modelId };
+  }
 
   type ArcPlanResult = { plan: ArcPlanProposal; modelId: string; newCharacters: PlotCharacterDraft[] };
 
@@ -336,6 +445,10 @@ export function createPlanning(
       p.plan.episodes.map((e) => ({ episodeNo: e.episode_no, title: e.title, hookNote: e.hook_note, planSummary: e.summary, plannedSceneCount: e.scene_count, targetChars: e.target_chars })),
       actor,
     );
+    // 설계 추가 0023: story episodes of the plan (unit title mode); a re-plan renames only the 화 still planned
+    if (units && p.plan.story_episodes?.length) {
+      await units.applyGroups(tx, scope, arc, p.plan.story_episodes, { rename: (ep) => ep.status === "planned", actor, reason: "플롯 계획" });
+    }
     // first appearances of the involved cast (new characters carry their own)
     const roster = await cast().roster(scope, tx);
     const firsts = p.plan.involved_character_ids
@@ -636,7 +749,8 @@ export function createPlanning(
     }
     const arcs = (await novel.listArcs(scope)).filter((a) => a.status !== "cancelled");
     const active = await orchestration.listTasks(scope, { statuses: ["pending", "ready", "running", "blocked"], limit: 1000 });
-    const hasActive = (kind: string, targetId: string) => active.some((t) => t.kind === kind && t.targetId === targetId);
+    // a [제목 정리] proposal (plan_arc retitle) is not planning
+    const hasActive = (kind: string, targetId: string) => active.some((t) => t.kind === kind && t.targetId === targetId && !(kind === "plan_arc" && isRetitleTask(t)));
 
     // arc plans whose planning finished → AR1
     for (const arc of arcs.filter((a) => a.status === "planned")) {

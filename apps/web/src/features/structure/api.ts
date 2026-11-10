@@ -9,17 +9,24 @@
  *   POST  …/arcs/:arcId/replan              → 202 { taskId }
  *   POST  …/arcs/:arcId/acknowledge-flags   → arcDtoSchema
  *   POST  …/approvals/:approvalId/decision  → 플롯 계획·재계획 승인/반려(인박스와 같은 hitl 경로)
+ *   POST  …/arcs/:arcId/retitle             → 202 { taskId } — [제목 정리] 제안 만들기(설계 추가 0023)
+ *   GET   …/arcs/:arcId/retitle             → retitleProposalViewSchema (진행 중 작업·대기 중 제안·전→후)
+ *   POST  …/arcs/:arcId/retitle/apply       → retitleApplyResultSchema (공개된 화는 고른 것만, 확인 필요)
  *
  * 구성 생성 작업이 도는 동안에는 빠르게 polling합니다. 변경은 작품 전체를 invalidate합니다(홈 단계 카드·인박스·원고 목록).
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   arcDtoSchema,
+  retitleApplyResultSchema,
+  retitleProposalViewSchema,
   storyStructureDtoSchema,
   structureTaskAcceptedSchema,
   structureViewSchema,
   type ArcReplanRequest,
   type HitlApprovalDecision,
+  type RetitleApplyRequest,
+  type RetitleProposalView,
   type StructureDecisionRequest,
   type StructureGenerateRequest,
   type StructureView,
@@ -92,4 +99,34 @@ export function useAcknowledgeArcFlags(novelId: string) {
 /** 플롯 계획(arc_plan) 승인·반려 — 인박스와 같은 hitl 결정 경로 */
 export function usePlotDecision(novelId: string) {
   return useNovelMutation(novelId, ({ approvalId, body }: { approvalId: string; body: HitlApprovalDecision }) => api.post(`${base(novelId)}/approvals/${approvalId}/decision`, body));
+}
+
+// ── 설계 추가 0023: [제목 정리] (에피소드 묶음 "제목 (1)(2)") ──
+export function retitleKey(novelId: string, arcId: string) {
+  return [...queryKeys.novel(novelId).all, "retitle", arcId] as const;
+}
+
+/** the proposal task is running (poll fast) */
+export function retitleRunning(v: RetitleProposalView | undefined): boolean {
+  return !!v?.task;
+}
+
+export function useRetitle(novelId: string, arcId: string) {
+  return useQuery({
+    queryKey: retitleKey(novelId, arcId),
+    queryFn: ({ signal }) => api.get(`${base(novelId)}/arcs/${arcId}/retitle`, { signal, schema: retitleProposalViewSchema }),
+    refetchInterval: (q) => (retitleRunning(q.state.data) ? STRUCTURE_FAST_POLL_MS : POLL_INTERVAL_MS),
+  });
+}
+
+export function useProposeRetitle(novelId: string) {
+  return useNovelMutation(novelId, ({ arcId, note }: { arcId: string; note?: string }) =>
+    api.post(`${base(novelId)}/arcs/${arcId}/retitle`, note?.trim() ? { note: note.trim() } : {}, { schema: structureTaskAcceptedSchema }),
+  );
+}
+
+export function useApplyRetitle(novelId: string) {
+  return useNovelMutation(novelId, ({ arcId, body }: { arcId: string; body: RetitleApplyRequest }) =>
+    api.post(`${base(novelId)}/arcs/${arcId}/retitle/apply`, body, { schema: retitleApplyResultSchema }),
+  );
 }

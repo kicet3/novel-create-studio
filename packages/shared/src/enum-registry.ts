@@ -284,6 +284,8 @@ export const ENUMS = {
     "draft_adoption",
     // 설계 추가: 전체 구성 승인(사용자만)
     "story_structure",
+    // 설계 추가 0023: [제목 정리] 에피소드 묶음 제목 제안(작가 승인)
+    "episode_titles",
   ],
   approval_status: ["pending", "approved", "rejected", "cancelled", "superseded"],
   digest_kind: ["non_blocking_digest", "daily_summary", "publish_batch", "absence_summary" /* [v1] */],

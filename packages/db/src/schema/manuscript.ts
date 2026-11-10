@@ -36,12 +36,30 @@ export const episodes = pgTable(
     planSummary: text("plan_summary").notNull().default(""),
     plannedSceneCount: integer("planned_scene_count"),
     targetChars: integer("target_chars"),
+    /** 0023: story episode (에피소드 묶음) this 화 belongs to and its part number (1-based) */
+    unitId: text("unit_id"),
+    unitPartNo: integer("unit_part_no"),
     createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
   },
 );
 export type EpisodesRow = typeof episodes.$inferSelect;
 export type EpisodesInsert = typeof episodes.$inferInsert;
+
+/** episode_units (0023: 에피소드 묶음 — consecutive 화 of a plot sharing one title, shown as "제목 (n)") */
+export const episodeUnits = pgTable("episode_units", {
+  id: text("id").notNull().primaryKey(),
+  novelId: text("novel_id").notNull(),
+  arcId: text("arc_id").notNull(),
+  title: text("title").notNull(),
+  ord: integer("ord").notNull(),
+  plannedEpisodeCount: integer("planned_episode_count").notNull().default(1),
+  status: text("status", { enum: ["active", "retired"] }).notNull().default("active"),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+});
+export type EpisodeUnitsRow = typeof episodeUnits.$inferSelect;
+export type EpisodeUnitsInsert = typeof episodeUnits.$inferInsert;
 
 /** manuscript_versions */
 export const manuscriptVersions = pgTable(

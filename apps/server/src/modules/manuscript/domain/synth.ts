@@ -53,6 +53,7 @@ export function synthArcPlan(arc: { ord: number; title: string; plannedEpisodeFr
   }
   return {
     title: outline?.title ?? arc.title,
+    story_episodes: [],
     goal_text: `${arc.ord}번째 아크의 목표를 달성합니다.`,
     conflict_text: "주인공의 목표를 가로막는 갈등이 있습니다.",
     end_condition: `${arc.plannedEpisodeTo}화에서 아크 갈등이 일단락됩니다.`,

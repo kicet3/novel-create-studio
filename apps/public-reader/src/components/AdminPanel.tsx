@@ -94,9 +94,15 @@ export function AdminPanel() {
             ))}
           </dl>
           <h2 className="pr-h2">최근 댓글</h2>
-          <ul className="pr-comments">
+          <ul className="pr-comments pr-admin-list">
+            {/* PC: column heads of the comment table (hidden below 1024px) */}
+            <li className="pr-admin-head" aria-hidden="true">
+              <span>작성자 · 위치</span>
+              <span>내용</span>
+              <span className="text-right">관리</span>
+            </li>
             {data.recent.map((c) => (
-              <li key={c.id} className="pr-comment" data-muted={c.deleted || c.hidden}>
+              <li key={c.id} className="pr-comment pr-admin-row" data-muted={c.deleted || c.hidden}>
                 <div className="pr-comment-meta">
                   <strong>{c.nickname}</strong>
                   <span className="pr-faint">
@@ -106,7 +112,7 @@ export function AdminPanel() {
                   </span>
                 </div>
                 <p className="pr-comment-body">{c.body}</p>
-                {!c.deleted && (
+                {c.deleted ? <span aria-hidden="true" /> : (
                   <div className="pr-comment-actions">
                     <button type="button" className="pr-link-btn" onClick={() => act(c, { hidden: !c.hidden })}>
                       {c.hidden ? "다시 보이기" : "숨기기"}

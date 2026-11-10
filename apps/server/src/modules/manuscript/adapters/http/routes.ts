@@ -12,6 +12,7 @@ import {
   structureGenerateRequestSchema,
   structureDecisionRequestSchema,
   arcReplanRequestSchema,
+  retitleApplyRequestSchema, retitleProposeRequestSchema,
 } from "@ncs/shared";
 import type { ApiRouters } from "../../../../platform/index.js";
 import { actorOf, created, scopeOf, valid, validate } from "../../../../http/kit.js";
@@ -31,7 +32,7 @@ export function mountManuscriptRoutes({ novel }: ApiRouters, svc: ManuscriptServ
   novel.get("/episodes", validate({ query: episodeListQuerySchema }), async (_req, res) => {
     const { query } = valid<{ query: z.output<typeof episodeListQuerySchema> }>(res);
     const scope = scopeOf(res);
-    res.json({ items: await svc.withLengthFlags(scope, await svc.listEpisodes(scope, { arcId: query.arcId, statuses: query.status })) });
+    res.json({ items: await svc.withUnitInfo(scope, await svc.withLengthFlags(scope, await svc.listEpisodes(scope, { arcId: query.arcId, statuses: query.status }))) });
   });
   novel.get("/reserve", async (_req, res) => {
     res.json(await svc.reserveSummary(scopeOf(res)));
@@ -42,7 +43,7 @@ export function mountManuscriptRoutes({ novel }: ApiRouters, svc: ManuscriptServ
     const ep = await svc.getEpisodeByNo(scope, params.episodeNo);
     const current = ep.currentVersionId ? await svc.getVersion(scope, ep.currentVersionId) : null;
     const profile = current ? await novels.getLengthProfile(scope) : null;
-    const [flagged] = await svc.withLengthFlags(scope, [ep]);
+    const [flagged] = await svc.withUnitInfo(scope, await svc.withLengthFlags(scope, [ep]));
     res.json({
       ...flagged,
       currentVersion: current ? summarizeVersion(current) : null,
@@ -118,5 +119,24 @@ export function mountManuscriptRoutes({ novel }: ApiRouters, svc: ManuscriptServ
   novel.post("/arcs/:arcId/replan", validate({ params: arcParams, body: arcReplanRequestSchema }), async (_req, res) => {
     const { params, body } = valid<{ params: z.output<typeof arcParams>; body: z.output<typeof arcReplanRequestSchema> }>(res);
     res.status(202).json(await svc.replanArc(scopeOf(res), params.arcId, body.note, actorOf(res)));
+  });
+
+  // 설계 추가 0023: 에피소드 묶음 "제목 (1)(2)" + [제목 정리]
+  const unitQuery = z.object({ arcId: z.string().regex(/^arc_/).optional() });
+  novel.get("/episode-units", validate({ query: unitQuery }), async (_req, res) => {
+    const { query } = valid<{ query: z.output<typeof unitQuery> }>(res);
+    res.json({ items: await svc.listEpisodeUnits(scopeOf(res), { arcId: query.arcId }) });
+  });
+  novel.post("/arcs/:arcId/retitle", validate({ params: arcParams, body: retitleProposeRequestSchema }), async (_req, res) => {
+    const { params, body } = valid<{ params: z.output<typeof arcParams>; body: z.output<typeof retitleProposeRequestSchema> }>(res);
+    res.status(202).json(await svc.proposeRetitle(scopeOf(res), params.arcId, actorOf(res), body.note));
+  });
+  novel.get("/arcs/:arcId/retitle", validate({ params: arcParams }), async (_req, res) => {
+    const { params } = valid<{ params: z.output<typeof arcParams> }>(res);
+    res.json(await svc.getRetitle(scopeOf(res), params.arcId));
+  });
+  novel.post("/arcs/:arcId/retitle/apply", validate({ params: arcParams, body: retitleApplyRequestSchema }), async (_req, res) => {
+    const { params, body } = valid<{ params: z.output<typeof arcParams>; body: z.output<typeof retitleApplyRequestSchema> }>(res);
+    res.json(await svc.applyRetitle(scopeOf(res), params.arcId, body, actorOf(res)));
   });
 }

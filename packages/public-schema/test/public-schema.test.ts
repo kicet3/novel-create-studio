@@ -74,7 +74,7 @@ describe("public schema migrations", () => {
     const before = await outside(c, SCHEMA);
     expect(await publicSchemaVersion(c, SCHEMA)).toBeNull();
     const first = await applyPublicSchema(c, SCHEMA);
-    expect(first).toEqual({ schema: SCHEMA, applied: [1], version: PUBLIC_SCHEMA_LATEST_VERSION });
+    expect(first).toEqual({ schema: SCHEMA, applied: [1, 2], version: PUBLIC_SCHEMA_LATEST_VERSION });
     const second = await applyPublicSchema(c, SCHEMA);
     expect(second.applied).toEqual([]);
     expect(second.version).toBe(PUBLIC_SCHEMA_LATEST_VERSION);

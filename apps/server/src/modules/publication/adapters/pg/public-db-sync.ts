@@ -60,11 +60,12 @@ export async function syncPublicDb(client: SqlClient, schema: string, novels: re
       for (let i = 0; i < changed.length; i += EPISODE_BATCH) {
         const batch = changed.slice(i, i + EPISODE_BATCH);
         await tx.query(
-          `INSERT INTO ${s}.episodes (novel_slug, episode_no, title, body, char_count, published_at, content_hash, updated_at)
-           SELECT x.novel_slug, x.episode_no, x.title, x.body, x.char_count, x.published_at, x.content_hash, $2::timestamptz
-           FROM jsonb_to_recordset($1::text::jsonb) AS x(novel_slug text, episode_no integer, title text, body text, char_count integer, published_at timestamptz, content_hash text)
+          `INSERT INTO ${s}.episodes (novel_slug, episode_no, title, body, char_count, published_at, unit_title, unit_part_no, unit_part_count, content_hash, updated_at)
+           SELECT x.novel_slug, x.episode_no, x.title, x.body, x.char_count, x.published_at, x.unit_title, x.unit_part_no, x.unit_part_count, x.content_hash, $2::timestamptz
+           FROM jsonb_to_recordset($1::text::jsonb) AS x(novel_slug text, episode_no integer, title text, body text, char_count integer, published_at timestamptz, unit_title text, unit_part_no integer, unit_part_count integer, content_hash text)
            ON CONFLICT (novel_slug, episode_no) DO UPDATE SET title = excluded.title, body = excluded.body, char_count = excluded.char_count,
-             published_at = excluded.published_at, content_hash = excluded.content_hash, updated_at = excluded.updated_at`,
+             published_at = excluded.published_at, unit_title = excluded.unit_title, unit_part_no = excluded.unit_part_no, unit_part_count = excluded.unit_part_count,
+             content_hash = excluded.content_hash, updated_at = excluded.updated_at`,
           [JSON.stringify(batch), at],
         );
       }

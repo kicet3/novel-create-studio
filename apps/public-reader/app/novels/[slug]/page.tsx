@@ -35,21 +35,26 @@ export default async function NovelHomePage({ params }: Props) {
     <div className="pr-page">
       <AppHeader back={href.list()} title={n.title} />
       <main className="pr-main" id="main">
-        <section className="pr-hero">
-          <h1 className="pr-h1">{n.title}</h1>
-          <p className="pr-hero-meta">{[n.authorName, n.genre, PUBLIC_AGE_LABELS[n.ageRating], `공개 ${n.episodes.length}화`].filter(Boolean).join(" · ")}</p>
-          {n.intro && <p className="pr-intro">{n.intro}</p>}
-          <div className="pr-hero-actions">
-            <StartReading slug={slug} episodes={n.episodes} />
+        {/* PC: info column + 목차 side by side (display: contents below 1024px) */}
+        <div className="pr-novel-layout">
+          <div className="pr-novel-side">
+            <section className="pr-hero">
+              <h1 className="pr-h1">{n.title}</h1>
+              <p className="pr-hero-meta">{[n.authorName, n.genre, PUBLIC_AGE_LABELS[n.ageRating], `공개 ${n.episodes.length}화`].filter(Boolean).join(" · ")}</p>
+              {n.intro && <p className="pr-intro">{n.intro}</p>}
+              <div className="pr-hero-actions">
+                <StartReading slug={slug} episodes={n.episodes} />
+              </div>
+              <NovelSocial slug={slug} initial={agg} id="rating" />
+            </section>
           </div>
-          <NovelSocial slug={slug} initial={agg} />
-        </section>
-        <section aria-labelledby="toc-title">
-          <h2 id="toc-title" className="pr-h2">
-            목차 <span className="pr-faint">{n.episodes.length}화</span>
-          </h2>
-          <NovelToc slug={slug} episodes={n.episodes} />
-        </section>
+          <section aria-labelledby="toc-title" className="pr-novel-toc">
+            <h2 id="toc-title" className="pr-h2">
+              목차 <span className="pr-faint">{n.episodes.length}화</span>
+            </h2>
+            <NovelToc slug={slug} episodes={n.episodes} />
+          </section>
+        </div>
       </main>
     </div>
   );

@@ -79,3 +79,13 @@ See /CONVENTIONS.md for layering, transactions, audit, tests and copy rules.
 - 캐스트는 `registerPlanningCastPort`로 완성도·로스터·첫 등장·플롯 인물 제안/확정·빈 항목 채우기를 제공합니다(cast가 manuscript보다 나중에 만들어짐).
 - 분량: 프로필 `minChars`(기본 5000)는 목표치 — 초고가 짧으면 아웃라인 기준으로 최대 2회 이어쓰기(`draft_continue`, 한 번에 200자 미만 늘면 중단). 절대 하한 3,000자(`EPISODE_HARD_MIN_CHARS`, 작품 count_basis): 다듬기·수정이 씬을 줄여 하한 밑으로 가면 원래 씬 유지(전체가 줄면 새 버전 없음), 하한 미달 화는 full_auto 자동 승인·arc 단위 승인을 하지 않고 "분량 미달" 개별 승인을 요청, 사용자가 아닌 주체의 승인·공개는 422 `length_below_floor`. 화 목록·상세·구성 화면에 `lengthBelowFloor`.
 - 분량 맞추기(설계 추가 0017): 초고·수정본이 `[minChars, maxChars × 1.03]`(`length.adjust_tolerance_ratio`)을 벗어나면 `adjust_length`(writer) 작업이 씬별로 줄이기/늘리기 패스를 돌려 범위 중간을 노립니다(최대 `length.adjust_max_rounds`=2회, 범위에 가까워지지 않으면 중단). 다듬기 뒤에도 벗어나면 1회 더. 프롬프트는 "현재 N자, 결과는 min~max자 사이"를 씁니다. 다듬기는 최대 분량을 넘겨 씬을 늘리지 않고, 수정은 원문+새 글(두 벌)·1.6배 넘게 불어난 씬을 받지 않습니다. 범위 밖인 화의 승인 요청 payload에 `lengthOutOfRange` — full_auto는 자동 승인하지 않고 작가에게 넘깁니다(gate `length_out_of_range`).
+
+## 설계 추가 0023: 에피소드 묶음 "제목 (1)(2)" (`application/episode-units.ts`, `domain/episode-units.ts`)
+
+- `episode_units`(플롯 안의 연속된 화 묶음, 제목 하나) + `episodes.unit_id` / `unit_part_no`. `episodes.title`은 표시 제목이며
+  묶음을 적용할 때 "<묶음 제목> (n)"으로 맞춥니다(한 화짜리 묶음은 번호 없음). 모든 화면·공개 사이트는 `title`을 그대로 씁니다.
+- 작품 설정 `novels.episode_title_mode`: `unit`(새 작품 기본) / `per_episode`(이전 방식, 마이그레이션 전 작품의 값).
+- `plan_arc`(unit 모드): `story_episodes`(title·from·to)를 함께 받고 연속·무겹침 검사(callWithRepair 1회) → 결정적 보정 →
+  화 제목을 묶음 제목 + 번호로 정합니다. 아웃라인·초고 프롬프트와 `story_plan` 섹션에 "[이번 에피소드] 이 화는 「X」 에피소드의 n/N화".
+- [제목 정리]: `POST …/arcs/:arcId/retitle`(plan_arc `retitle: true`) → `episode_titles` 승인(전→후). 인박스 승인 = 공개 전 화만,
+  `POST …/arcs/:arcId/retitle/apply`는 고른 공개 화도(`confirmPublishedRename` 필수). 적용하면 작품이 unit 모드가 됩니다. 감사 `episode.retitled`.

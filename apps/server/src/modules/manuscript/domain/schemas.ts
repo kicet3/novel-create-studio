@@ -130,6 +130,13 @@ export const plotCharacterProposalSchema = z.object({
 });
 export type PlotCharacterProposal = z.output<typeof plotCharacterProposalSchema>;
 
+/** 설계 추가 0023: one story episode (에피소드 묶음) of a plan — inclusive 화 range */
+export const storyEpisodeSchema = z.object({
+  title: z.string().max(200).default(""),
+  from: z.number().int(),
+  to: z.number().int(),
+});
+
 // ── B3 plan_arc proposal (설계 추가: 플롯 세부 + 화 계획 + 신규 인물) ──
 export const arcPlanProposalSchema = z.object({
   title: str(200),
@@ -153,8 +160,20 @@ export const arcPlanProposalSchema = z.object({
       }),
     )
     .default([]),
+  /**
+   * 설계 추가 0023: 에피소드 묶음 — the plot's 화 split into consecutive groups (usually 2–5 화) sharing one title;
+   * each 화 is titled "<title> (n)". Ignored when the novel uses per-episode titles.
+   */
+  story_episodes: z.array(storyEpisodeSchema).default([]),
 });
 export type ArcPlanProposal = z.output<typeof arcPlanProposalSchema>;
+
+// ── 설계 추가 0023: [제목 정리] proposal (existing 화 grouped into story episodes) ──
+export const retitleProposalSchema = z.object({
+  story_episodes: z.array(storyEpisodeSchema).default([]),
+  rationale: str(1000),
+});
+export type RetitleProposal = z.output<typeof retitleProposalSchema>;
 
 // ── P1 outline proposal (OutlineData + human summary) ──
 export const outlineProposalSchema = z.object({ summary: str(4000), title: z.string().max(200).nullable().default(null), outline: outlineDataSchema.default(outlineDataSchema.parse({})) });
@@ -228,7 +247,14 @@ export const planSeriesBibleInputSchema = z
 export type PlanSeriesBibleInput = z.output<typeof planSeriesBibleInputSchema>;
 
 export const planArcInputSchema = z
-  .object({ arc_id: z.string(), rejection_note: z.string().nullable().optional(), answer_ids: z.array(z.string()).optional(), replan: z.boolean().optional() })
+  .object({
+    arc_id: z.string(),
+    rejection_note: z.string().nullable().optional(),
+    answer_ids: z.array(z.string()).optional(),
+    replan: z.boolean().optional(),
+    /** 설계 추가 0023: [제목 정리] — group the plot's existing 화 into story episodes (proposal only, approval applies it) */
+    retitle: z.boolean().optional(),
+  })
   .passthrough();
 export type PlanArcInput = z.output<typeof planArcInputSchema>;
 

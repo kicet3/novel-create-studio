@@ -30,7 +30,7 @@ export default async function NovelListPage() {
   const novels = loaded ?? [];
   return (
     <div className="pr-page">
-      <AppHeader />
+      <AppHeader current="list" />
       <main className="pr-main" id="main">
         <h1 className="pr-h1">작품</h1>
         {loaded === null ? <Message>사이트를 준비하고 있습니다. 잠시 후 다시 들러 주세요.</Message> : !novels.length && <Message>아직 공개된 작품이 없습니다.</Message>}

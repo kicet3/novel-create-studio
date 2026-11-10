@@ -65,6 +65,8 @@ export const novels = pgTable(
     entityAgentMinConfidence: real("entity_agent_min_confidence").notNull().default(0.75),
     /** 설계 추가 0018: 한 화씩 진행(화별 승인에서 N화 승인 뒤 N+1화) — 기본 켬 */
     sequentialEpisodes: boolean("sequential_episodes").notNull().default(true),
+    /** 설계 추가 0023: 제목 방식 — unit = 에피소드 묶음 "제목 (1)(2)" (새 작품 기본), per_episode = 화별 제목 */
+    episodeTitleMode: text("episode_title_mode", { enum: ["unit", "per_episode"] }).notNull().default("unit"),
     defaultNarrationMode: text("default_narration_mode", { enum: ENUMS.narration_mode }).notNull().default("third_limited"),
     timezone: text("timezone").notNull().default("Asia/Seoul"),
     lengthProfileId: text("length_profile_id").notNull(),

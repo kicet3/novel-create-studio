@@ -12,7 +12,7 @@ import { AppError, type ApiRouters, type Db, type NovelScope } from "../../../..
 import { scopeOf, valid, validate } from "../../../../http/kit.js";
 import { approvedRef, buildReadingText, draftRef, readRef } from "../../domain/reader.js";
 import { readerQueries, type VersionMeta } from "../db/reader-queries.js";
-import type { Episode, ManuscriptService } from "../../index.js";
+import type { Episode, EpisodeUnitInfo, ManuscriptService } from "../../index.js";
 import type { NovelService } from "../../../novel/index.js";
 
 export interface ReaderRouteDeps {
@@ -24,7 +24,8 @@ export interface ReaderRouteDeps {
 const countOf = (m: VersionMeta, basis: CountBasis) => (basis === "without_spaces" ? m.charCountWithoutSpaces : m.charCountWithSpaces);
 
 async function loadEpisodes(deps: ReaderRouteDeps, scope: NovelScope) {
-  const episodes = await deps.service.listEpisodes(scope);
+  // 설계 추가 0023: unit fields (에피소드 묶음) for the TOC grouping data
+  const episodes = await deps.service.withUnitInfo(scope, await deps.service.listEpisodes(scope));
   const ids = episodes.flatMap((e) => [e.currentVersionId, e.approvedVersionId, e.publishedVersionId]).filter((x): x is string => !!x);
   const meta = await readerQueries.versionMeta(deps.db, scope, ids);
   const kindOf = (id: string) => meta.get(id)?.kind;
@@ -34,12 +35,13 @@ async function loadEpisodes(deps: ReaderRouteDeps, scope: NovelScope) {
 export function mountReaderRoutes({ novel }: ApiRouters, deps: ReaderRouteDeps): void {
   novel.get("/reader/toc", async (_req, res) => {
     const scope = scopeOf(res);
-    const [n, profile, structure, arcs, loaded] = await Promise.all([
+    const [n, profile, structure, arcs, loaded, units] = await Promise.all([
       deps.novel.getNovel(scope),
       deps.novel.getLengthProfile(scope),
       deps.novel.getStructure(scope),
       deps.novel.listArcs(scope),
       loadEpisodes(deps, scope),
+      deps.service.listEpisodeUnits(scope),
     ]);
     const basis = profile.countBasis;
     const body: ReaderTocDto = {
@@ -60,8 +62,13 @@ export function mountReaderRoutes({ novel }: ApiRouters, deps: ReaderRouteDeps):
           arcId: e.arcId,
           approved: ap && apMeta ? { source: ap.source, charCount: countOf(apMeta, basis) } : null,
           draft: drMeta ? { charCount: countOf(drMeta, basis) } : null,
+          unitId: e.unitId,
+          unitTitle: e.unitTitle,
+          unitPartNo: e.unitPartNo,
+          unitPartCount: e.unitPartCount,
         };
       }),
+      units: units.map((u) => ({ id: u.id, arcId: u.arcId, title: u.title, ord: u.ord, episodeNos: u.episodeNos })),
     };
     res.json(body);
   });
@@ -73,7 +80,7 @@ export function mountReaderRoutes({ novel }: ApiRouters, deps: ReaderRouteDeps):
     const [profile, loaded] = await Promise.all([deps.novel.getLengthProfile(scope), loadEpisodes(deps, scope)]);
     const readable = loaded.episodes
       .map((e) => ({ e, ref: readRef(e, mode, loaded.kindOf) }))
-      .filter((x): x is { e: Episode; ref: NonNullable<typeof x.ref> } => !!x.ref && loaded.meta.has(x.ref.versionId));
+      .filter((x): x is { e: Episode & EpisodeUnitInfo; ref: NonNullable<typeof x.ref> } => !!x.ref && loaded.meta.has(x.ref.versionId));
     const i = readable.findIndex((x) => x.e.episodeNo === params.episodeNo);
     if (i < 0) {
       if (!loaded.episodes.some((e) => e.episodeNo === params.episodeNo)) throw new AppError(404, "not_found", "화를 찾을 수 없습니다.");
@@ -105,6 +112,9 @@ export function mountReaderRoutes({ novel }: ApiRouters, deps: ReaderRouteDeps):
       text,
       prev: neighbor(readable[i - 1]),
       next: neighbor(readable[i + 1]),
+      unitTitle: e.unitTitle,
+      unitPartNo: e.unitPartNo,
+      unitPartCount: e.unitPartCount,
     };
     res.json(body);
   });

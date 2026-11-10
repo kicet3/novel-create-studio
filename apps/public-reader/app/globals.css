@@ -1,9 +1,39 @@
 /*
  * snowpage — mobile-first (360–430px phones; Galaxy Z Flip / Fold cover screens down to ~260px).
  * Wide near-square screens (Fold inner screen, tablets) get two list columns and a two-page reading spread.
+ * PC (≥ 1024px, src/lib/layout.ts): header nav, 3–4 column list, two-column novel home, table-like admin, and the
+ * studio's 읽기 viewer (@ncs/reader-ui + its reader.css; Tailwind classes over the reader tokens mapped below).
  * Colors: reader themes from @ncs/reader-core/themes.css on `.reader[data-reader-theme]`.
  */
 @import "tailwindcss";
+/* shared 읽기 viewer components (@ncs/reader-ui) are styled with Tailwind classes */
+@source "../../../packages/reader-ui/src";
+
+/* reader tokens → Tailwind utilities (bg-surface, text-muted, border-border, …), same mapping as the studio */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-text: var(--accent-text);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-violet: var(--violet);
+  --color-violet-soft: var(--violet-soft);
+  --shadow-card: var(--shadow);
+}
+@utility tabular { font-variant-numeric: tabular-nums; }
 
 :root {
   --font-sans: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, system-ui, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
@@ -26,9 +56,12 @@ body { font-family: var(--font-sans); overflow-x: hidden; }
   -webkit-tap-highlight-color: transparent;
   overflow-x: clip;
 }
+.pr-app { --shadow: 0 1px 2px rgba(20, 20, 30, 0.06), 0 2px 8px rgba(20, 20, 30, 0.04); }
+.pr-app[data-reader-theme="black"] { --shadow: 0 1px 2px rgba(0, 0, 0, 0.3); }
 .pr-app *, .pr-app *::before, .pr-app *::after { box-sizing: border-box; }
-.pr-app a { color: inherit; text-decoration: none; }
-.pr-app :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+/* not inside the PC viewer (.pr-studio; :where keeps the old specificity): unlayered rules would beat the Tailwind utilities of @ncs/reader-ui */
+.pr-app a:where(:not(.pr-studio a)) { color: inherit; text-decoration: none; }
+.pr-app :focus-visible:where(:not(.pr-studio *)) { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
 .pr-faint { color: var(--muted); }
 
 /* ── page frame ─────────────────────────────────────────────────────── */
@@ -122,7 +155,7 @@ body { font-family: var(--font-sans); overflow-x: hidden; }
   .pr-novel-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .pr-h1 { font-size: 26px; }
 }
-@media (min-width: 1100px) { .pr-novel-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (min-width: 1024px) { .pr-novel-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 /* side-by-side screen segments (Fold half-open): keep list cards off the hinge */
 @media (horizontal-viewport-segments: 2) {
   .pr-main { max-width: none; padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
@@ -141,9 +174,10 @@ body { font-family: var(--font-sans); overflow-x: hidden; }
 .pr-reader { min-height: 100vh; min-height: 100dvh; }
 .pr-reader-loading { background: var(--bg); }
 .pr-pages { position: fixed; inset: 0; overflow: hidden; touch-action: pinch-zoom; user-select: none; -webkit-user-select: none; cursor: default; }
-.pr-page { position: absolute; overflow: hidden; display: flow-root; }
+/* a reading page (PagedView) — scoped: `.pr-page` alone is the page frame of the list / home / admin screens */
+.pr-pages .pr-page { position: absolute; overflow: hidden; display: flow-root; }
 .pr-measure { position: absolute; top: 0; left: -100000px; visibility: hidden; pointer-events: none; overflow: hidden; display: flow-root; contain: layout style; }
-.pr-page-end { display: flex; flex-direction: column; justify-content: safe center; overflow-y: auto; user-select: auto; -webkit-user-select: auto; }
+.pr-pages .pr-page-end { display: flex; flex-direction: column; justify-content: safe center; overflow-y: auto; user-select: auto; -webkit-user-select: auto; }
 .pr-page-meta { position: fixed; text-align: center; font-size: 12px; line-height: 1; color: var(--muted); pointer-events: none; font-variant-numeric: tabular-nums; }
 .pr-reader[data-chrome="true"] .pr-page-meta { visibility: hidden; }
 .pr-safe-probe { position: fixed; top: 0; left: 0; width: 0; height: 0; visibility: hidden; pointer-events: none; padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
@@ -273,3 +307,70 @@ body { font-family: var(--font-sans); overflow-x: hidden; }
 .pr-hp { position: absolute !important; left: -10000px !important; top: auto; width: 1px; height: 1px; overflow: hidden; }
 .pr-reader-static .pr-bar-top { position: fixed; }
 .pr-novel-agg { display: flex; gap: 10px; align-items: center; font-size: 14px; color: var(--muted); }
+
+/* ── PC (≥ 1024px) ──────────────────────────────────────────────────────
+ * Phones / tablets / foldables above are untouched: everything here is inside min-width: 1024px, and the extra
+ * markup (header nav, admin table head, novel-home wrapper) is hidden / `display: contents` below it.
+ */
+.pr-nav { display: none; }
+.pr-novel-layout { display: contents; }
+.pr-novel-side { display: contents; }
+.pr-admin-head { display: none; }
+
+@media (min-width: 1024px) {
+  .pr-header { padding-inline: max(24px, calc((100% - 1152px) / 2)); gap: 12px; min-height: 60px; }
+  .pr-brand { font-size: 19px; padding-left: 0; }
+  .pr-header > .pr-icon-btn:first-child { margin-left: -12px; }
+  .pr-header-title { font-size: 16px; }
+  .pr-nav { display: flex; align-items: center; gap: 4px; }
+  .pr-nav a { display: inline-flex; align-items: center; min-height: 40px; padding: 0 12px; border-radius: 10px; font-size: 14px; font-weight: 600; color: var(--muted); }
+  .pr-nav a:hover, .pr-nav a[aria-current="page"] { background: var(--surface-2); color: var(--text); }
+  .pr-main { max-width: 1200px; padding: 32px 24px 64px; gap: 20px; }
+  .pr-h1 { font-size: 30px; font-weight: 800; }
+  .pr-h2 { font-weight: 700; }
+
+  /* list: 3 columns (4 on wide screens), cards lift on hover */
+  .pr-novel-grid { gap: 16px; }
+  .pr-card { height: 100%; padding: 20px; transition: border-color 150ms ease, box-shadow 150ms ease; }
+  .pr-card:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); box-shadow: 0 6px 24px rgb(0 0 0 / 0.08); }
+  .pr-card-foot { margin-top: auto; padding-top: 4px; }
+
+  /* novel home: info column (sticky) + the 목차 in the studio reader's TOC-page style */
+  .pr-novel-layout { display: grid; grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); gap: 48px; align-items: start; }
+  .pr-novel-side { display: flex; flex-direction: column; gap: 16px; position: sticky; top: 84px; }
+  .pr-hero .pr-h1 { font-size: 32px; line-height: 1.25; }
+  .pr-intro { font-size: 15px; line-height: 1.7; }
+  .pr-novel-toc .pr-h2 { margin-top: 0; padding-bottom: 12px; border-bottom: 1px solid var(--border); font-size: 19px; }
+  .pr-toc { margin-top: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); overflow: hidden; }
+  .pr-toc li:last-child .pr-toc-row { border-bottom: 0; }
+  .pr-toc-row { grid-template-columns: 3rem minmax(0, 1fr); min-height: 58px; padding: 10px 16px; column-gap: 12px; }
+  .pr-toc-row:hover { background: var(--surface-2); }
+  .pr-toc-no { grid-row: 1 / span 2; align-self: center; font-size: 13px; font-weight: 600; color: var(--muted); }
+  .pr-toc-title { font-size: 15px; font-weight: 500; }
+  .pr-toc-meta { grid-column: 2; }
+
+  /* admin: numbers in one row, comments as a table */
+  .pr-stats { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .pr-admin-head, .pr-admin-row { display: grid; grid-template-columns: minmax(200px, 260px) minmax(0, 1fr) 150px; gap: 16px; align-items: start; }
+  .pr-admin-head { padding: 8px 12px; font-size: 12px; font-weight: 700; color: var(--muted); border-bottom: 1px solid var(--border); }
+  .pr-admin-list { border: 1px solid var(--border); border-radius: 12px; background: var(--surface); overflow: hidden; }
+  .pr-admin-row { padding: 12px; }
+  .pr-admin-row:hover { background: var(--surface-2); }
+  .pr-admin-row .pr-comment-meta { flex-direction: column; gap: 2px; }
+  .pr-admin-row .pr-comment-body { margin: 0; }
+  .pr-admin-row .pr-comment-actions { margin: 0; justify-content: flex-end; }
+  .pr-form { max-width: 480px; }
+  .pr-main > .pr-btn-ghost { align-self: flex-start; }
+}
+@media (min-width: 1440px) { .pr-novel-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+
+/* PC reader (studio viewer): the studio's base text so the shared components render the same */
+/* in @layer base like the studio's theme.css, so Tailwind utilities (rounded-full, mb-*, text-muted, hover:underline) win */
+@layer base {
+  .pr-studio { font-size: 14.5px; line-height: 1.65; word-break: keep-all; overflow-wrap: anywhere; }
+  .pr-studio :is(h1, h2, h3, h4) { margin: 0; line-height: 1.35; }
+  .pr-studio a { color: var(--accent); }
+  .pr-studio button:not(:disabled) { cursor: pointer; }
+  .pr-studio :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+}
+.pr-comments-drawer .pr-compose textarea { max-height: 24vh; }

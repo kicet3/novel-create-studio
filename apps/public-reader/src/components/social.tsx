@@ -10,6 +10,7 @@ import { browserStore } from "../lib/hooks";
 import { formatCount, timeAgo } from "./format";
 import { Sheet } from "./Sheet";
 import { Button, Icon, Message } from "./ui";
+import { ReaderDrawer } from "@ncs/reader-ui";
 
 const NICK_KEY = "snowpage.nickname";
 const NICK_MAX = 20;
@@ -78,7 +79,7 @@ export interface NovelAggregates {
   ratingCount: number;
 }
 
-export function NovelSocial({ slug, initial }: { slug: string; initial: NovelAggregates }) {
+export function NovelSocial({ slug, initial, id }: { slug: string; initial: NovelAggregates; id?: string }) {
   const writable = useWritable();
   const [stats, setStats] = useState<NovelStatsDto>({ likes: initial.likes, liked: false, rating: { average: initial.ratingAverage, count: initial.ratingCount, mine: null } });
   const [error, setError] = useState<string | null>(null);
@@ -105,7 +106,7 @@ export function NovelSocial({ slug, initial }: { slug: string; initial: NovelAgg
   const avg = stats.rating.average;
   const off = writable === false;
   return (
-    <div className="pr-novel-social">
+    <div className="pr-novel-social" id={id}>
       <div className="pr-rating" aria-label={avg === null ? "아직 평점이 없습니다" : `평균 평점 ${avg}점, ${stats.rating.count}명`}>
         <span className="pr-rating-avg">
           <Icon name="star" filled size={18} /> {avg === null ? "평점 없음" : avg.toFixed(1)}
@@ -165,7 +166,8 @@ export function CommentItem({ c, onReply, onDelete, isReply }: { c: CommentDto; 
   );
 }
 
-export function CommentsSheet({ open, onClose, slug, episodeNo, title, onCount }: { open: boolean; onClose: () => void; slug: string; episodeNo: number; title: string; onCount?: (n: number) => void }) {
+/** comment thread of one episode (list, composer state, write / delete); `open`: load while the panel is shown */
+function useCommentThread(slug: string, episodeNo: number, open: boolean, onCount?: (n: number) => void) {
   const writable = useWritable();
   const [list, setList] = useState<CommentListDto | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -235,65 +237,105 @@ export function CommentsSheet({ open, onClose, slug, episodeNo, title, onCount }
       setError(errorText(err));
     }
   };
-  const count = [...body].length;
+  return { writable, list, error, body, setBody, nickname, setNickname, website, setWebsite, replyTo, setReplyTo, busy, submit, remove };
+}
+type CommentThread = ReturnType<typeof useCommentThread>;
 
+function CommentComposer({ t, title }: { t: CommentThread; title: string }) {
+  const count = [...t.body].length;
+  if (t.writable === false) return <Message>지금은 댓글을 남길 수 없습니다.</Message>;
   return (
-    <Sheet
-      open={open}
-      title={`댓글${list ? ` ${formatCount(list.total)}` : ""}`}
-      onClose={onClose}
-      footer={
-        writable === false ? (
-          <Message>지금은 댓글을 남길 수 없습니다.</Message>
-        ) : (
-          <form className="pr-compose" onSubmit={submit}>
-            {replyTo && (
-              <div className="pr-compose-reply">
-                <span>
-                  <strong>{replyTo.nickname}</strong>님에게 답글
-                </span>
-                <button type="button" className="pr-link-btn" onClick={() => setReplyTo(null)}>
-                  취소
-                </button>
-              </div>
-            )}
-            {/* honeypot: hidden from people, bots fill it in */}
-            <label className="pr-hp" aria-hidden="true">
-              웹사이트
-              <input name="website" tabIndex={-1} autoComplete="off" value={website} onChange={(e) => setWebsite(e.target.value)} />
-            </label>
-            <input
-              className="pr-compose-nick"
-              value={nickname}
-              onChange={(e) => setNickname(e.target.value)}
-              maxLength={NICK_MAX}
-              placeholder="닉네임(비우면 익명)"
-              aria-label="닉네임(선택)"
-              autoComplete="nickname"
-            />
-            <div className="pr-compose-row">
-              <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={2} maxLength={BODY_MAX} placeholder={replyTo ? "답글을 남겨 주세요" : `${title}에 댓글을 남겨 주세요`} aria-label="댓글 내용" />
-              <Button type="submit" variant="primary" disabled={busy || !body.trim() || count > BODY_MAX}>
-                등록
-              </Button>
-            </div>
-            <small className="pr-faint pr-count">
-              로그인 없이 익명으로 남습니다 · {count}/{BODY_MAX}
-            </small>
-          </form>
-        )
-      }
-    >
-      {error && <Message tone="danger">{error}</Message>}
-      {!list && !error && <Message>불러오는 중…</Message>}
-      {list && !list.items.length && <Message>첫 댓글을 남겨 보세요.</Message>}
-      {list && list.items.length > 0 && (
+    <form className="pr-compose" onSubmit={t.submit}>
+      {t.replyTo && (
+        <div className="pr-compose-reply">
+          <span>
+            <strong>{t.replyTo.nickname}</strong>님에게 답글
+          </span>
+          <button type="button" className="pr-link-btn" onClick={() => t.setReplyTo(null)}>
+            취소
+          </button>
+        </div>
+      )}
+      {/* honeypot: hidden from people, bots fill it in */}
+      <label className="pr-hp" aria-hidden="true">
+        웹사이트
+        <input name="website" tabIndex={-1} autoComplete="off" value={t.website} onChange={(e) => t.setWebsite(e.target.value)} />
+      </label>
+      <input
+        className="pr-compose-nick"
+        value={t.nickname}
+        onChange={(e) => t.setNickname(e.target.value)}
+        maxLength={NICK_MAX}
+        placeholder="닉네임(비우면 익명)"
+        aria-label="닉네임(선택)"
+        autoComplete="nickname"
+      />
+      <div className="pr-compose-row">
+        <textarea value={t.body} onChange={(e) => t.setBody(e.target.value)} rows={2} maxLength={BODY_MAX} placeholder={t.replyTo ? "답글을 남겨 주세요" : `${title}에 댓글을 남겨 주세요`} aria-label="댓글 내용" />
+        <Button type="submit" variant="primary" disabled={t.busy || !t.body.trim() || count > BODY_MAX}>
+          등록
+        </Button>
+      </div>
+      <small className="pr-faint pr-count">
+        로그인 없이 익명으로 남습니다 · {count}/{BODY_MAX}
+      </small>
+    </form>
+  );
+}
+
+function CommentListView({ t }: { t: CommentThread }) {
+  return (
+    <>
+      {t.error && <Message tone="danger">{t.error}</Message>}
+      {!t.list && !t.error && <Message>불러오는 중…</Message>}
+      {t.list && !t.list.items.length && <Message>첫 댓글을 남겨 보세요.</Message>}
+      {t.list && t.list.items.length > 0 && (
         <ul className="pr-comments">
-          {list.items.map((c) => (
-            <CommentItem key={c.id} c={c} onReply={writable === false ? undefined : (x) => setReplyTo(x)} onDelete={remove} />
+          {t.list.items.map((c) => (
+            <CommentItem key={c.id} c={c} onReply={t.writable === false ? undefined : (x) => t.setReplyTo(x)} onDelete={t.remove} />
           ))}
         </ul>
       )}
+    </>
+  );
+}
+
+interface CommentsPanelProps {
+  open: boolean;
+  onClose: () => void;
+  slug: string;
+  episodeNo: number;
+  title: string;
+  onCount?: (n: number) => void;
+}
+
+/** phones / tablets: comments in a bottom sheet */
+export function CommentsSheet({ open, onClose, slug, episodeNo, title, onCount }: CommentsPanelProps) {
+  const t = useCommentThread(slug, episodeNo, open, onCount);
+  return (
+    <Sheet open={open} title={`댓글${t.list ? ` ${formatCount(t.list.total)}` : ""}`} onClose={onClose} footer={<CommentComposer t={t} title={title} />}>
+      <CommentListView t={t} />
     </Sheet>
+  );
+}
+
+/** PC: comments in a right-side panel next to the text (same drawer as the 목차) */
+export function CommentsDrawer({ open, onClose, slug, episodeNo, title, onCount }: CommentsPanelProps) {
+  const t = useCommentThread(slug, episodeNo, open, onCount);
+  return (
+    <ReaderDrawer
+      open={open}
+      onClose={onClose}
+      title={`댓글${t.list ? ` ${formatCount(t.list.total)}` : ""}`}
+      titleId="pr-comments-title"
+      subtitle={title}
+      closeLabel="댓글 닫기"
+      className="pr-comments-drawer"
+      footer={<CommentComposer t={t} title={title} />}
+    >
+      <div className="px-2">
+        <CommentListView t={t} />
+      </div>
+    </ReaderDrawer>
   );
 }

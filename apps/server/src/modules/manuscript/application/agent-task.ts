@@ -16,10 +16,13 @@ export type PipelineCall<T> = ModelCallInput<T>;
 
 export interface PipelineLlm {
   call<T>(input: PipelineCall<T>): Promise<{ value: T | string; modelId: string; reused: boolean; webSearch?: ModelCallWebSearch }>;
+  /** the agents ModelCallPort itself (repair dialogues: agents.callWithRepair) */
+  port?: ModelCallPort;
 }
 
 function adaptPort(port: ModelCallPort): PipelineLlm {
   return {
+    port,
     async call(input) {
       const out = await port.call(input);
       return { value: out.value, modelId: out.modelId, reused: out.reused, ...(out.webSearch ? { webSearch: out.webSearch } : {}) };

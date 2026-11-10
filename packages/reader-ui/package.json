@@ -1,0 +1,30 @@
+{
+  "name": "@ncs/reader-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Presentational React pieces of the 읽기 viewer (page / scroll views, bars, 보기 설정, 목차 drawer, end card, reader.css), shared by the studio reader (apps/web) and snowpage (apps/public-reader). Data, routing and API calls stay in the apps (props / callbacks / slots).",
+  "exports": {
+    ".": { "@ncs/source": "./src/index.ts", "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+    "./reader.css": "./src/reader.css"
+  },
+  "files": ["dist", "src/reader.css"],
+  "sideEffects": ["*.css", "./src/dialog.ts", "./dist/dialog.js"],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b && tsc -p tsconfig.test.json",
+    "test": "vitest run --project reader-ui"
+  },
+  "dependencies": {
+    "@ncs/reader-core": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": "^19.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  }
+}

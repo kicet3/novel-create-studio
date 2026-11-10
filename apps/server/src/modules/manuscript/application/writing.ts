@@ -55,7 +55,7 @@ import type { Episode, ManuscriptService, SceneDraft } from "../index.js";
 import { promptOf, type PipelineHandler, type PipelineLlm } from "./agent-task.js";
 import { lengthWarningOf, type ManuscriptInternals } from "./manuscript-service.js";
 import { settings, soft } from "./support.js";
-import { structureGateRef } from "./structure.js";
+import { storyEpisodeLine, structureGateRef } from "./structure.js";
 
 type In = EpisodeTaskInput;
 const WRITING_SECTIONS: ContextSectionKind[] = [
@@ -88,6 +88,15 @@ const OUTLINE_INSTRUCTION = `당신은 웹소설 기획자(planner)입니다. �
 - 2화부터 첫 씬(s1)은 '직전 화 끝 상태'와 '직전 내용'의 마지막 장면에서 바로 이어집니다(시간·장소·등장 인물·몸과 마음 상태·열린 행동). 앞 화를 다시 요약하는 씬을 만들지 않고, 직전 화 끝 상태와 어긋나게 시작하지 않습니다.
 - 이번 화 계획상 시간·장소를 건너뛰어야 하면 s1 summary 첫머리에 그 전환(얼마 뒤·어디로·무엇이 정리됐는지)을 밝힙니다.
 - '미확정 사실 (앞 화 승인 대기)'은 아직 승인 전인 앞 화에서 나온 설정입니다. 확정 설정(제약·캐논 사실)이나 이번 화 계획과 어긋나지 않는 한 그 설정과 일관되게 계획합니다. 어긋나면 확정 설정과 계획을 따릅니다.`;
+/** 설계 추가 0023: pacing inside a story episode (에피소드 묶음 "제목 (1)(2)") — outline + draft */
+const unitRule = (u: import("../index.js").EpisodeUnitContext, episodeNo: number) =>
+  `${storyEpisodeLine(episodeNo, u)}\n- 이 화는 「${u.title}」 에피소드의 ${u.partNo}/${u.partCount}화입니다. 묶음 안에서의 역할에 맞게 속도를 조절합니다: ${
+    u.partCount <= 1
+      ? "한 화 안에서 사건을 열고 매듭짓습니다."
+      : u.partNo < u.partCount
+        ? "에피소드의 사건을 이 화에서 끝내지 않고, 다음 화(같은 에피소드)로 이어지는 클리프행어로 끝냅니다."
+        : "이 에피소드의 사건을 매듭짓고, 다음 에피소드로 넘어가는 여운이나 새 훅으로 끝냅니다."
+  } 제목·회차 표기는 본문에 쓰지 않습니다.`;
 const DRAFT_INSTRUCTION = `당신은 웹소설 작가(writer)입니다. 아웃라인의 씬을 순서대로 본문으로 씁니다.
 - 씬과 씬 사이에는 "${SCENE_SEPARATOR}" 한 줄만 둡니다. 다른 표기·주석은 넣지 않습니다.
 - 작품 연령 등급을 넘는 묘사를 쓰지 않습니다. 시점 인물이 모르는 이름은 쓰지 않습니다.
@@ -236,8 +245,10 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       const beatIds = (await Promise.all(ports.reg.beatSources.map((s) => soft(() => s(scope, ep.episodeNo), [])))).flat();
       // 설계 추가 L5: the episode plan's target, inside the profile range (0017: never over the maximum either)
       const target = targetIn(profile, ep.targetChars);
+      const unit = await soft(() => getService().getEpisodeUnitContext(scope, ep), null);
       const data = JSON.stringify({
         episode: { no: ep.episodeNo, title: ep.title, hookNote: ep.hookNote },
+        storyEpisode: unit ? { title: unit.title, part: unit.partNo, parts: unit.partCount, from: unit.from, to: unit.to, siblings: unit.siblings.map((x) => ({ no: x.episodeNo, part: x.partNo, plan: x.planSummary })) } : null,
         arc: { title: arc.title, goal: arc.goalText, conflict: arc.conflictText, end: arc.endCondition, range: [arc.plannedEpisodeFrom, arc.plannedEpisodeTo] },
         plot: { coreEvent: arc.coreEvent, changeText: arc.changeText, involvedCharacterIds: arc.involvedCharacterIds },
         episodePlan: { summary: ep.planSummary, plannedSceneCount: ep.plannedSceneCount, targetChars: target },
@@ -249,7 +260,7 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
         rework: input.rework_cause ? { cause: input.rework_cause, issues: input.issue_refs ?? [], instructions: input.instructions ?? null } : null,
       });
       const synth = synthOutline(ep, target, beatIds);
-      const out = await llm.call({ run, purpose: "outline", ...promptOf(context, OUTLINE_INSTRUCTION, data), output: { kind: "object", schemaName: "OutlineProposal", schema: outlineProposalSchema } });
+      const out = await llm.call({ run, purpose: "outline", ...promptOf(context, unit ? `${OUTLINE_INSTRUCTION}\n${unitRule(unit, ep.episodeNo)}` : OUTLINE_INSTRUCTION, data), output: { kind: "object", schemaName: "OutlineProposal", schema: outlineProposalSchema } });
       const v = out.value as OutlineProposal;
       const scenes = (v.outline.scenes.length ? v.outline.scenes : synth.outline.scenes).slice(0, cfg.maxScenes);
       // keys unique & non-empty
@@ -315,8 +326,10 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       // 설계 추가 L6: never below the profile minimum (≥ 3,000-char floor); 0017: never above the maximum
       const target = targetIn(profile, outline.target_chars);
       const basis = countBasisLabel(profile.countBasis);
+      const unit = await soft(() => getService().getEpisodeUnitContext(scope, ep), null);
       const data = JSON.stringify({
         episode: { no: ep.episodeNo, title: ep.title },
+        storyEpisode: unit ? { title: unit.title, part: unit.partNo, parts: unit.partCount } : null,
         ageRating: n.ageRating,
         targetChars: target,
         minChars: profile.minChars,
@@ -331,7 +344,7 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
         purpose: "draft",
         ...promptOf(
           context,
-          DRAFT_INSTRUCTION,
+          unit ? `${DRAFT_INSTRUCTION}\n${unitRule(unit, ep.episodeNo)}` : DRAFT_INSTRUCTION,
           `목표 분량: ${target}자 안팎 — 허용 범위 ${rangeOf(profile)}. 최소 ${profile.minChars}자 미만으로 끝내지 않고 최대 ${profile.maxChars}자를 넘기지 않습니다.\n${data}`,
         ),
         output: { kind: "text" },

@@ -358,6 +358,7 @@ export const LABELS_KO = {
     safety_review: "안전 검토",
     draft_adoption: "초안 채택",
     story_structure: "전체 구성",
+    episode_titles: "제목 정리",
   }),
   approval_status: labels("approval_status", {
     pending: "승인 대기",

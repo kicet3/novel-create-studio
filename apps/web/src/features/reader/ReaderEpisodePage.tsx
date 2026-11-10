@@ -12,6 +12,7 @@ import { isApiRequestError } from "../../api/client.js";
 import { Button, ButtonLink, QueryError } from "../../components/ui/index.js";
 import { useDocumentTitle } from "../../lib/use-document-title.js";
 import { usePrefetchReaderEpisode, useReaderEpisode, useReaderToc } from "./api.js";
+import { useWindowSize } from "@ncs/reader-ui";
 import { ReaderRoot, browserStore, isReaderPanelOpen, lastInputWasKeyboard, useReadHistory, useReaderSettings, useReducedMotion, useWakeLock } from "./ReaderShell.js";
 import { BottomBar, Dimmer, SettingsSheet, TapHint, TocDrawer, TopBar } from "./ReaderOverlays.js";
 import { PageView, ScrollView, createProgressStore, type EndActions, type InitialPosition, type ViewEvents, type ViewHandle } from "./ReaderViews.js";
@@ -42,28 +43,6 @@ function useEpisodeNo(): number {
 
 const isTyping = (t: EventTarget | null) => t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
 const isControl = (t: EventTarget | null) => t instanceof HTMLElement && !!t.closest("a,button,[role=switch]");
-
-/** window size, updated once per frame on resize */
-function useViewport() {
-  const read = () => ({ w: window.innerWidth, h: window.innerHeight });
-  const [size, setSize] = useState(read);
-  useEffect(() => {
-    let raf = 0;
-    const onResize = () => {
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => setSize((s) => {
-        const n = read();
-        return n.w === s.w && n.h === s.h ? s : n;
-      }));
-    };
-    window.addEventListener("resize", onResize);
-    return () => {
-      cancelAnimationFrame(raf);
-      window.removeEventListener("resize", onResize);
-    };
-  }, []);
-  return size;
-}
 
 type Panel = "settings" | "toc" | null;
 
@@ -214,7 +193,7 @@ export function ReaderEpisodePage() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const vp = useViewport();
+  const vp = useWindowSize();
   const geometry = useMemo(
     () =>
       pageGeometry({

@@ -5,7 +5,7 @@ import { episodeLabel } from "@ncs/reader-core";
 import { isPublicSlug } from "@ncs/reader-core/snapshot";
 import { EpisodeReader } from "@/src/reader/EpisodeReader";
 import { href, SITE_NAME } from "@/src/lib/href";
-import { cachedEpisode } from "@/src/server/cached";
+import { cachedEpisode, cachedNovel } from "@/src/server/cached";
 
 type Props = { params: Promise<{ slug: string; no: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> };
 
@@ -36,6 +36,8 @@ export default async function EpisodePage({ params, searchParams }: Props) {
   const ep = await load(params);
   if (!ep) notFound();
   const sp = await searchParams;
+  // 목차 of the PC reader (cached like the episode; a failure only empties the drawer)
+  const toc = (await cachedNovel(ep.slug).catch(() => null))?.episodes ?? [];
   const { novelTitle, novelIntro: _intro, authorName: _author, ...episode } = ep;
-  return <EpisodeReader ep={episode} novelTitle={novelTitle} startAtEnd={sp.at === "end"} />;
+  return <EpisodeReader ep={episode} novelTitle={novelTitle} toc={toc} startAtEnd={sp.at === "end"} />;
 }

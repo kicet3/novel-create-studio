@@ -43,6 +43,7 @@ export function isRebuildHint(action: string): boolean {
     action === "episode.published" ||
     action === "episode.unpublished" ||
     action === "episode.status_changed" ||
+    action === "episode.retitled" ||
     action.startsWith("novel.") ||
     action === "publication.settings_changed" ||
     action === "publication.config_changed"
@@ -141,7 +142,10 @@ export function createPublicationService(deps: PublicationModuleDeps): Publicati
   const rowOf = async (novelId: string) => (await db.select().from(publicSiteNovels).where(eq(publicSiteNovels.novelId, novelId)))[0] ?? null;
 
   const publishedEpisodes = async (scope: NovelScope) =>
-    (await manuscript.listEpisodes(scope)).filter((e) => e.status === "published" && !!e.publishedVersionId).sort((a, b) => a.episodeNo - b.episodeNo);
+    manuscript.withUnitInfo(
+      scope,
+      (await manuscript.listEpisodes(scope)).filter((e) => e.status === "published" && !!e.publishedVersionId).sort((a, b) => a.episodeNo - b.episodeNo),
+    );
 
   const toDto = async (scope: NovelScope, row: PublicSiteNovelsRow | null): Promise<PublicSiteNovelDto> => ({
     novelId: scope.novelId,
@@ -172,7 +176,7 @@ export function createPublicationService(deps: PublicationModuleDeps): Publicati
     const h = createHash("sha256");
     h.update(dest);
     for (const { row, n, basis, eps } of items) {
-      h.update(JSON.stringify([row.slug, row.intro, row.authorName, n.title, n.genre, n.ageRating, basis, eps.map((e) => [e.episodeNo, e.title, e.publishedVersionId, e.publishedAt?.toISOString() ?? null])]));
+      h.update(JSON.stringify([row.slug, row.intro, row.authorName, n.title, n.genre, n.ageRating, basis, eps.map((e) => [e.episodeNo, e.title, e.publishedVersionId, e.publishedAt?.toISOString() ?? null, e.unitTitle, e.unitPartNo, e.unitPartCount])]));
     }
     return h.digest("hex");
   }
@@ -191,6 +195,9 @@ export function createPublicationService(deps: PublicationModuleDeps): Publicati
           text: buildReadingText(version.content, scenes.map((s) => s.charStart)),
           charCount: basis === "without_spaces" ? version.charCountWithoutSpaces : version.charCountWithSpaces,
           publishedAt: e.publishedAt,
+          unitTitle: e.unitTitle,
+          unitPartNo: e.unitPartNo,
+          unitPartCount: e.unitPartCount,
         });
       }
       novels.push({ slug: row.slug, title: n.title, genre: n.genre, ageRating: n.ageRating, authorName: row.authorName, intro: row.intro, episodes });

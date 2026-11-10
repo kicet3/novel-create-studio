@@ -81,6 +81,8 @@ export const ID_PREFIXES = {
   rvm: "RevisionChatMessage",
   rvp: "RevisionChatProposal",
   ean: "EpisodeAuthorNote",
+  // 설계 추가 0023: 에피소드 묶음
+  epu: "EpisodeUnit",
 } as const;
 
 export type IdPrefix = keyof typeof ID_PREFIXES;

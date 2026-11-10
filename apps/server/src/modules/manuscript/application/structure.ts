@@ -23,6 +23,7 @@ import { countBasisLabel } from "../domain/text.js";
 import type { ManuscriptService, PlanningRosterEntry } from "../index.js";
 import { promptOf, type PipelineHandler } from "./agent-task.js";
 import type { ManuscriptInternals } from "./manuscript-service.js";
+import { isRetitleTask } from "./episode-units.js";
 import { castPortOf, soft } from "./support.js";
 
 const PLAN_STRUCTURE_INSTRUCTION = `당신은 웹소설 기획자(planner)입니다. 승인된 기획서와 확정 캐스트를 바탕으로 작품 전체 구성(1~4부와 결말)을 JSON으로 설계합니다.
@@ -61,6 +62,13 @@ export interface StructureApi {
   /** reasons the structure cannot be generated now (empty = ok) */
   gate(scope: NovelScope, tx?: Tx): Promise<{ reasons: Array<{ code: string; message: string; details?: Record<string, unknown> }>; cast: Awaited<ReturnType<ReturnType<typeof castPortOf>["completeness"]>> }>;
   createPlanStructureTask(tx: Tx, scope: NovelScope, input: { scope: "all" | "ending" | "parts"; instructions?: string | null; rejection_note?: string | null }, actor: ActorRef): Promise<string | null>;
+}
+
+/** 설계 추가 0023: "[이번 에피소드] 이 화는 「X」 에피소드의 n/N화 …" (story_plan section + writing prompts) */
+export function storyEpisodeLine(episodeNo: number, u: import("../index.js").EpisodeUnitContext): string {
+  const role = u.partCount <= 1 ? "한 화로 끝나는 에피소드입니다" : u.partNo === 1 ? "에피소드의 시작 화입니다(사건 도입)" : u.partNo === u.partCount ? "에피소드의 마지막 화입니다(이 에피소드의 사건을 마무리하고 다음 이야기로 넘깁니다)" : "에피소드의 중간 화입니다(사건 전개, 다음 화로 이어지는 훅)";
+  const others = u.siblings.map((x) => `(${x.partNo}) ${x.episodeNo}화: ${x.planSummary || "-"}`).join(" / ");
+  return `[이번 에피소드] 이 화(${episodeNo}화)는 「${u.title}」 에피소드의 ${u.partNo}/${u.partCount}화 — ${role}.${u.partCount > 1 ? ` 묶음 ${u.from}~${u.to}화. 같은 묶음의 다른 화: ${others}` : ""}`;
 }
 
 export function createStructure(m: ManuscriptInternals, getService: () => ManuscriptService): StructureApi {
@@ -423,6 +431,9 @@ export function createStructure(m: ManuscriptInternals, getService: () => Manusc
         const profile = await m.lengthProfile(scope);
         const target = Math.max(ep.targetChars ?? 0, profile.minChars);
         lines.push(`[이번 화 계획] ${ep.episodeNo}화: ${ep.planSummary || ep.hookNote || "-"} / 씬 ${ep.plannedSceneCount ?? "?"}개 / 목표 ${target}자 이상(${countBasisLabel(profile.countBasis)}, 최소 ${Math.max(EPISODE_HARD_MIN_CHARS, profile.minChars)}자)`);
+        // 설계 추가 0023: the 화's place inside its story episode (에피소드 묶음)
+        const u = await soft(() => getService().getEpisodeUnitContext(scope, ep), null);
+        if (u) lines.push(storyEpisodeLine(ep.episodeNo, u));
       }
       const text = lines.join("\n");
       return { text, tokenEstimate: Math.ceil(text.length / 2), refs: {} };
@@ -438,7 +449,9 @@ export function createStructure(m: ManuscriptInternals, getService: () => Manusc
     const active = tasks.find((t) => (ACTIVE as readonly string[]).includes(t.status));
     const last = tasks[0];
     const arcs = (await novel.listArcs(scope)).filter((a) => a.status !== "cancelled");
-    const eps = await getService().withLengthFlags(scope, await repo.listEpisodes(db(), scope));
+    const eps = await getService().withUnitInfo(scope, await getService().withLengthFlags(scope, await repo.listEpisodes(db(), scope)));
+    const units = await getService().listEpisodeUnits(scope);
+    const titleMode = ((await novel.getNovel(scope)) as { episodeTitleMode?: "unit" | "per_episode" }).episodeTitleMode ?? "unit";
     const roster = await cast().roster(scope);
     const gapsOf = async (a: Arc) => {
       if (a.status !== "planned" && a.status !== "plan_awaiting_approval") return null;
@@ -447,8 +460,10 @@ export function createStructure(m: ManuscriptInternals, getService: () => Manusc
       return c.complete ? null : c;
     };
     const replans = new Map<string, string>();
-    for (const ap of await soft(() => hitl.listApprovals(scope, { statuses: ["pending"], types: ["arc_plan"] }), [])) {
-      if ((ap.payload as { replan?: unknown } | null)?.replan) replans.set(ap.subjectId, ap.id);
+    const retitles = new Map<string, string>();
+    for (const ap of await soft(() => hitl.listApprovals(scope, { statuses: ["pending"], types: ["arc_plan", "episode_titles"] }), [])) {
+      if (ap.approvalType === "episode_titles") retitles.set(ap.subjectId, ap.id);
+      else if ((ap.payload as { replan?: unknown } | null)?.replan) replans.set(ap.subjectId, ap.id);
     }
     const castGaps = new Map<string, Awaited<ReturnType<typeof gapsOf>>>();
     for (const a of arcs) castGaps.set(a.id, await gapsOf(a));
@@ -469,6 +484,7 @@ export function createStructure(m: ManuscriptInternals, getService: () => Manusc
           planningStage: n ? ("episodes_planned" as const) : ("outline" as const),
           castGaps: castGaps.get(a.id) ?? null,
           replanApprovalId: replans.get(a.id) ?? null,
+          retitleApprovalId: retitles.get(a.id) ?? null,
         };
       }),
       episodes: eps.map((e) => ({
@@ -481,7 +497,13 @@ export function createStructure(m: ManuscriptInternals, getService: () => Manusc
         plannedSceneCount: e.plannedSceneCount,
         targetChars: e.targetChars,
         lengthBelowFloor: e.lengthBelowFloor,
+        unitId: e.unitId,
+        unitTitle: e.unitTitle,
+        unitPartNo: e.unitPartNo,
+        unitPartCount: e.unitPartCount,
       })),
+      units,
+      episodeTitleMode: titleMode,
       goal: goal ? { totalEpisodesMin: goal.totalEpisodesMin, totalEpisodesMax: goal.totalEpisodesMax, endingDirection: goal.endingDirection } : null,
     };
     return view;
@@ -543,7 +565,7 @@ export function createStructure(m: ManuscriptInternals, getService: () => Manusc
     if (arc.status === "completed" || arc.status === "cancelled" || (arc.status !== "planned" && arc.status !== "plan_awaiting_approval" && !eps.some((e) => e.status === "planned"))) {
       throw new ConflictError("arc_not_replannable", "끝났거나 남은 계획 화가 없는 플롯은 다시 계획할 수 없습니다.");
     }
-    const active = (await orchestration.listTasks(scope, { kinds: ["plan_arc"], targetId: arcId, statuses: [...ACTIVE], limit: 5 }))[0];
+    const active = (await orchestration.listTasks(scope, { kinds: ["plan_arc"], targetId: arcId, statuses: [...ACTIVE], limit: 10 })).find((t) => !isRetitleTask(t));
     if (active) return { taskId: active.id };
     const taskId = await platform.uow.run(async (tx) => {
       const fresh = await novel.getArc(scope, arcId, tx);

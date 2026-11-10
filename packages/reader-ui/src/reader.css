@@ -2,7 +2,9 @@
  * 읽기(reader) themes + typography + viewer chrome. The reader root re-declares the app tokens (theme.css) so
  * shared UI (Button, Select, Badge) follows the reader theme independently of the app theme.
  * Small text uses --muted (≥ 4.5:1 on --bg / --surface / --surface-2 in every theme); --faint is decoration only.
- * Typography comes from CSS variables set on the root (ReaderShell `readerStyleVars`).
+ * Typography comes from CSS variables set on the root (studio ReaderShell `readerStyleVars`, snowpage `readerVars`).
+ * Shared by the studio reader (apps/web) and snowpage (apps/public-reader); the class names in @ncs/reader-ui's
+ * components are Tailwind utilities over the reader tokens (both apps map --bg / --surface / … to `bg-surface` etc.).
  */
 .reader {
   /* one typeface across the app and the reader (Pretendard, bundled) */
@@ -21,7 +23,7 @@
   -webkit-tap-highlight-color: transparent;
 }
 
-/* background themes: @ncs/reader-core/themes.css (imported by ReaderShell) */
+/* background themes: @ncs/reader-core/themes.css (imported by both apps) */
 
 /* ── text ─────────────────────────────────────────────────────────────── */
 .reader-column {

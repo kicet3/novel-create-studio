@@ -7,7 +7,7 @@
 import { PGlite } from "@electric-sql/pglite";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "@ncs/db/orm";
-import { episodes, novels } from "@ncs/db/schema";
+import { episodeUnits, episodes, novels } from "@ncs/db/schema";
 import { PUBLIC_EPISODE_COLUMNS, PUBLIC_NOVEL_COLUMNS, PUBLIC_SCHEMA_LATEST_VERSION, pgliteSqlClient } from "@ncs/public-schema";
 import { publicSiteCheckDtoSchema, publicSiteRoleSqlDtoSchema, publicSiteStatusDtoSchema } from "@ncs/shared";
 import { createTestCore, type TestCore } from "../support/test-core.js";
@@ -143,6 +143,23 @@ describe("publication → Supabase public schema", () => {
     const s = publicSiteStatusDtoSchema.parse((await t.http("POST", "/api/public-site/build")).body);
     expect(s.lastRun).toEqual({ upsertedNovels: 0, upsertedEpisodes: 0, deletedNovels: 0, deletedEpisodes: 0, unchangedNovels: 1 });
     expect(await q(`SELECT count(*)::int AS n FROM ${SCHEMA}.episodes`)).toEqual([{ n: 2 }]);
+  });
+
+  it("설계 추가 0023: carries the story-episode display title and unit fields (additive v2 columns)", async () => {
+    const arcId = (await t.modules.manuscript.service.getEpisode({ novelId }, ids[0]!)).arcId;
+    const unitId = t.platform.ids.next("epu");
+    await t.platform.uow.db.insert(episodeUnits).values({ id: unitId, novelId, arcId, title: "검은 장부", ord: 1, plannedEpisodeCount: 3 });
+    for (const [i, id] of ids.entries()) {
+      await t.platform.uow.db.update(episodes).set({ unitId, unitPartNo: i + 1, ...(i < 2 ? { title: `검은 장부 (${i + 1})` } : {}) }).where(eq(episodes.id, id));
+    }
+    const s = publicSiteStatusDtoSchema.parse(await t.modules.publication.service.rebuild());
+    expect(s.lastRun).toMatchObject({ upsertedEpisodes: 2, deletedEpisodes: 0 });
+    expect(await q(`SELECT episode_no, title, unit_title, unit_part_no, unit_part_count FROM ${SCHEMA}.episodes ORDER BY episode_no`)).toEqual([
+      { episode_no: 1, title: "검은 장부 (1)", unit_title: "검은 장부", unit_part_no: 1, unit_part_count: 3 },
+      { episode_no: 2, title: "검은 장부 (2)", unit_title: "검은 장부", unit_part_no: 2, unit_part_count: 3 },
+    ]);
+    // unchanged afterwards (the unit fields are part of the content hash)
+    expect(publicSiteStatusDtoSchema.parse(await t.modules.publication.service.rebuild({ force: true })).lastRun).toMatchObject({ upsertedEpisodes: 0 });
   });
 
   it("deletes an unpublished episode's row but keeps its reactions", async () => {

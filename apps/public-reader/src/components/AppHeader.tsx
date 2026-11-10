@@ -1,10 +1,10 @@
-/** compact sticky header: back link or the site name (server-safe) */
+/** compact sticky header: back link or the site name (server-safe); PC adds the site name + nav on the right */
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { href, SITE_NAME } from "../lib/href";
 import { Icon } from "./ui";
 
-export function AppHeader({ back, title }: { back?: string; title?: ReactNode }) {
+export function AppHeader({ back, title, current }: { back?: string; title?: ReactNode; current?: "list" }) {
   return (
     <header className="pr-header">
       {back ? (
@@ -17,6 +17,12 @@ export function AppHeader({ back, title }: { back?: string; title?: ReactNode })
         </Link>
       )}
       <span className="pr-header-title">{title}</span>
+      {/* PC only (hidden below 1024px) */}
+      <nav className="pr-nav" aria-label="사이트">
+        <Link href={href.list()} aria-current={current === "list" ? "page" : undefined}>
+          작품 목록
+        </Link>
+      </nav>
     </header>
   );
 }

@@ -18,12 +18,17 @@
  *   POST …/structure/generate                 structureGenerateRequestSchema → 202 { taskId }
  *   POST …/structure/decision                 structureDecisionRequestSchema → structureViewSchema
  *   POST …/arcs/:arcId/replan                 arcReplanRequestSchema         → 202 { taskId }
+ *   GET  …/episode-units?arcId                                                → { items: episodeUnitDtoSchema[] }
+ *   POST …/arcs/:arcId/retitle                                                → 202 { taskId } (제목 정리 제안: plan_arc retitle)
+ *   GET  …/arcs/:arcId/retitle                                                → retitleProposalViewSchema (대기 중인 제안 + 전→후)
+ *   POST …/arcs/:arcId/retitle/apply           retitleApplyRequestSchema      → retitleApplyResultSchema
  */
 import { z } from "zod";
 import { ENUMS } from "../enum-registry.js";
 import { isoDateTime } from "./common.js";
 import { arcDtoSchema, storyStructureDtoSchema } from "./novel.js";
 import { castCompletenessSchema } from "./cast.js";
+import { EPISODE_TITLE_MODES } from "../episode-title.js";
 
 const csv = <T extends readonly [string, ...string[]]>(values: T) =>
   z
@@ -32,6 +37,32 @@ const csv = <T extends readonly [string, ...string[]]>(values: T) =>
     .pipe(z.array(z.enum(values)));
 
 // ── responses ───────────────────────────────────────────────────────────
+/**
+ * 설계 추가 0023: 에피소드 묶음. `title`은 표시 제목("묶음 제목 (n)", 한 화짜리 묶음은 번호 없음 — 공개된 화는 작가가 고를 때만 바뀜).
+ * 묶음이 없는 화(화별 제목 방식, 이전 작품)는 모두 null. 목록·상세·구성·읽기 목차 응답에서 채웁니다.
+ */
+const unitFields = {
+  unitId: z.string().nullable().optional(),
+  unitTitle: z.string().nullable().optional(),
+  /** 묶음 안에서 몇 번째 화(1부터) */
+  unitPartNo: z.number().int().nullable().optional(),
+  /** 묶음의 화 수 */
+  unitPartCount: z.number().int().nullable().optional(),
+};
+
+export const episodeUnitDtoSchema = z.object({
+  id: z.string(),
+  arcId: z.string(),
+  title: z.string(),
+  ord: z.number().int(),
+  episodeFrom: z.number().int(),
+  episodeTo: z.number().int(),
+  partCount: z.number().int(),
+  episodeNos: z.array(z.number().int()),
+});
+export type EpisodeUnitDto = z.infer<typeof episodeUnitDtoSchema>;
+export const episodeUnitListSchema = z.object({ items: z.array(episodeUnitDtoSchema) });
+
 export const episodeDtoSchema = z.object({
   id: z.string(),
   novelId: z.string(),
@@ -63,6 +94,7 @@ export const episodeDtoSchema = z.object({
   targetChars: z.number().int().nullable(),
   /** 현재 원고가 절대 하한(3,000자) 미만 (목록·상세 응답에서 계산, 그 밖의 응답은 false) */
   lengthBelowFloor: z.boolean().default(false),
+  ...unitFields,
   createdAt: isoDateTime,
   updatedAt: isoDateTime,
 });
@@ -260,6 +292,8 @@ export const structurePlotDtoSchema = arcDtoSchema.extend({
   castGaps: castCompletenessSchema.nullable().default(null),
   /** 진행 중인 플롯의 재계획안이 승인을 기다림(인박스) */
   replanApprovalId: z.string().nullable().default(null),
+  /** 설계 추가 0023: [제목 정리] 제안이 승인을 기다림(인박스) */
+  retitleApprovalId: z.string().nullable().optional(),
 });
 export type StructurePlotDto = z.infer<typeof structurePlotDtoSchema>;
 
@@ -273,6 +307,7 @@ export const structureEpisodeDtoSchema = z.object({
   plannedSceneCount: z.number().int().nullable(),
   targetChars: z.number().int().nullable(),
   lengthBelowFloor: z.boolean(),
+  ...unitFields,
 });
 export type StructureEpisodeDto = z.infer<typeof structureEpisodeDtoSchema>;
 
@@ -291,7 +326,73 @@ export const structureViewSchema = z.object({
   lastError: z.string().nullable(),
   plots: z.array(structurePlotDtoSchema),
   episodes: z.array(structureEpisodeDtoSchema),
+  /** 설계 추가 0023: 에피소드 묶음(플롯·순서별) */
+  units: z.array(episodeUnitDtoSchema).optional(),
+  /** 작품 제목 방식 */
+  episodeTitleMode: z.enum(EPISODE_TITLE_MODES).optional(),
   goal: z.object({ totalEpisodesMin: z.number().int(), totalEpisodesMax: z.number().int().nullable(), endingDirection: z.string() }).nullable(),
 });
 export type StructureView = z.infer<typeof structureViewSchema>;
 export const structureTaskAcceptedSchema = z.object({ taskId: z.string() });
+
+// ── 설계 추가 0023: [제목 정리] (플롯의 화를 에피소드 묶음으로 묶고 제목을 "묶음 제목 (n)"으로) ──
+export const retitleItemSchema = z.object({
+  episodeNo: z.number().int(),
+  status: z.enum(ENUMS.episode_status),
+  before: z.string().nullable(),
+  /** 적용 후 제목(공개 제목을 유지하는 화는 포함해 바꿀 때의 제목) */
+  after: z.string(),
+  /** 새 묶음(공개 제목을 유지해 묶음에서 빠지는 화는 null) */
+  unitTitle: z.string().nullable(),
+  unitPartNo: z.number().int().nullable(),
+  unitPartCount: z.number().int().nullable(),
+  published: z.boolean(),
+  /** 기본 적용에서 바뀜(공개 전 화). 공개된 화는 includePublishedEpisodeNos로 고를 때만 바뀜 */
+  willRename: z.boolean(),
+  unchanged: z.boolean(),
+  /** 공개 제목을 유지해 새 묶음에서 빠짐(묶음은 그다음 화부터 (1)로 시작) */
+  excluded: z.boolean().default(false),
+});
+export type RetitleItem = z.infer<typeof retitleItemSchema>;
+
+export const retitleProposalViewSchema = z.object({
+  arcId: z.string(),
+  /** 진행 중인 제안 작업(plan_arc retitle) */
+  task: z.object({ id: z.string(), status: z.string() }).nullable(),
+  lastError: z.string().nullable(),
+  /** 대기 중인 제안(없으면 null) */
+  proposal: z
+    .object({
+      approvalId: z.string(),
+      createdAt: isoDateTime,
+      units: z.array(z.object({ title: z.string(), from: z.number().int(), to: z.number().int() })),
+      items: z.array(retitleItemSchema),
+    })
+    .nullable(),
+});
+export type RetitleProposalView = z.infer<typeof retitleProposalViewSchema>;
+
+/** POST …/arcs/:arcId/retitle — 다시 제안할 때 바꿀 점(선택) */
+export const retitleProposeRequestSchema = z.object({ note: z.string().trim().max(2000).optional() });
+export type RetitleProposeRequest = z.input<typeof retitleProposeRequestSchema>;
+
+export const retitleApplyRequestSchema = z.object({
+  approvalId: z.string().min(1),
+  /** 공개된 화 중 제목을 바꿀 화(기본: 없음 — 공개된 화는 제목 유지) */
+  includePublishedEpisodeNos: z.array(z.number().int().min(1)).max(500).default([]),
+  /** 공개된 화 제목 변경 확인(리트콘처럼 독자에게 보이는 제목이 바뀜) — includePublishedEpisodeNos가 있으면 true 필수 */
+  confirmPublishedRename: z.boolean().default(false),
+  /** 제안을 반려(아무것도 바꾸지 않음) */
+  reject: z.boolean().default(false),
+  /** 반려 사유(선택) */
+  note: z.string().trim().max(2000).optional(),
+});
+export type RetitleApplyRequest = z.input<typeof retitleApplyRequestSchema>;
+
+export const retitleApplyResultSchema = z.object({
+  applied: z.boolean(),
+  renamed: z.array(z.object({ episodeNo: z.number().int(), before: z.string().nullable(), after: z.string() })),
+  keptPublished: z.array(z.number().int()),
+  episodeTitleMode: z.enum(EPISODE_TITLE_MODES),
+});
+export type RetitleApplyResult = z.infer<typeof retitleApplyResultSchema>;
