@@ -955,9 +955,9 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
             title: `${ep.episodeNo}화 반려 상한에 도달했습니다`,
             body: `이 화는 ${ep.rejectionCount}번 반려되었습니다. 다음 방향을 골라 주세요.\n마지막 반려 사유: ${p.reason}`,
             options: [
-              { label: "처음부터 다시 기획", value: "replan", isRecommended: true },
-              { label: "직접 고치기", value: "human_edit" },
-              { label: "보류", value: "hold" },
+              { label: "처음부터 다시 기획", value: { kind: "replan" }, isRecommended: true },
+              { label: "직접 고치기", value: { kind: "human_edit" } },
+              { label: "보류", value: { kind: "hold" } },
             ],
             links: [{ type: "episode", id: ep.id }],
             proposedBlockingBasis: "rewrite_limit",

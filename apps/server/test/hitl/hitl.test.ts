@@ -350,3 +350,22 @@ describe("deadlines (05 §5.5, fail-closed)", () => {
     await expect(env.t.platform.uow.run((tx) => hitl().cancelQuestion(tx, scope, req.questionId, "again", env.t.owner))).rejects.toMatchObject({ status: 409 });
   });
 });
+
+describe("rewrite_limit questions (gate sweep regression)", () => {
+  it("accepts the manuscript gate's rewrite_limit options (object values) and rejects plain strings", async () => {
+    const { scope } = await newNovel(false);
+    const id = await create(scope, draft({
+      topic: "rewrite_limit",
+      title: "7화 자동 재작성 상한에 도달했습니다",
+      options: [
+        { label: "직접 고치기", value: { kind: "human_edit" } },
+        { label: "이슈 허용", value: { kind: "waive_issue", continuity_issue_ids: ["cis_1"] } },
+        { label: "아웃라인부터 다시 쓰기", value: { kind: "replan_from_outline" }, isRecommended: true },
+        { label: "보류", value: { kind: "hold" } },
+      ],
+      proposedBlockingBasis: "rewrite_limit",
+    }));
+    expect(id).toBeTruthy();
+    await expect(create(scope, draft({ topic: "rewrite_limit", options: [{ label: "직접 고치기", value: "human_edit" as never }, { label: "보류", value: "hold" as never }] }))).rejects.toMatchObject({ status: 422 });
+  });
+});

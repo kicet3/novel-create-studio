@@ -563,11 +563,13 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
             questionType: "single_choice",
             title: `${ep.episodeNo}화 자동 재작성 상한에 도달했습니다`,
             body: `검사에서 남은 문제를 자동으로 고치지 못했습니다(자동 재작성 ${ep.autoRewriteCount}회).\n${d.blockers.map((b) => `- ${b.message}`).join("\n")}`,
+            // option values follow the hitl answer schema for rewrite_limit (objects with `kind`) — plain strings were
+            // rejected ("질문 초안이 올바르지 않습니다"), the transaction rolled back and the gate sweep retried forever
             options: [
-              { label: "직접 고치기", value: "human_edit" },
-              ...(hasSafety ? [] : [{ label: "이슈 허용", value: "waive_issue" }]),
-              { label: "아웃라인부터 다시 쓰기", value: "replan_from_outline", isRecommended: true },
-              { label: "보류", value: "hold" },
+              { label: "직접 고치기", value: { kind: "human_edit" } },
+              ...(hasSafety || !issueLinks.length ? [] : [{ label: "이슈 허용", value: { kind: "waive_issue", continuity_issue_ids: issueLinks.map((l) => l.id) } }]),
+              { label: "아웃라인부터 다시 쓰기", value: { kind: "replan_from_outline" }, isRecommended: true },
+              { label: "보류", value: { kind: "hold" } },
             ],
             links: issueLinks.length ? issueLinks : [epRef(ep.id)],
             proposedBlockingBasis: "rewrite_limit",
