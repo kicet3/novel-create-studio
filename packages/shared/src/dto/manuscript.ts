@@ -13,6 +13,8 @@
  *   POST …/episodes/:episodeNo/rhythm-polish/decision rhythmCandidateDecisionSchema → episodeDtoSchema (keep = E16 사람 수정 규칙)
  *   POST …/episodes/:episodeNo/publish                                        → episodeDtoSchema (E13)
  *   POST …/episodes/:episodeNo/unpublish       unpublishRequestSchema         → episodeDtoSchema (E14)
+ *   GET  …/episodes/:episodeNo/delete-preview                                 → episodeDeletePreviewDtoSchema (화 삭제 전 영향 요약)
+ *   POST …/episodes/:episodeNo/delete-manuscript deleteManuscriptRequestSchema → episodeDtoSchema (E17: 원고·파생 기록 삭제 → planned)
  *   POST …/episodes/:episodeNo/pause|resume                                   → episodeDtoSchema
  *   POST …/planning/schedule                                                  → scheduleResultDtoSchema
  *   GET  …/reserve                                                            → reserveSummaryDtoSchema
@@ -304,6 +306,38 @@ export const unpublishRequestSchema = z.object({
   confirmedNotPublishedExternally: z.literal(true),
 });
 export type UnpublishRequest = z.infer<typeof unpublishRequestSchema>;
+
+// ── 설계 추가(화 삭제): 생성한 원고와 파생 기록(온톨로지·이슈·비트·요약·수정 대화)을 지우고 계획됨으로 되돌리기 ──
+/** GET …/episodes/:episodeNo/delete-preview — what the delete would remove (read-only counts) */
+export const episodeDeletePreviewDtoSchema = z.object({
+  episodeNo: z.number().int(),
+  status: z.enum(ENUMS.episode_status),
+  published: z.boolean(),
+  versionCount: z.number().int(),
+  /** live facts extracted from this episode by canon status (published_locked ones are demoted first, then retracted) */
+  facts: z.object({ candidate: z.number().int(), approved: z.number().int(), publishedLocked: z.number().int() }),
+  mentionCount: z.number().int(),
+  /** candidate entities that would be retired (created from this episode's mentions, no other evidence; approximate) */
+  entityRetireCount: z.number().int(),
+  issueCount: z.number().int(),
+  setupBeatCount: z.number().int(),
+  recapCount: z.number().int(),
+  revisionSessionCount: z.number().int(),
+  activeTaskCount: z.number().int(),
+  pendingApprovalCount: z.number().int(),
+  pendingQuestionCount: z.number().int(),
+});
+export type EpisodeDeletePreviewDto = z.infer<typeof episodeDeletePreviewDtoSchema>;
+
+/** POST …/episodes/:episodeNo/delete-manuscript */
+export const deleteManuscriptRequestSchema = z.object({
+  reason: z.string().trim().min(1, "사유를 입력하세요.").max(500),
+  /** required (true) when the episode is published: the text was not published on an external platform */
+  confirmedNotPublishedExternally: z.boolean().optional(),
+  /** default true: the episode stays paused after the delete (nothing is written until the author resumes it); false = rewrite on schedule right away */
+  holdRewrite: z.boolean().optional(),
+});
+export type DeleteManuscriptRequest = z.infer<typeof deleteManuscriptRequestSchema>;
 
 // ── 전체 구성(1~4부 + 결말) → 플롯 → 화 ───────────────────────────────────
 export const structureGenerateRequestSchema = z.object({

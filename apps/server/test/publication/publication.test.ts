@@ -5,9 +5,11 @@
  */
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { PGlite } from "@electric-sql/pglite";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { eq } from "@ncs/db/orm";
 import { conceptBriefs, conceptSessions, episodes, novels } from "@ncs/db/schema";
+import { pgliteSqlClient } from "@ncs/public-schema";
 import {
   PUBLIC_EPISODE_KEYS,
   PUBLIC_HOME_KEYS,
@@ -18,8 +20,9 @@ import {
   PUBLIC_TOC_KEYS,
   isPublicSlug,
 } from "@ncs/reader-core/snapshot";
-import { PUBLIC_AUTHOR_NAME, PUBLIC_SITE_SLUG_RE, isPublicSiteSlug, publicSiteNovelDtoSchema, publicSiteStatusDtoSchema } from "@ncs/shared";
+import { PUBLIC_AUTHOR_NAME, PUBLIC_SITE_ORIGIN, PUBLIC_SITE_SLUG_RE, isPublicSiteSlug, publicSiteNovelDtoSchema, publicSiteStatusDtoSchema } from "@ncs/shared";
 import { createTestCore, type TestCore } from "../support/test-core.js";
+import { PUBLIC_SITE_ADMIN_TOKEN_SECRET, PUBLIC_SITE_REVALIDATE_PATH, type PublicDbConnector } from "../../src/modules/publication/index.js";
 import { buildSnapshot } from "../../src/modules/publication/domain/snapshot.js";
 import { SiteDirError, writeSite } from "../../src/modules/publication/adapters/fs/site-writer.js";
 
@@ -226,5 +229,137 @@ describe("site writer", () => {
     await writeSite(d2, snap.files);
     expect(readdirSync(d2).sort()).toEqual([".ncs-public-site", "novels.json"]);
     expect(readdirSync(d2).some((f) => f.startsWith(".tmp-"))).toBe(false);
+  });
+});
+
+/**
+ * After a Supabase sync that changed rows (publish / unpublish, or a forced [지금 동기화]) the studio asks snowpage to
+ * drop its content cache: POST PUBLIC_SITE_ORIGIN/api/admin/revalidate with the saved ADMIN_TOKEN as bearer. Best
+ * effort: a failing call never fails the sync; the token is never returned.
+ */
+describe("publication → snowpage cache revalidate", () => {
+  const TOKEN = "snowpage-admin-token-0123456789-abc";
+  const URL_OK = "postgresql://postgres.abcd:pw-secret-123@aws-0-ap-northeast-2.pooler.supabase.com:6543/postgres";
+  const REVALIDATE_URL = `${PUBLIC_SITE_ORIGIN}${PUBLIC_SITE_REVALIDATE_PATH}`;
+  let t: TestCore;
+  let pg: PGlite;
+  let novelId: string;
+  const calls: Array<{ url: string; method: string; authorization: string | null; body: unknown }> = [];
+  let reply: () => Response = () => Response.json({ ok: true, revalidatedAt: "2026-11-11T00:00:00.000Z" });
+  const realFetch = globalThis.fetch;
+  const untilCalls = async (n: number) => {
+    const deadline = Date.now() + 10_000;
+    while (calls.length < n && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    expect(calls.length).toBe(n);
+    // the debounced rebuild that made the call is still finishing its bookkeeping: wait for the sync chain
+    await t.modules.publication.service.rebuild();
+  };
+  const status = async () => {
+    const r = await t.http("GET", "/api/public-site");
+    expect(JSON.stringify(r.body)).not.toContain(TOKEN);
+    return publicSiteStatusDtoSchema.parse(r.body);
+  };
+
+  beforeAll(async () => {
+    pg = await PGlite.create();
+    const connector: PublicDbConnector = () => ({ client: pgliteSqlClient(pg), close: async () => undefined });
+    // only the snowpage origin is faked; the test core's own HTTP calls keep using the real fetch
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (!url.startsWith(PUBLIC_SITE_ORIGIN)) return realFetch(input, init);
+      const headers = new Headers(init?.headers);
+      calls.push({ url, method: init?.method ?? "GET", authorization: headers.get("authorization"), body: init?.body ? JSON.parse(String(init.body)) : null });
+      return reply();
+    });
+    t = await createTestCore({ publicDbConnector: connector });
+    novelId = (await t.modules.novel.service.createNovel({ title: "캐시 갱신 작품" }, t.owner)).id;
+    const scope = { novelId };
+    const ms = t.modules.manuscript.service;
+    const arc = await t.modules.novel.service.createArc(undefined, scope, { ord: 1, title: "막", goalText: "g", conflictText: "c", endCondition: "e", plannedEpisodeFrom: 1, plannedEpisodeTo: 3 }, t.owner);
+    const by = { approvedAt: new Date(), approvedByActorType: "user" as const, approvedByActorId: t.ownerId };
+    const pub = { publishedAt: new Date("2026-11-10T00:00:00Z"), publishedByActorType: "user" as const, publishedByActorId: t.ownerId };
+    await t.platform.uow.run(async (tx) => {
+      const [e1, e2, e3] = await ms.createPlannedEpisodes(tx, scope, arc.id, [1, 2, 3].map((n) => ({ episodeNo: n, title: `${n}화` })), t.owner);
+      const v1 = await ms.saveVersion(tx, scope, e1!.id, { kind: "final", content: "공개 1화.", author: t.owner });
+      await tx.db.update(episodes).set({ status: "published", ...by, ...pub, approvedVersionId: v1.id, publishedVersionId: v1.id, currentVersionId: v1.id }).where(eq(episodes.id, e1!.id));
+      // 2화 / 3화: approved → publishable over HTTP
+      for (const e of [e2!, e3!]) {
+        const v = await ms.saveVersion(tx, scope, e.id, { kind: "final", content: `공개 ${e.episodeNo}화.`, author: t.owner });
+        await tx.db.update(episodes).set({ status: "approved", ...by, approvedVersionId: v.id, currentVersionId: v.id }).where(eq(episodes.id, e.id));
+      }
+    });
+  });
+  afterAll(async () => {
+    vi.restoreAllMocks();
+    await t?.close();
+    await pg?.close();
+  });
+
+  it("without a token: nothing is called and the status says so", async () => {
+    expect((await status()).revalidate).toEqual({ configured: false, lastAt: null, lastOk: null, lastMessage: null });
+    const r = await t.http("PUT", "/api/public-site/config", { databaseUrl: URL_OK });
+    expect(r.status).toBe(200);
+    expect(publicSiteStatusDtoSchema.parse(r.body)).toMatchObject({ target: "supabase", lastError: null, episodeCount: 1, revalidate: { configured: false } });
+    expect(calls).toEqual([]);
+  });
+
+  it("saving the token (write-only) forces a sync and purges the reader cache once with the bearer header", async () => {
+    expect((await t.http("PUT", "/api/public-site/config", { adminToken: "short" })).status).toBe(400);
+    const r = await t.http("PUT", "/api/public-site/config", { adminToken: ` ${TOKEN} ` });
+    expect(r.status).toBe(200);
+    expect(JSON.stringify(r.body)).not.toContain(TOKEN);
+    expect(publicSiteStatusDtoSchema.parse(r.body)).toMatchObject({ lastError: null, revalidate: { configured: true, lastOk: true, lastAt: expect.any(String), lastMessage: expect.any(String) } });
+    expect(await t.modules.system.service.secrets.get(PUBLIC_SITE_ADMIN_TOKEN_SECRET)).toBe(TOKEN);
+    expect(calls).toEqual([{ url: REVALIDATE_URL, method: "POST", authorization: `Bearer ${TOKEN}`, body: { scope: "all" } }]);
+    // the audit row records only that the token changed
+    const page = await t.modules.audit.service.list(null, { actionPrefix: "publication.config_changed" });
+    expect(JSON.stringify(page.items)).not.toContain(TOKEN);
+    expect(JSON.stringify(page.items)).toContain('"adminTokenChanged":true');
+  });
+
+  it("an unchanged sync does not call it", async () => {
+    await t.modules.publication.service.rebuild();
+    await t.modules.publication.service.rebuild();
+    expect(calls).toHaveLength(1);
+  });
+
+  it("publishing an episode in the studio triggers the sync and one purge", async () => {
+    const pub = await t.http("POST", `/api/novels/${novelId}/episodes/2/publish`);
+    expect(pub.status).toBe(200);
+    await untilCalls(2);
+    expect(calls[1]).toEqual({ url: REVALIDATE_URL, method: "POST", authorization: `Bearer ${TOKEN}`, body: { scope: "all" } });
+    const s = await status();
+    expect(s).toMatchObject({ lastError: null, episodeCount: 2, revalidate: { configured: true, lastOk: true } });
+    expect((await pg.query<{ n: number }>("SELECT count(*)::int AS n FROM ncs_public.episodes")).rows[0]!.n).toBe(2);
+  });
+
+  it("a failing purge (HTTP 500) leaves the sync successful and only marks the revalidate status", async () => {
+    reply = () => Response.json({ error: { code: "internal", message: "잠시 문제가 생겼습니다." } }, { status: 500 });
+    const pub = await t.http("POST", `/api/novels/${novelId}/episodes/3/publish`);
+    expect(pub.status).toBe(200);
+    await untilCalls(3);
+    const s = await status();
+    expect(s.lastError).toBeNull();
+    expect(s.episodeCount).toBe(3);
+    expect(s.revalidate).toMatchObject({ configured: true, lastOk: false, lastMessage: expect.stringContaining("HTTP 500") });
+    expect(s.revalidate.lastMessage).not.toContain(TOKEN);
+  });
+
+  it("a network failure is sanitized too, and a forced sync always purges", async () => {
+    reply = () => {
+      throw Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("getaddrinfo ENOTFOUND novel.snowlink.team"), { code: "ENOTFOUND" }) });
+    };
+    const s = publicSiteStatusDtoSchema.parse((await t.http("POST", "/api/public-site/build")).body);
+    expect(calls).toHaveLength(4);
+    expect(s.lastError).toBeNull();
+    expect(s.revalidate).toMatchObject({ lastOk: false, lastMessage: "연결 실패(ENOTFOUND)." });
+  });
+
+  it("clearing the token stops the purges", async () => {
+    const r = await t.http("PUT", "/api/public-site/config", { adminToken: null });
+    expect(r.status).toBe(200);
+    expect(publicSiteStatusDtoSchema.parse(r.body).revalidate).toEqual({ configured: false, lastAt: null, lastOk: null, lastMessage: null });
+    expect(await t.modules.system.service.secrets.has(PUBLIC_SITE_ADMIN_TOKEN_SECRET)).toBe(false);
+    expect(calls).toHaveLength(4);
   });
 });

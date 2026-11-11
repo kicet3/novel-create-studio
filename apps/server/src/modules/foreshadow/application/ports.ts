@@ -25,6 +25,7 @@ export type ManuscriptPort = Pick<
   | "advanceCheckGate"
   | "requestArcPlanApproval"
   | "registerVersionAnnotator"
+  | "registerEpisodeDeleteParticipant"
 >;
 
 export type OntologyPort = Pick<OntologyService, "getSetupLinkedFacts" | "getDefaultTimeline">;

@@ -29,7 +29,7 @@ import { createFieldStreamer, createTurnStreamHub, type TurnStreamHub } from "..
 import type { ForeshadowService } from "../../foreshadow/index.js";
 import type { ApprovalDecisionContext, HitlService } from "../../hitl/index.js";
 import type { LlmStreamEvent } from "../../llm/index.js";
-import type { Episode, ManuscriptService } from "../../manuscript/index.js";
+import type { Episode, EpisodeDeleteParticipant, ManuscriptService } from "../../manuscript/index.js";
 import type { MessagingService } from "../../messaging/index.js";
 import type { NovelService } from "../../novel/index.js";
 import type { FactAtAnchor, OntologyService } from "../../ontology/index.js";
@@ -881,6 +881,27 @@ export function createRevisionApp(deps: RevisionDeps) {
     return getView(scope, episodeNo);
   }
 
+  // ── 설계 추가(화 삭제): the chat about a deleted manuscript goes with it (manuscript.registerEpisodeDeleteParticipant) ──
+  const deleteParticipant: EpisodeDeleteParticipant = {
+    name: "sessions",
+    async count(scope, ctx, tx) {
+      return (await repo.sessionByEpisode(tx?.db ?? uow.db, scope, ctx.episodeId)) ? 1 : 0;
+    },
+    async purge(tx, scope, ctx, actor, reason) {
+      const s = await repo.sessionByEpisode(tx.db, scope, ctx.episodeId, true);
+      if (s) {
+        const t = await liveTask(scope, s.inFlightTaskId, tx);
+        if (t) await orchestration.cancelTask(tx, scope, t.id, actor);
+        if (t) tx.afterCommit(() => streams.done(s.id, t.id, null));
+      }
+      const r = await repo.deleteEpisodeData(tx.db, scope, ctx.episodeId);
+      if (s) {
+        await audit.record(tx, { novelId: scope.novelId, actor, action: "revision_chat.closed", target: epRef(ctx.episodeId), reason, details: { sessionId: s.id, deleted: true, notes: r.notes, episodeNo: ctx.episodeNo } });
+      }
+      return { count: r.sessions };
+    },
+  };
+
   async function inFlightTurnTaskId(scope: NovelScope, sessionId: string): Promise<string | null> {
     const s = await repo.getSession(uow.db, scope, sessionId);
     return (await liveTask(scope, s?.inFlightTaskId ?? null))?.id ?? null;
@@ -909,6 +930,7 @@ export function createRevisionApp(deps: RevisionDeps) {
     notesSection,
     onSettingApproval,
     reconcile,
+    deleteParticipant,
     service: { getView, postMessage, decideProposal, close, rewrite, stopTurn, inFlightTurnTaskId, sessionOf: (scope: NovelScope, episodeId: string) => repo.sessionByEpisode(uow.db, scope, episodeId) },
   };
 }

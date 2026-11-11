@@ -16,8 +16,12 @@ const apply = (a: string, b: string) => {
 };
 
 describe("episode state machine (03 §4.1)", () => {
-  it("contains E1–E16 and rejects transitions not in the table", () => {
-    expect(new Set(EPISODE_TRANSITIONS.map((r) => r.id)).size).toBe(16);
+  it("contains E1–E17 and rejects transitions not in the table", () => {
+    expect(new Set(EPISODE_TRANSITIONS.map((r) => r.id)).size).toBe(17);
+    // 설계 추가(화 삭제): E17 back to planned from every written state but published (E14 first)
+    expect(findEpisodeRule("awaiting_approval", "planned").id).toBe("E17");
+    expect(findEpisodeRule("approved", "planned").action).toBe("episode.manuscript_deleted");
+    expect(() => findEpisodeRule("published", "planned")).toThrow();
     expect(findEpisodeRule("planned", "outlining").id).toBe("E1");
     expect(findEpisodeRule("checking", "drafting").id).toBe("E4");
     expect(findEpisodeRule("revising", "polishing").id).toBe("E12");

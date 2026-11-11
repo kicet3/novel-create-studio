@@ -318,6 +318,7 @@ const PREDICATE: Record<string, string> = {
   rejected: "{T을} 반려했습니다",
   published: "{T을} 공개했습니다",
   unpublished: "{T}의 공개를 취소했습니다",
+  manuscript_deleted: "{T}의 원고를 삭제하고 계획됨으로 되돌렸습니다",
   blocked: "{T을} 막았습니다",
   unblocked: "{T}의 차단을 풀었습니다",
   lease_acquired: "{T을} 맡았습니다",

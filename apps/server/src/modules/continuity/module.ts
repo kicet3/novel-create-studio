@@ -39,6 +39,15 @@ export function createContinuityModule(deps: ContinuityModuleDeps): ServerModule
   deps.linking?.registerFactReconciler(pending.reconciler);
   deps.manuscript.registerIssueSink?.(service.safetyIssueSink);
   deps.manuscript.registerVersionAnnotator?.("issues", issuesAnnotator(deps));
+  // 설계 추가(화 삭제): issues about a deleted manuscript go with it
+  deps.manuscript.registerEpisodeDeleteParticipant?.({
+    name: "issues",
+    count: (scope, ctx, tx) => service.countEpisodeIssues(scope, ctx, tx),
+    async purge(tx, scope, ctx, actor) {
+      const r = await service.purgeEpisodeIssues(tx, scope, ctx, actor);
+      return { count: r.deleted, questionIds: r.questionIds };
+    },
+  });
   deps.foreshadow.registerIssueSink(service.setupIssueSink);
 
   const handler = checkContinuityHandler(deps, service);

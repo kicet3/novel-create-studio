@@ -90,6 +90,13 @@ export interface ContinuityService {
   getIssue(scope: NovelScope, issueId: string): Promise<ContinuityIssue & { evidence: ContinuityIssueEvidence[] }>;
   /** open + fixing */
   countOpenBySeverity(scope: NovelScope, opts?: { episodeId?: string }): Promise<Record<IssueSeverity, number>>;
+  /**
+   * 설계 추가(화 삭제): issues about a deleted manuscript (the episode's own and those detected on its versions) are
+   * removed with their evidence — they describe text that no longer exists. Returns the open questions they were
+   * waiting on (rewrite_limit) so the caller can cancel them.
+   */
+  purgeEpisodeIssues(tx: Tx, scope: NovelScope, input: { episodeId: string; versionIds: string[] }, actor: ActorRef): Promise<{ deleted: number; questionIds: string[] }>;
+  countEpisodeIssues(scope: NovelScope, input: { episodeId: string; versionIds: string[] }, tx?: Tx): Promise<number>;
 }
 
 export type { ContinuityModuleDeps } from "./module.js";

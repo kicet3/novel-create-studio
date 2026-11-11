@@ -18,10 +18,12 @@ export interface PublicationModuleDeps {
   secrets: SecretProvider;
   /** test seam: connect to a stand-in for the user's Supabase database (default postgres.js) */
   publicDbConnector?: PublicDbConnector;
+  /** test seam: HTTP client for the snowpage cache purge (default globalThis.fetch, resolved per call) */
+  fetchImpl?: typeof fetch;
 }
 
-/** debounce of audit hints (several publish events in one approval burst → one rebuild) */
-const HINT_DEBOUNCE_MS = 1500;
+/** debounce of audit hints (several publish events in one approval burst → one rebuild); short so a publish shows up fast */
+const HINT_DEBOUNCE_MS = 500;
 
 export function createPublicationModule(deps: PublicationModuleDeps): ServerModule<PublicationService> {
   const service = createPublicationService(deps);

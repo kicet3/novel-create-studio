@@ -109,6 +109,13 @@ export interface ForeshadowService {
   applyArcPlanDecision(tx: Tx, scope: NovelScope, arcId: string, decision: "approved" | "rejected", actor: ActorRef, approvalId?: string | null): Promise<string[]>;
   /** continuity registers itself here (registry inversion) */
   registerIssueSink(sink: SetupIssueSink): void;
+  /**
+   * 설계 추가(화 삭제): beats detected / confirmed in a deleted manuscript go back to `planned` (evidence cleared, the
+   * setup plan stays so the rewrite is checked for them again); a setup paid off by such a beat steps back to the
+   * narrative status its remaining confirmed beats support. Returns the number of beats reset.
+   */
+  purgeEpisodeBeats(tx: Tx, scope: NovelScope, input: { episodeId: string; versionIds: string[] }, actor: ActorRef): Promise<number>;
+  countEpisodeBeats(scope: NovelScope, input: { episodeId: string; versionIds: string[] }, tx?: Tx): Promise<number>;
 }
 
 export type { ForeshadowModuleDeps } from "./module.js";

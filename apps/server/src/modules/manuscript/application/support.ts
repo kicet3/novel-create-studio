@@ -9,6 +9,7 @@ import type { ApprovalRequest, QuestionDraft } from "../../hitl/index.js";
 import type { CreateTaskInput } from "../../orchestration/index.js";
 import type {
   CheckGateContributor,
+  EpisodeDeleteParticipant,
   EpisodeTransitionContext,
   ManuscriptIssueSink,
   PlanningCastPort,
@@ -93,10 +94,12 @@ export interface Registries {
   beatSources: Array<(scope: NovelScope, episodeNo: number) => Promise<string[]>>;
   /** 설계 추가: cast completeness / roster (registered by cast) */
   castPort: PlanningCastPort | null;
+  /** 설계 추가(화 삭제): continuity / foreshadow / revision remove their records of a deleted manuscript */
+  deleteParticipants: EpisodeDeleteParticipant[];
 }
 
 export function createRegistries(): Registries {
-  return { contributors: [], transitionHooks: [], arcPlanHooks: [], issueSinks: [], annotators: { issues: [], beats: [] }, beatSources: [], castPort: null };
+  return { contributors: [], transitionHooks: [], arcPlanHooks: [], issueSinks: [], annotators: { issues: [], beats: [] }, beatSources: [], castPort: null, deleteParticipants: [] };
 }
 
 /** port used when cast never registered (unit tests): everything complete, nothing to write */

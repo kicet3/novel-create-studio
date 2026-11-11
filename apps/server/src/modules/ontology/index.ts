@@ -308,6 +308,36 @@ export interface IntegrityProblem {
   refs: string[];
 }
 
+/** 설계 추가(화 삭제): the episode whose generated manuscript is being deleted */
+export interface ManuscriptPurgeInput {
+  episodeId: string;
+  /** every manuscript version of the episode */
+  versionIds: string[];
+  /** every scene of those versions (the caller deletes them after the purge) */
+  sceneIds: string[];
+}
+export interface ManuscriptPurgePreview {
+  /** live facts the episode produced, by canon status */
+  facts: { candidate: number; approved: number; publishedLocked: number };
+  mentionCount: number;
+  /** candidate entities created from this text with no other evidence (retired by the purge) */
+  entityRetireCount: number;
+}
+export interface ManuscriptPurgeResult {
+  factsRejected: number;
+  factsRetracted: number;
+  /** facts of other episodes whose evidence list lost this episode's mentions */
+  otherFactsPruned: number;
+  /** facts of other episodes retired because this text was their only evidence */
+  otherFactsRetired: number;
+  mentions: number;
+  entitiesRetired: number;
+  namesDeleted: number;
+  frames: number;
+  /** open questions (mention links) that referred to the removed mentions — the caller cancels them */
+  questionIds: string[];
+}
+
 export interface OntologySchemaInfo {
   version: OntologySchemaVersion;
   /** compiled base + extension (06 §4.1) */
@@ -450,6 +480,17 @@ export interface OntologyService extends OntologyRepository {
   listNonEntitySurfaces(scope: NovelScope, tx?: Tx): Promise<string[]>;
   /** live entities with a (non-retired, non-hidden) name of exactly this normalized key — readable inside a commit */
   findExactNamedEntities(scope: NovelScope, surface: string, opts?: { entityType?: string }, tx?: Tx): Promise<Array<{ entityId: string; entityType: string; status: string; nameId: string }>>;
+
+  // ── 설계 추가(화 삭제) ──
+  /** read-only: what `purgeManuscriptVersions` would do */
+  previewManuscriptPurge(scope: NovelScope, input: Pick<ManuscriptPurgeInput, "episodeId" | "versionIds">, tx?: Tx): Promise<ManuscriptPurgePreview>;
+  /**
+   * the episode's facts → rejected / retracted (change_reason episode_deleted, history kept), other facts lose the
+   * evidence mentions of this text (retired when nothing else supports them), mentions / narrative frames / unused
+   * extracted names deleted, candidate entities with no evidence left → retired (EN5). Scene / version rows are the
+   * caller's (facts' scene anchors are cleared here). Active entities are never touched.
+   */
+  purgeManuscriptVersions(tx: Tx, scope: NovelScope, input: ManuscriptPurgeInput, actor: ActorRef, opts: { reason: string }): Promise<ManuscriptPurgeResult>;
 }
 
 export type { OntologyModuleDeps } from "./module.js";

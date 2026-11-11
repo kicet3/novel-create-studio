@@ -384,7 +384,38 @@ describe("admin", () => {
       expect((await b.call("GET", "admin/session")).body).toEqual({ enabled: false, authed: false });
       expect((await b.call("POST", "admin/session", { token })).status).toBe(404);
       expect((await b.call("GET", "admin/overview")).status).toBe(404);
+      expect((await b.call("POST", "admin/revalidate", { scope: "all" }, { authorization: `Bearer ${ADMIN}` })).status).toBe(404);
     }
+  });
+
+  it("POST /admin/revalidate: bearer ADMIN_TOKEN (no cookie / CSRF) purges the content cache", async () => {
+    const calls: unknown[] = [];
+    const m2m = createReaderApi({ env: envOf(), db: () => db, now: () => clock, revalidate: (scope) => void calls.push(scope) });
+    // the studio server: no cookies, no Origin, no CSRF token
+    const studio = new Browser(m2m, "198.51.100.9", null);
+    expect((await studio.call("POST", "admin/revalidate", { scope: "all" })).status).toBe(401);
+    expect((await studio.call("POST", "admin/revalidate", { scope: "all" }, { authorization: "Bearer wrong-token-wrong-token-wrong" })).status).toBe(401);
+    expect((await studio.call("POST", "admin/revalidate", { scope: "all" }, { authorization: `Basic ${ADMIN}` })).status).toBe(401);
+    expect(calls).toEqual([]);
+    const ok = await studio.call("POST", "admin/revalidate", { scope: "all" }, { authorization: `Bearer ${ADMIN}` });
+    expect(ok.status).toBe(200);
+    expect(ok.body).toEqual({ ok: true, revalidatedAt: new Date(clock).toISOString() });
+    expect(ok.setCookies).toEqual([]);
+    // empty body = all; a slug scope is accepted; junk is 400
+    expect((await studio.call("POST", "admin/revalidate", undefined, { authorization: `Bearer ${ADMIN}` })).status).toBe(200);
+    expect((await studio.call("POST", "admin/revalidate", { scope: { slug: "pub-novel" } }, { authorization: `Bearer ${ADMIN}` })).status).toBe(200);
+    expect((await studio.call("POST", "admin/revalidate", { scope: { slug: "../x" } }, { authorization: `Bearer ${ADMIN}` })).status).toBe(400);
+    expect(calls).toEqual(["all", "all", { slug: "pub-novel" }]);
+    // the admin cookie alone is not enough for this machine-to-machine route
+    const b = new Browser(m2m, "198.51.100.10");
+    await b.start();
+    await b.call("POST", "admin/session", { token: ADMIN });
+    expect((await b.call("POST", "admin/revalidate", { scope: "all" })).status).toBe(401);
+    // wrong tokens are throttled like admin login (per ip)
+    const guess = new Browser(m2m, "198.51.100.11", null);
+    let last = 0;
+    for (let i = 0; i < 12; i++) last = (await guess.call("POST", "admin/revalidate", {}, { authorization: "Bearer nope-nope-nope-nope-nope-nope" })).status;
+    expect(last).toBe(429);
   });
 });
 

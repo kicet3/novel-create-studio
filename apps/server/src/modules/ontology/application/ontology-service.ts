@@ -15,6 +15,7 @@ import * as F from "../adapters/db/fact-writes.js";
 import * as I from "../adapters/db/identity.js";
 import { checkIntegrity, proposeSchemaChange } from "../adapters/db/integrity.js";
 import * as N from "../adapters/db/non-entity.js";
+import * as P from "../adapters/db/episode-purge.js";
 
 export function createOntologyService(deps: OntologyModuleDeps): OntologyService {
   const d: OntoDeps = { platform: deps.platform, audit: deps.audit };
@@ -103,6 +104,9 @@ export function createOntologyService(deps: OntologyModuleDeps): OntologyService
     factVersionUsage: (scope, versionIds, tx) => F.factVersionUsage(db(tx), scope, versionIds),
     retireFacts: (tx, scope, changes, actor, opts) => F.retireFacts(d, tx, scope, changes, actor, opts),
     pruneFactMentions: (tx, scope, ids, versions) => F.pruneFactMentions(d, tx, scope, ids, versions),
+    // 설계 추가(화 삭제)
+    previewManuscriptPurge: (scope, input, tx) => P.previewManuscriptPurge(db(tx), scope, input),
+    purgeManuscriptVersions: (tx, scope, input, actor, opts) => P.purgeManuscriptVersions(d, tx, scope, input, actor, opts),
     setFactReconcileHold: (tx, scope, ids, pending, actor) => F.setFactReconcileHold(d, tx, scope, ids, pending, actor),
     markFactsKeptByDecision: (tx, scope, marks, approvalId, actor) => F.markFactsKeptByDecision(d, tx, scope, marks, approvalId, actor),
     async approveBibleFacts(tx, scope, bibleId, actor) {

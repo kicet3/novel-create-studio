@@ -40,6 +40,15 @@ export const EPISODE_TRANSITIONS: readonly EpisodeTransitionRule[] = [
     trigger: "사람 편집 저장(FR-MAN-07)",
     action: "episode.status_changed",
   },
+  // 설계 추가(화 삭제): the generated manuscript and every derived record are removed; the plan (title, summary) stays.
+  // A published episode is unpublished first (E14) in the same transaction, so `published` is not a source here.
+  {
+    id: "E17",
+    from: ["outlining", "drafting", "checking", "polishing", "awaiting_approval", "revising", "approved"],
+    to: "planned",
+    trigger: "화 삭제(원고 폐기)",
+    action: "episode.manuscript_deleted",
+  },
 ];
 
 export function findEpisodeRule(from: EpisodeStatus, to: EpisodeStatus, ruleId?: EpisodeRuleId): EpisodeTransitionRule {

@@ -16,7 +16,7 @@ export default defineConfig({
       { ...shared, test: { name: "shared", root: "packages/shared", include: ["test/**/*.test.ts"] } },
       { ...shared, test: { name: "db", root: "packages/db", include: ["test/**/*.test.ts"], testTimeout: 60_000, hookTimeout: 60_000 } },
       { ...shared, test: { name: "test-kit", root: "packages/test-kit", include: ["test/**/*.test.ts"], passWithNoTests: true } },
-      { ...shared, test: { name: "server", root: "apps/server", include: ["test/**/*.test.ts"], passWithNoTests: true, testTimeout: 60_000 } },
+      { ...shared, test: { name: "server", root: "apps/server", include: ["test/**/*.test.ts"], passWithNoTests: true, testTimeout: 60_000, hookTimeout: 60_000 } },
       { ...shared, test: { name: "cli", root: "apps/cli", include: ["test/**/*.test.ts"], passWithNoTests: true } },
       { ...shared, test: { name: "reader-core", root: "packages/reader-core", include: ["test/**/*.test.ts"] } },
       { ...shared, test: { name: "reader-ui", root: "packages/reader-ui", include: ["test/**/*.test.{ts,tsx}"] } },

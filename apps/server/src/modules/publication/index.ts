@@ -14,6 +14,8 @@
  * Syncs: after a settings change (awaited), on audit hints (episode published / unpublished, novel edits;
  * debounced) and a periodic reconcile that syncs only when the cheap fingerprint changed.
  * The writer connection string is the secret `public_site.database_url` (encrypted); it is never returned or logged.
+ * After a Supabase sync that changed rows (or a forced one) the studio asks snowpage to drop its content cache
+ * (POST PUBLIC_SITE_ORIGIN/api/admin/revalidate with the secret `public_site.admin_token` as bearer, 5 s, best effort).
  */
 import type {
   PublicSiteCheckDto,
@@ -49,4 +51,4 @@ export interface PublicationService {
 export type { PublicationModuleDeps } from "./module.js";
 export type { PublicDbConnector, PublicDbConnection } from "./adapters/pg/public-db.js";
 export { createPublicationModule } from "./module.js";
-export { PUBLIC_SITE_DB_SECRET } from "./application/publication-service.js";
+export { PUBLIC_SITE_ADMIN_TOKEN_SECRET, PUBLIC_SITE_DB_SECRET, PUBLIC_SITE_REVALIDATE_PATH } from "./application/publication-service.js";

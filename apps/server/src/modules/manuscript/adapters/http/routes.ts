@@ -1,6 +1,7 @@
 /** HTTP adapter of `manuscript` (CONVENTIONS §13 원고). */
 import { z } from "zod";
 import {
+  deleteManuscriptRequestSchema,
   episodeListQuerySchema,
   episodeNoParamsSchema,
   humanEditRequestSchema,
@@ -105,6 +106,19 @@ export function mountManuscriptRoutes({ novel }: ApiRouters, svc: ManuscriptServ
     const scope = scopeOf(res);
     const ep = await svc.getEpisodeByNo(scope, params.episodeNo);
     res.json(await svc.unpublishEpisode(scope, ep.id, body, actorOf(res)));
+  });
+  // 설계 추가(화 삭제): preview of what goes, then the delete itself (E17 → planned)
+  novel.get("/episodes/:episodeNo/delete-preview", validate({ params: episodeNoParamsSchema }), async (_req, res) => {
+    const { params } = valid<P>(res);
+    const scope = scopeOf(res);
+    const ep = await svc.getEpisodeByNo(scope, params.episodeNo);
+    res.json(await svc.previewDelete(scope, ep.id));
+  });
+  novel.post("/episodes/:episodeNo/delete-manuscript", validate({ params: episodeNoParamsSchema, body: deleteManuscriptRequestSchema }), async (_req, res) => {
+    const { params, body } = valid<P & { body: z.output<typeof deleteManuscriptRequestSchema> }>(res);
+    const scope = scopeOf(res);
+    const ep = await svc.getEpisodeByNo(scope, params.episodeNo);
+    res.json(await svc.deleteManuscript(scope, ep.id, body, actorOf(res)));
   });
   for (const action of ["pause", "resume"] as const) {
     novel.post(`/episodes/:episodeNo/${action}`, validate({ params: episodeNoParamsSchema }), async (_req, res) => {

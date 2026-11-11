@@ -1,5 +1,5 @@
 /** drizzle access to the tables owned by `foreshadow` (setups, setup_beats, setup_due_changes, setup_links). Every query filters by novel_id (03 T-3). */
-import { and, asc, eq, inArray, sql } from "@ncs/db/orm";
+import { and, asc, eq, inArray, or, sql } from "@ncs/db/orm";
 import { setupBeats, setupDueChanges, setupLinks, setups } from "@ncs/db/schema";
 import type { Db, NovelScope } from "../../../../platform/index.js";
 import type { Setup, SetupBeat, SetupDueChange } from "../../index.js";
@@ -60,6 +60,11 @@ export const foreshadowRepo = {
     if (opts.plannedEpisodeNo != null) conds.push(eq(setupBeats.plannedEpisodeNo, opts.plannedEpisodeNo));
     if (opts.episodeId) conds.push(eq(setupBeats.episodeId, opts.episodeId));
     return db.select().from(setupBeats).where(and(...conds)).orderBy(asc(setupBeats.plannedEpisodeNo), asc(setupBeats.createdAt), asc(setupBeats.id));
+  },
+  /** 설계 추가(화 삭제): beats whose evidence is the episode's text (detected / missing / confirmed on one of its versions) */
+  async listBeatsForDeletedText(db: Db, scope: NovelScope, episodeId: string, versionIds: string[]): Promise<SetupBeat[]> {
+    const where = versionIds.length ? or(eq(setupBeats.episodeId, episodeId), inArray(setupBeats.manuscriptVersionId, versionIds)) : eq(setupBeats.episodeId, episodeId);
+    return db.select().from(setupBeats).where(and(eq(setupBeats.novelId, scope.novelId), where)).orderBy(asc(setupBeats.plannedEpisodeNo), asc(setupBeats.createdAt), asc(setupBeats.id));
   },
   async updateBeat(db: Db, scope: NovelScope, id: string, patch: Partial<BeatInsert>): Promise<SetupBeat> {
     const [b] = await db

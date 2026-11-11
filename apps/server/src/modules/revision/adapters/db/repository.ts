@@ -100,6 +100,12 @@ export const revisionRepo = {
     const [row] = await db.insert(episodeAuthorNotes).values(values).returning();
     return row!;
   },
+  /** 설계 추가(화 삭제): the episode's chat (messages / proposals cascade) and author notes are removed with the text */
+  async deleteEpisodeData(db: Db, scope: NovelScope, episodeId: string): Promise<{ sessions: number; notes: number }> {
+    const notes = await db.delete(episodeAuthorNotes).where(and(eq(episodeAuthorNotes.novelId, scope.novelId), eq(episodeAuthorNotes.episodeId, episodeId))).returning({ id: episodeAuthorNotes.id });
+    const sessions = await db.delete(revisionChatSessions).where(and(eq(revisionChatSessions.novelId, scope.novelId), eq(revisionChatSessions.episodeId, episodeId))).returning({ id: revisionChatSessions.id });
+    return { sessions: sessions.length, notes: notes.length };
+  },
   async activeNotes(db: Db, scope: NovelScope, episodeIds?: string[]): Promise<EpisodeAuthorNotesRow[]> {
     if (episodeIds && !episodeIds.length) return [];
     return db

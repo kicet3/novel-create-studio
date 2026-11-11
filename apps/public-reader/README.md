@@ -12,7 +12,8 @@
 - 데이터 접근은 서버에서만(Server Components · Route Handlers, `postgres` 드라이버, Supabase **Transaction pooler**용: `prepare: false`, 작은 풀).
   DB 주소는 클라이언트로 가지 않습니다.
 - 페이지: `/`(작품 목록), `/novels/[slug]`(소개·평점 평균·좋아요·목차), `/novels/[slug]/[no]`(읽기), `/admin`(운영), `sitemap.xml`, `robots.txt`.
-  요청마다 렌더(nonce CSP), DB 읽기는 Next 데이터 캐시 60초. `next build`는 DB 없이 돌아갑니다.
+  요청마다 렌더(nonce CSP), DB 읽기는 Next 데이터 캐시(태그 `snowpage-content`). 스튜디오가 동기화 직후 `POST /api/admin/revalidate`
+  (`Authorization: Bearer ADMIN_TOKEN`)로 캐시를 바로 비우고, 그 토큰이 없으면 30초 뒤 저절로 갱신됩니다. `next build`는 DB 없이 돌아갑니다.
 - 읽기 화면: 모바일 우선, 글자 수 기준 페이지 넘김(기본)/스크롤, 탭 영역·스와이프·키보드, Galaxy Fold 펼친 화면 두 쪽 보기·Viewport Segments,
   끝 카드(좋아요·댓글·다음 화), 보기 설정, 이어 읽기 위치(localStorage).
 - PC(폭 1024px 이상, 접힌 화면 제외 — `src/lib/layout.ts`): 읽기 화면은 스튜디오 읽기 뷰어와 같은 공유 컴포넌트
@@ -31,7 +32,7 @@
    | `DATABASE_URL` (없으면 `POSTGRES_URL`) | 예 | — | 제한 역할 `ncs_public_reader`로 Supabase Transaction pooler(6543)에 접속하는 URL |
    | `DB_SCHEMA` | | `ncs_public` | 스튜디오가 동기화하는 공개 스키마 |
    | `PUBLIC_ORIGIN` | | `https://novel.snowlink.team` | canonical·og:url, 쓰기 요청 Origin 검사 |
-   | `ADMIN_TOKEN` | | (없음 = `/admin` 꺼짐) | 24자 이상 |
+   | `ADMIN_TOKEN` | | (없음 = `/admin`·`/api/admin/revalidate` 꺼짐) | 24자 이상. 스튜디오 설치 설정 → 공개 사이트의 "snowpage 운영 토큰"에 같은 값을 넣으면 공개 직후 캐시를 바로 비웁니다 |
    | `IP_HASH_SECRET` | 쓰기에 필요 | (없음 = 좋아요·평점·댓글 꺼짐) | 32자 이상, IP는 HMAC-SHA256 해시로만 저장 |
    | `COOKIE_SECURE` | | `true` | `false`는 http://localhost 개발용 |
    | `BANNED_WORDS` | | — | 쉼표 목록, 포함된 댓글은 숨김(작성자에게만 "검토 후 보입니다") |
@@ -55,7 +56,9 @@
 
 작품 설정 → 공개 사이트에서 작품마다 노출을 켜고 공개 주소(slug)를 정하면, 그 작품의 `published` 화(`published_version_id` 원고)만
 Supabase로 upsert합니다. 공개 취소·노출 끄기는 행을 지웁니다(댓글은 남지만 사이트에서는 보이지 않음). 화 공개·설정 변경 직후 + 60초 대조로
-자동 동기화하며, 바뀐 것만 내용 해시로 골라 작품당 한 트랜잭션으로 씁니다. 연결 확인·마지막 동기화·오류(비밀 제거)는 설정 화면에 보입니다.
+자동 동기화하며, 바뀐 것만 내용 해시로 골라 작품당 한 트랜잭션으로 씁니다. 바뀐 것이 있으면(또는 [지금 동기화]) 이어서
+`POST https://novel.snowlink.team/api/admin/revalidate`를 불러 독자 페이지 캐시를 비웁니다(스튜디오에 저장한 `ADMIN_TOKEN`, 5초 제한, 실패해도 동기화는
+성공으로 남고 "마지막 캐시 갱신"에만 표시). 연결 확인·마지막 동기화·오류(비밀 제거)는 설정 화면에 보입니다.
 
 ## 로컬 개발
 

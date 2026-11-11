@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   arcDtoSchema,
   continuityIssueDtoSchema,
+  episodeDeletePreviewDtoSchema,
   episodeDetailDtoSchema,
   episodeDtoSchema,
   episodeRejectionDtoSchema,
@@ -15,6 +16,8 @@ import {
   type ArcDto,
   type ContinuityIssueDto,
   type CreateExportRequest,
+  type DeleteManuscriptRequest,
+  type EpisodeDeletePreviewDto,
   type EpisodeDto,
   type ExportJobDto,
   type HumanEditRequest,
@@ -142,6 +145,29 @@ export function useUnpublish(novelId: string, episodeNo: number) {
   );
 }
 
+/** counts shown in the [화 삭제] dialog; fetched only while the dialog is open */
+export function useEpisodeDeletePreview(novelId: string, episodeNo: number, enabled: boolean) {
+  return useQuery({
+    queryKey: [...mk(novelId).episode(episodeNo), "delete-preview"],
+    queryFn: ({ signal }) =>
+      api.get(`/novels/${novelId}/episodes/${episodeNo}/delete-preview`, { schema: episodeDeletePreviewDtoSchema, signal }),
+    enabled,
+    staleTime: 0,
+    retry: false,
+  });
+}
+
+/** [화 삭제]: drops every manuscript version of the episode and returns it to `planned` (the server cleans up facts, mentions, issues, beats, recaps …). */
+export function useDeleteManuscript(novelId: string, episodeNo: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: DeleteManuscriptRequest) =>
+      api.post(`/novels/${novelId}/episodes/${episodeNo}/delete-manuscript`, body, { schema: episodeDtoSchema }),
+    // the delete touches almost every module of the novel (facts, entities, setups, recaps, tasks) → invalidate the whole novel
+    onSuccess: () => void qc.invalidateQueries({ queryKey: mk(novelId).all }),
+  });
+}
+
 export function usePauseEpisode(novelId: string, episodeNo: number) {
   return useEpisodeMutation(novelId, (pause: boolean) =>
     api.post(`/novels/${novelId}/episodes/${episodeNo}/${pause ? "pause" : "resume"}`, {}, { schema: episodeDtoSchema }),
@@ -184,4 +210,4 @@ export function exportDownloadUrl(novelId: string, exportId: string): string {
   return apiUrl(`/novels/${novelId}/exports/${exportId}/download`);
 }
 
-export type { ArcDto, EpisodeDto, ExportJobDto, ManuscriptVersionSummaryDto };
+export type { ArcDto, EpisodeDeletePreviewDto, EpisodeDto, ExportJobDto, ManuscriptVersionSummaryDto };

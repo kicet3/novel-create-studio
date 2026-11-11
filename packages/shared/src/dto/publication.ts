@@ -15,6 +15,9 @@
  * novel is on the public site exactly while it has at least one published episode; its address is the lowercased
  * novel id and its author name is PUBLIC_AUTHOR_NAME. The writer connection string
  * is a studio secret (`public_site.database_url`, encrypted): it is never returned — only `configured`.
+ * The snowpage ADMIN_TOKEN (`public_site.admin_token`, encrypted, write-only too) lets the studio purge the reader's
+ * content cache (POST PUBLIC_SITE_ORIGIN/api/admin/revalidate) right after a sync that changed something; without it
+ * the reader refreshes on its own after at most 30 s.
  */
 import { z } from "zod";
 import { isoDateTime } from "./common.js";
@@ -78,6 +81,17 @@ export const publicSiteSyncRunSchema = z.object({
 });
 export type PublicSiteSyncRun = z.infer<typeof publicSiteSyncRunSchema>;
 
+/** last on-demand cache purge of the public reader (best effort: never fails the sync) */
+export const publicSiteRevalidateStatusSchema = z.object({
+  /** a snowpage ADMIN_TOKEN is saved (the value itself is never returned) */
+  configured: z.boolean(),
+  lastAt: isoDateTime.nullable(),
+  lastOk: z.boolean().nullable(),
+  /** sanitized: status code + short text, never the token */
+  lastMessage: z.string().nullable(),
+});
+export type PublicSiteRevalidateStatus = z.infer<typeof publicSiteRevalidateStatusSchema>;
+
 export const publicSiteStatusDtoSchema = z.object({
   /** where publishing goes now */
   target: z.enum(PUBLIC_SITE_TARGETS),
@@ -101,6 +115,7 @@ export const publicSiteStatusDtoSchema = z.object({
     schemaVersion: z.number().int().nullable(),
     latestSchemaVersion: z.number().int(),
   }),
+  revalidate: publicSiteRevalidateStatusSchema,
 });
 export type PublicSiteStatusDto = z.infer<typeof publicSiteStatusDtoSchema>;
 
@@ -117,6 +132,8 @@ export const updatePublicSiteConfigRequestSchema = z
       .nullable()
       .optional(),
     schema: z.string().trim().regex(PUBLIC_SITE_SCHEMA_RE, "스키마 이름은 영문 소문자·숫자·밑줄(_)로, 63자 이내입니다.").optional(),
+    /** snowpage ADMIN_TOKEN (same value as the reader's Vercel env); null clears it. Write-only. */
+    adminToken: z.string().trim().min(24, "운영 토큰은 24자 이상이어야 합니다.").max(512).regex(/^\S+$/, "운영 토큰에는 공백을 넣을 수 없습니다.").nullable().optional(),
   })
   .strict();
 export type UpdatePublicSiteConfigRequest = z.input<typeof updatePublicSiteConfigRequestSchema>;

@@ -36,6 +36,12 @@ export function createForeshadowModule(deps: ForeshadowModuleDeps): ServerModule
     await service.applyArcPlanDecision(tx, scope, arcId, decision, actor, approvalId);
   });
   deps.manuscript.registerVersionAnnotator?.("beats", beatsAnnotator(deps));
+  // 설계 추가(화 삭제): beats detected in a deleted manuscript go back to planned
+  deps.manuscript.registerEpisodeDeleteParticipant?.({
+    name: "beats",
+    count: (scope, ctx, tx) => service.countEpisodeBeats(scope, ctx, tx),
+    purge: async (tx, scope, ctx, actor) => ({ count: await service.purgeEpisodeBeats(tx, scope, ctx, actor) }),
+  });
   deps.agents.registerContextSection(assignedBeatsSection(deps, service));
   deps.hitl.registerAnswerApplier("setup_due", setupDueApplier(deps, service));
   deps.hitl.registerApprovalHandler("setup_abandon", setupAbandonHandler(service));

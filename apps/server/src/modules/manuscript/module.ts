@@ -22,6 +22,7 @@ import { createPorts, createRegistries } from "./application/support.js";
 import { createWriting } from "./application/writing.js";
 import { createEpisodeUnits } from "./application/episode-units.js";
 import { createRhythmPolish } from "./application/rhythm-polish.js";
+import { createEpisodeDelete } from "./application/episode-delete.js";
 
 export interface ManuscriptModuleDeps {
   platform: Platform;
@@ -70,6 +71,10 @@ export function createManuscriptModule(deps: ManuscriptModuleDeps): ServerModule
   const rhythm = createRhythmPolish(ports, getService);
   service.requestRhythmPolish = rhythm.requestRhythmPolish;
   service.decideRhythmCandidate = rhythm.decideRhythmCandidate;
+  // 설계 추가(화 삭제): generated manuscript + derived records removed, episode back to planned (E17)
+  const episodeDelete = createEpisodeDelete(internals);
+  service.previewDelete = episodeDelete.previewDelete;
+  service.deleteManuscript = episodeDelete.deleteManuscript;
 
   // registrations (CONVENTIONS §6): context sections, task kinds, approval handlers, N3 hook
   const sections = [...createContextSections(ports), ...handoff.sections, structure.section, pending.section];

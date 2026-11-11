@@ -77,6 +77,8 @@ export const ACTIVITY_ACTIONS = [
   "publication.settings_changed", "publication.config_changed",
   // 설계 추가 0023: 에피소드 묶음 제목 (1)(2) — 플롯 계획·[제목 정리] 적용
   "episode.retitled",
+  // 설계 추가(화 삭제): generated manuscript + derived records removed, episode back to planned (E17)
+  "episode.manuscript_deleted",
 ] as const;
 
 export type ActivityAction = (typeof ACTIVITY_ACTIONS)[number];

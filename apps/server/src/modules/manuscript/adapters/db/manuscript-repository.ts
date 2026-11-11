@@ -1,6 +1,6 @@
 /** drizzle access to the tables owned by `manuscript` (08 §2.3). Every query filters by novel_id (03 T-3). */
 import { and, asc, desc, eq, inArray, max, sql } from "@ncs/db/orm";
-import { episodeRejections, episodes, manuscriptVersions, scenes } from "@ncs/db/schema";
+import { costEvents, episodeRecaps, episodeRejections, episodes, manuscriptVersions, sceneParticipants, scenes } from "@ncs/db/schema";
 import type { EpisodeStatus } from "@ncs/shared";
 import type { Db, NovelScope } from "../../../../platform/index.js";
 import type { Episode, EpisodeFilter, EpisodeRejection, ManuscriptVersion, Scene } from "../../index.js";
@@ -139,5 +139,32 @@ export const manuscriptRepo = {
   async insertScenes(db: Db, rows: SceneInsert[]): Promise<Scene[]> {
     if (!rows.length) return [];
     return db.insert(scenes).values(rows).returning();
+  },
+
+  // ── 설계 추가(화 삭제): hard deletes of the episode's generated rows (FK order: participants → scenes → versions) ──
+  async countRecaps(db: Db, scope: NovelScope, episodeId: string): Promise<number> {
+    const [r] = await db.select({ n: sql<number>`count(*)::int` }).from(episodeRecaps).where(and(eq(episodeRecaps.novelId, scope.novelId), eq(episodeRecaps.episodeId, episodeId)));
+    return Number(r?.n ?? 0);
+  },
+  async deleteRecaps(db: Db, scope: NovelScope, episodeId: string): Promise<number> {
+    const rows = await db.delete(episodeRecaps).where(and(eq(episodeRecaps.novelId, scope.novelId), eq(episodeRecaps.episodeId, episodeId))).returning({ id: episodeRecaps.id });
+    return rows.length;
+  },
+  async deleteRejections(db: Db, scope: NovelScope, episodeId: string): Promise<number> {
+    const rows = await db.delete(episodeRejections).where(and(eq(episodeRejections.novelId, scope.novelId), eq(episodeRejections.episodeId, episodeId))).returning({ id: episodeRejections.id });
+    return rows.length;
+  },
+  async deleteScenes(db: Db, scope: NovelScope, sceneIds: string[]): Promise<number> {
+    if (!sceneIds.length) return 0;
+    await db.delete(sceneParticipants).where(and(eq(sceneParticipants.novelId, scope.novelId), inArray(sceneParticipants.sceneId, sceneIds)));
+    // cost_events rows stay (budget history); only their scene anchor is cleared so the scene rows can go
+    await db.update(costEvents).set({ sceneId: null }).where(and(eq(costEvents.novelId, scope.novelId), inArray(costEvents.sceneId, sceneIds)));
+    const rows = await db.delete(scenes).where(and(eq(scenes.novelId, scope.novelId), inArray(scenes.id, sceneIds))).returning({ id: scenes.id });
+    return rows.length;
+  },
+  /** every version of the episode (the episode's version pointers must already be NULL) */
+  async deleteVersions(db: Db, scope: NovelScope, episodeId: string): Promise<number> {
+    const rows = await db.delete(manuscriptVersions).where(and(eq(manuscriptVersions.novelId, scope.novelId), eq(manuscriptVersions.episodeId, episodeId))).returning({ id: manuscriptVersions.id });
+    return rows.length;
   },
 };

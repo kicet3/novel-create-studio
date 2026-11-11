@@ -17,7 +17,9 @@ import type {
   CastCompleteness,
   CharacterRole,
   CountBasis,
+  DeleteManuscriptRequest,
   EpisodeBlockReason,
+  EpisodeDeletePreviewDto,
   EpisodeStatus,
   EpisodeUnitDto,
   IssueFixScope,
@@ -37,8 +39,8 @@ export type ManuscriptVersion = ManuscriptVersionsRow;
 export type Scene = ScenesRow;
 export type EpisodeRejection = EpisodeRejectionsRow;
 
-/** E1–E16 identifiers (03 §4.1) */
-export type EpisodeRuleId = `E${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16}`;
+/** E1–E16 identifiers (03 §4.1) + E17 (설계 추가: 화 삭제 → planned) */
+export type EpisodeRuleId = `E${1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17}`;
 
 export interface AttributionSpan {
   start: number;
@@ -138,6 +140,26 @@ export type ManuscriptIssueSink = (tx: Tx, scope: NovelScope, issue: SafetyIssue
 
 /** extra data for `GET …/versions/:id?with=issues,beats` supplied by continuity / foreshadow */
 export type VersionAnnotator = (scope: NovelScope, version: ManuscriptVersion) => Promise<unknown[]>;
+
+// ── 설계 추가(화 삭제): modules built after manuscript remove / count their records of a deleted manuscript ──
+export interface EpisodeDeleteContext {
+  episodeId: string;
+  episodeNo: number;
+  /** every manuscript version of the episode (all of them are deleted) */
+  versionIds: string[];
+  /** every scene of those versions (active + retired) */
+  sceneIds: string[];
+}
+/**
+ * A record owner (continuity issues, foreshadow beats, revision chat) registered with `registerEpisodeDeleteParticipant`.
+ * `count` feeds the delete preview; `purge` runs inside the delete transaction before the versions are deleted and
+ * returns how many records it removed plus open questions the caller should cancel (hitl is cancelled by manuscript).
+ */
+export interface EpisodeDeleteParticipant {
+  name: "issues" | "beats" | "sessions";
+  count(scope: NovelScope, ctx: EpisodeDeleteContext, tx?: Tx): Promise<number>;
+  purge(tx: Tx, scope: NovelScope, ctx: EpisodeDeleteContext, actor: ActorRef, reason: string): Promise<{ count: number; questionIds?: string[] }>;
+}
 
 export type GateOutcome =
   | { kind: "wait"; reason: string }
@@ -246,6 +268,17 @@ export interface ManuscriptService {
   setScheduledPublish(scope: NovelScope, episodeId: string, at: Date | null, actor: ActorRef): Promise<Episode>;
   /** E14 — requires "외부 미공개" confirmation + reason */
   unpublishEpisode(scope: NovelScope, episodeId: string, input: { reason: string; confirmedNotPublishedExternally: true }, actor: ActorRef): Promise<Episode>;
+  /** 설계 추가(화 삭제): read-only summary of what `deleteManuscript` would remove */
+  previewDelete(scope: NovelScope, episodeId: string): Promise<EpisodeDeletePreviewDto>;
+  /**
+   * 설계 추가(화 삭제, E17): user only. One transaction: published → E14 first (needs confirmedNotPublishedExternally),
+   * work in flight cancelled (tasks / approvals / questions), the episode's facts rejected / retracted, mentions,
+   * names, frames, scenes, issues, beats, recaps, revision chat and every manuscript version removed; the episode row
+   * goes back to `planned` with its plan fields kept. `holdRewrite` pauses the episode. 422 nothing_to_delete /
+   * external_confirmation_required / user_required / reason_required.
+   */
+  deleteManuscript(scope: NovelScope, episodeId: string, input: DeleteManuscriptRequest, actor: ActorRef): Promise<Episode>;
+  registerEpisodeDeleteParticipant(p: EpisodeDeleteParticipant): void;
 
   // extension points
   registerCheckGateContributor(c: CheckGateContributor): void;

@@ -15,11 +15,13 @@ import { publicSiteConfig, publicSiteNovels, type PublicSiteNovelsRow } from "@n
 import { applyPublicSchema, buildReaderRoleSql, isSafeSchemaName, PUBLIC_READER_ROLE_DEFAULT, PUBLIC_SCHEMA_DEFAULT, PUBLIC_SCHEMA_LATEST_VERSION, publicSchemaVersion } from "@ncs/public-schema";
 import {
   PUBLIC_AUTHOR_NAME,
+  PUBLIC_SITE_ORIGIN,
   publicNovelUrl,
   publicSlugOf,
   resolvePublicSiteDataDir,
   type PublicSiteCheckDto,
   type PublicSiteNovelDto,
+  type PublicSiteRevalidateStatus,
   type PublicSiteRoleSqlDto,
   type PublicSiteStatusDto,
   type PublicSiteSyncRun,
@@ -41,6 +43,11 @@ import { syncPublicDb } from "../adapters/pg/public-db-sync.js";
 export const RECONCILE_INTERVAL_MS = 60_000;
 /** studio secret holding the Supabase writer connection string (encrypted, never returned) */
 export const PUBLIC_SITE_DB_SECRET = "public_site.database_url";
+/** studio secret holding the snowpage ADMIN_TOKEN (encrypted, never returned): purges the reader's cache after a sync */
+export const PUBLIC_SITE_ADMIN_TOKEN_SECRET = "public_site.admin_token";
+/** POST <origin>/api/admin/revalidate — snowpage Route Handler (apps/public-reader/src/server/api.ts) */
+export const PUBLIC_SITE_REVALIDATE_PATH = "/api/admin/revalidate";
+export const REVALIDATE_TIMEOUT_MS = 5_000;
 
 /** audit actions after which the public content may have changed */
 export function isRebuildHint(action: string): boolean {
@@ -70,6 +77,21 @@ interface ConfigState {
   schema: string;
   configured: boolean;
   host: string | null;
+  /** a snowpage ADMIN_TOKEN is saved */
+  adminTokenConfigured: boolean;
+}
+
+const NO_REVALIDATE: PublicSiteRevalidateStatus = { configured: false, lastAt: null, lastOk: null, lastMessage: null };
+
+/** a sync run that changed rows on the public site (the reader's cache is stale after it) */
+const changedRows = (r: PublicSiteSyncRun | null) => !!r && r.upsertedNovels + r.upsertedEpisodes + r.deletedNovels + r.deletedEpisodes > 0;
+
+/** user-facing, short, never the token / headers / body of the request */
+function revalidateFailureMessage(err: unknown): string {
+  if (err instanceof Error && err.name === "AbortError") return `응답이 없습니다(${REVALIDATE_TIMEOUT_MS / 1000}초 초과).`;
+  const cause = (err as { cause?: { code?: unknown } })?.cause;
+  const code = typeof cause?.code === "string" ? cause.code : typeof (err as { code?: unknown })?.code === "string" ? (err as { code: string }).code : null;
+  return code ? `연결 실패(${code}).` : "연결 실패.";
 }
 
 const UNDECRYPTABLE_MSG = "저장된 연결 문자열을 복호화할 수 없습니다(마스터 키가 없거나 다릅니다). 다시 입력하세요.";
@@ -86,12 +108,15 @@ export function createPublicationService(deps: PublicationModuleDeps): Publicati
   let lastFingerprint: string | null = null;
   let lastRun: PublicSiteSyncRun | null = null;
   let schemaVersion: number | null = null;
+  let revalidateState: Omit<PublicSiteRevalidateStatus, "configured"> = { lastAt: null, lastOk: null, lastMessage: null };
   let counts = { novelCount: 0, episodeCount: 0 };
   let chain: Promise<unknown> = Promise.resolve();
   /** one writer pool, re-created when the URL changes; the schema is migrated once per pool + schema */
   let conn: { key: string; c: PublicDbConnection; migrated: Set<string> } | null = null;
 
   const targetOf = (c: ConfigState): PublicSiteTarget => c.explicitTarget ?? (c.configured ? "supabase" : "files");
+  // resolved per call so a test can stub globalThis.fetch after the module was built
+  const fetchImpl: typeof fetch = (input, init) => (deps.fetchImpl ?? globalThis.fetch)(input, init);
 
   async function loadConfig(): Promise<ConfigState> {
     const row = (await db.select().from(publicSiteConfig).where(eq(publicSiteConfig.id, "install")))[0];
@@ -110,6 +135,7 @@ export function createPublicationService(deps: PublicationModuleDeps): Publicati
       schema: row?.schemaName && isSafeSchemaName(row.schemaName) ? row.schemaName : PUBLIC_SCHEMA_DEFAULT,
       configured,
       host,
+      adminTokenConfigured: await secrets.has(PUBLIC_SITE_ADMIN_TOKEN_SECRET),
     };
     return config;
   }
@@ -223,6 +249,53 @@ export function createPublicationService(deps: PublicationModuleDeps): Publicati
     return novels;
   }
 
+  /**
+   * Best effort: tell snowpage its content cache is stale (POST /api/admin/revalidate, bearer ADMIN_TOKEN, 5 s). A
+   * failure never fails the sync — the reader falls back to its 30 s time-based revalidate; only the sanitized outcome
+   * (status code + short text) is kept and logged. The token goes in a header only, never in the URL or the logs.
+   */
+  async function revalidatePublicSite(): Promise<void> {
+    const at = platform.clock.date();
+    let token: string | null;
+    try {
+      token = await secrets.get(PUBLIC_SITE_ADMIN_TOKEN_SECRET);
+    } catch {
+      revalidateState = { lastAt: at.toISOString(), lastOk: false, lastMessage: "저장된 운영 토큰을 복호화할 수 없습니다. 다시 입력하세요." };
+      log.warn({ error: revalidateState.lastMessage }, "public site cache revalidate skipped");
+      return;
+    }
+    if (!token) return;
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), REVALIDATE_TIMEOUT_MS);
+    timer.unref?.();
+    try {
+      const res = await fetchImpl(`${PUBLIC_SITE_ORIGIN}${PUBLIC_SITE_REVALIDATE_PATH}`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json", accept: "application/json" },
+        body: JSON.stringify({ scope: "all" }),
+        signal: ac.signal,
+        redirect: "manual",
+      });
+      const text = await res.text().catch(() => "");
+      let detail = "";
+      try {
+        const j = JSON.parse(text) as { error?: { message?: unknown } };
+        if (typeof j?.error?.message === "string") detail = j.error.message;
+      } catch {
+        /* non-JSON body (e.g. an HTML error page): status only */
+      }
+      const ok = res.ok;
+      const message = ok ? "독자 페이지 캐시를 비웠습니다." : `HTTP ${res.status}${detail ? ` · ${detail.slice(0, 120)}` : ""}`;
+      revalidateState = { lastAt: at.toISOString(), lastOk: ok, lastMessage: message };
+      if (!ok) log.warn({ status: res.status }, "public site cache revalidate rejected");
+    } catch (err) {
+      revalidateState = { lastAt: at.toISOString(), lastOk: false, lastMessage: revalidateFailureMessage(err) };
+      log.warn({ error: revalidateState.lastMessage }, "public site cache revalidate failed");
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async function doRebuild(force: boolean): Promise<PublicSiteStatusDto> {
     const cfg = await ensureConfig();
     const target = targetOf(cfg);
@@ -257,6 +330,8 @@ export function createPublicationService(deps: PublicationModuleDeps): Publicati
       lastFingerprint = fp;
       lastBuiltAt = now;
       lastError = null;
+      // the reader caches its reads: purge right away when rows changed (or the user forced a sync)
+      if (target === "supabase" && cfg.adminTokenConfigured && (force || changedRows(lastRun))) await revalidatePublicSite();
     } catch (err) {
       lastError = err instanceof DomainValidationError ? err.message : target === "supabase" ? sanitizePublicDbError(err, url) : err instanceof Error ? err.message : String(err);
       // the raw error may carry the connection string (driver messages): log the sanitized text only
@@ -267,7 +342,7 @@ export function createPublicationService(deps: PublicationModuleDeps): Publicati
   }
 
   function status(): PublicSiteStatusDto {
-    const cfg = config ?? { explicitTarget: null, schema: PUBLIC_SCHEMA_DEFAULT, configured: false, host: null };
+    const cfg: ConfigState = config ?? { explicitTarget: null, schema: PUBLIC_SCHEMA_DEFAULT, configured: false, host: null, adminTokenConfigured: false };
     return {
       target: targetOf(cfg),
       targetSource: cfg.explicitTarget ? "explicit" : "default",
@@ -277,6 +352,7 @@ export function createPublicationService(deps: PublicationModuleDeps): Publicati
       ...counts,
       lastRun,
       supabase: { configured: cfg.configured, schema: cfg.schema, host: cfg.host, schemaVersion, latestSchemaVersion: PUBLIC_SCHEMA_LATEST_VERSION },
+      revalidate: cfg.adminTokenConfigured ? { configured: true, ...revalidateState } : NO_REVALIDATE,
     };
   }
 
@@ -313,6 +389,11 @@ export function createPublicationService(deps: PublicationModuleDeps): Publicati
           else await secrets.set(PUBLIC_SITE_DB_SECRET, patch.databaseUrl, "공개 사이트 DB(Supabase) 쓰기 연결");
           await closeConn();
         }
+        if (patch.adminToken !== undefined) {
+          if (patch.adminToken === null) await secrets.delete(PUBLIC_SITE_ADMIN_TOKEN_SECRET);
+          else await secrets.set(PUBLIC_SITE_ADMIN_TOKEN_SECRET, patch.adminToken, "공개 사이트(snowpage) 운영 토큰");
+          revalidateState = { lastAt: null, lastOk: null, lastMessage: null };
+        }
         await platform.uow.run(async (tx) => {
           await tx.db
             .insert(publicSiteConfig)
@@ -323,9 +404,9 @@ export function createPublicationService(deps: PublicationModuleDeps): Publicati
             actor,
             action: "publication.config_changed",
             target: { type: "settings", id: "public_site" },
-            before: { target: before.explicitTarget, schema: before.schema, databaseUrlConfigured: before.configured },
-            // never the connection string: only whether it changed
-            after: { target: values.target, schema: values.schemaName, databaseUrlChanged: patch.databaseUrl !== undefined },
+            before: { target: before.explicitTarget, schema: before.schema, databaseUrlConfigured: before.configured, adminTokenConfigured: before.adminTokenConfigured },
+            // never the connection string or the token: only whether they changed
+            after: { target: values.target, schema: values.schemaName, databaseUrlChanged: patch.databaseUrl !== undefined, adminTokenChanged: patch.adminToken !== undefined },
           });
         });
         if (values.schemaName !== before.schema) schemaVersion = null;

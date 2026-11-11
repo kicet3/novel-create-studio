@@ -41,7 +41,7 @@ import {
 import { DiffView, versionLabel } from "./DiffView.js";
 import { EditPanel } from "./EditPanel.js";
 import { EpisodeActionBar } from "./EpisodeActionBar.js";
-import { PublishDialog, RevisionDialog, UnpublishDialog } from "./EpisodeDialogs.js";
+import { DeleteManuscriptDialog, PublishDialog, RevisionDialog, UnpublishDialog } from "./EpisodeDialogs.js";
 import { ExportDialog } from "./ExportDialog.js";
 import { RevisionChat } from "../revision/RevisionChatPanel.js";
 import { RhythmCard } from "./RhythmCard.js";
@@ -50,7 +50,7 @@ import { AttributionLegend, beatSort, DEFAULT_TOGGLES, issueSort, markerDomId, V
 const FLOW: readonly EpisodeStatus[] = ["outlining", "drafting", "checking", "polishing", "awaiting_approval", "approved", "published"];
 
 type Mode = "read" | "diff" | "edit" | "chat";
-type DialogKind = "revision" | "publish" | "unpublish" | "export" | null;
+type DialogKind = "revision" | "publish" | "unpublish" | "delete" | "export" | null;
 
 /** `/novels/:novelId/episodes/:episodeNo` — one episode: version viewer, diff, direct edit (08 §9.4). */
 export function EpisodeScreen({ novelId, episodeNo }: { novelId: string; episodeNo: number }) {
@@ -194,6 +194,12 @@ export function EpisodeScreen({ novelId, episodeNo }: { novelId: string; episode
               공개 취소
             </Button>
           )}
+          {/* planned has no manuscript to delete */}
+          {ep.status !== "planned" && (
+            <Button size="sm" variant="danger" onClick={() => setDialog("delete")}>
+              화 삭제
+            </Button>
+          )}
         </div>
       </div>
 
@@ -266,6 +272,7 @@ export function EpisodeScreen({ novelId, episodeNo }: { novelId: string; episode
       {dialog === "revision" && <RevisionDialog novelId={novelId} episode={ep} open onClose={() => setDialog(null)} />}
       {dialog === "publish" && <PublishDialog novelId={novelId} episode={ep} open onClose={() => setDialog(null)} />}
       {dialog === "unpublish" && <UnpublishDialog novelId={novelId} episode={ep} open onClose={() => setDialog(null)} />}
+      {dialog === "delete" && <DeleteManuscriptDialog novelId={novelId} episode={ep} open onClose={() => setDialog(null)} />}
       {dialog === "export" && (
         <ExportDialog novelId={novelId} target={{ scopeKind: "episode", targetId: ep.id, label: `${ep.episodeNo}화` }} open onClose={() => setDialog(null)} />
       )}

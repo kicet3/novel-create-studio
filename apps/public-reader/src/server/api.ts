@@ -19,12 +19,17 @@
  *   DELETE /api/admin/session                                → AdminSessionDto
  *   GET    /api/admin/overview                               → AdminOverviewDto   (admin cookie)
  *   POST   /api/admin/comments/:id       {hidden?, deleted?} → AdminCommentDto    (admin cookie)
+ *   POST   /api/admin/revalidate         {scope?}            → AdminRevalidateDto (header `Authorization: Bearer <ADMIN_TOKEN>`,
+ *                                                              machine-to-machine from the studio after a sync: marks the
+ *                                                              content cache tag stale; 404 when ADMIN_TOKEN is unset)
  *
  * Responses never contain a visitor id, an ip hash, or a body hash.
  */
+import { revalidateTag } from "next/cache";
 import { assertSchemaName, quoteIdent, type SqlClient } from "@ncs/public-schema";
 import { isPublicSlug } from "@ncs/reader-core/snapshot";
 import type { AdminCommentDto, AdminOverviewDto, AdminSessionDto, CommentDto, CommentListDto, EpisodeStatsDto, NovelStatsDto, SessionDto } from "../lib/api-types";
+import { CONTENT_TAG } from "./cache-tags";
 import { episodeExists, isEpisodeNo, novelExists } from "./content";
 import { EnvError, normalizeForMatch, type ReaderEnv } from "./env";
 import {
@@ -59,6 +64,19 @@ export interface ReaderApiDeps {
   /** lazily: no DB connection for requests that do not need one */
   db: () => SqlClient;
   now?: () => number;
+  /**
+   * purge the content cache (POST /api/admin/revalidate). Default: `revalidateTag(CONTENT_TAG, "max")` — allowed in a
+   * Route Handler, marks the tag stale so the next page request re-reads the database. Test seam.
+   */
+  revalidate?: (scope: RevalidateScope) => void | Promise<void>;
+}
+
+/** `all` (the whole content tag) or one novel — today both purge the same tag; the slug is accepted for forward compatibility */
+export type RevalidateScope = "all" | { slug: string };
+
+export interface AdminRevalidateDto {
+  ok: true;
+  revalidatedAt: string;
 }
 
 class HttpError extends Error {
@@ -112,6 +130,7 @@ const iso = (v: unknown) => (v instanceof Date ? v : new Date(String(v))).toISOS
 export function createReaderApi(deps: ReaderApiDeps) {
   const { env } = deps;
   const now = deps.now ?? Date.now;
+  const revalidate = deps.revalidate ?? (() => revalidateTag(CONTENT_TAG, "max"));
   const schema = assertSchemaName(env.schema);
   const s = quoteIdent(schema);
 
@@ -199,6 +218,18 @@ export function createReaderApi(deps: ReaderApiDeps) {
   function requireAdmin(ctx: Ctx) {
     if (!adminEnabled()) throw notFound();
     if (!isAdmin(ctx)) throw new HttpError(401, "admin_required", "운영 토큰을 먼저 입력하세요.");
+  }
+  /**
+   * machine-to-machine admin (the studio server): `Authorization: Bearer <ADMIN_TOKEN>` compared in constant time; no
+   * cookie / CSRF (there is no browser). A wrong token counts against the admin-login limiter (per ip) when writes
+   * are enabled, so guessing is throttled; a right token is never throttled.
+   */
+  async function requireBearerAdmin(ctx: Ctx): Promise<void> {
+    if (!adminEnabled()) throw notFound();
+    const m = /^Bearer\s+(\S+)\s*$/i.exec(ctx.req.headers.get("authorization") ?? "");
+    if (m && safeEqual(m[1]!, env.adminToken!)) return;
+    if (env.ipHashSecret) await limit(deps.db(), "adminLoginIp", ipKey(ctx));
+    throw new HttpError(401, "bad_token", "운영 토큰이 맞지 않습니다.");
   }
 
   // ── targets ────────────────────────────────────────────────────────────
@@ -412,6 +443,18 @@ export function createReaderApi(deps: ReaderApiDeps) {
         );
         if (!row) throw notFound();
         return json(ctx, 200, adminDto(row));
+      }
+      if (n === 2 && b === "revalidate" && method === "POST") {
+        await requireBearerAdmin(ctx);
+        const body = await readJson(ctx.req);
+        let scope: RevalidateScope = "all";
+        if (body.scope !== undefined && body.scope !== "all") {
+          const slug = (body.scope as { slug?: unknown } | null)?.slug;
+          if (!body.scope || typeof body.scope !== "object" || typeof slug !== "string" || !isPublicSlug(slug)) throw new HttpError(400, "bad_scope", "요청 형식이 올바르지 않습니다.");
+          scope = { slug };
+        }
+        await revalidate(scope);
+        return json(ctx, 200, { ok: true, revalidatedAt: new Date(now()).toISOString() } satisfies AdminRevalidateDto);
       }
       throw notFound();
     }

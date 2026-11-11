@@ -22,6 +22,7 @@ export type ContinuityManuscriptPort = Pick<
   | "getEpisodeEnd"
   | "listEpisodes"
   | "listPendingPriorFacts"
+  | "registerEpisodeDeleteParticipant"
 >;
 export type ContinuityOntologyPort = Pick<
   OntologyService,

@@ -303,6 +303,23 @@ export function createContinuityService(deps: ContinuityPorts): ContinuityIntern
       },
     },
 
+    async countEpisodeIssues(scope, input, tx) {
+      return (await repo.listForDeletedText(tx?.db ?? deps.platform.uow.db, scope, input.episodeId, input.versionIds)).length;
+    },
+    async purgeEpisodeIssues(tx, scope, input, actor) {
+      const issues = await repo.listForDeletedText(tx.db, scope, input.episodeId, input.versionIds);
+      if (!issues.length) return { deleted: 0, questionIds: [] };
+      const deleted = await repo.deleteIssues(tx.db, scope, issues.map((i) => i.id));
+      await deps.audit.record(tx, {
+        novelId: scope.novelId,
+        actor,
+        action: "continuity_issue.status_changed",
+        target: { type: "episode", id: input.episodeId },
+        details: { deleted: true, ids: issues.map((i) => i.id), count: deleted, reason: "화 삭제(원고 폐기)" },
+      });
+      return { deleted, questionIds: [...new Set(issues.map((i) => i.questionId).filter((q): q is string => !!q))] };
+    },
+
     async safetyIssueSink(tx, scope, issue, actor) {
       const ruleId = issue.kind === "human_edit_conflict" ? "CR-18" : `SF:${issue.kind}`;
       const i = await svc.openIssue(

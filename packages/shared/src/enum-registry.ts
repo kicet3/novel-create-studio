@@ -538,6 +538,8 @@ export const ENUMS = {
     "range_close",
     "resolution_filled",
     "reinterpretation",
+    /** 설계 추가(화 삭제): the source episode's manuscript was deleted — its facts are rejected / retracted */
+    "episode_deleted",
   ],
   /** InstallConfig database.mode (08 5.2) */
   database_mode: ["embedded", "external"],

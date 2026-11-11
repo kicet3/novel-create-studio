@@ -73,6 +73,7 @@ const VERB_KO: Record<string, string> = {
   approved: "승인",
   published: "공개",
   unpublished: "공개 취소",
+  manuscript_deleted: "원고 삭제(계획됨으로 되돌림)",
   blocked: "차단",
   unblocked: "차단 해제",
   human_edited: "사람 수정",

@@ -82,6 +82,8 @@ export interface ManuscriptInternals {
   enterAwaitingApproval(tx: Tx, scope: NovelScope, episodeId: string, actor: ActorRef, summary: { lengthWarning: string | null; length?: LengthCheck | null }): Promise<Episode>;
   /** approval request for an episode already waiting without one (설계 추가 0014: level changed away from arc_approval) */
   requestEpisodeApproval(tx: Tx, scope: NovelScope, ep: Episode, actor: ActorRef, opts: { lengthWarning: string | null; belowFloor: boolean }): Promise<Episode>;
+  /** E14 in the caller's transaction (unpublishEpisode, and the first step of deleteManuscript on a published episode) */
+  unpublishInTx(tx: Tx, scope: NovelScope, episodeId: string, reason: string, actor: ActorRef): Promise<Episode>;
 }
 
 export function createManuscriptService(ports: Ports): { service: ManuscriptService; internals: ManuscriptInternals } {
@@ -422,6 +424,22 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
       priority: 800,
     });
     return rejection;
+  };
+
+  // ── E14 (FR-MAN-03) ─────────────────────────────────────────────────
+  const unpublishInTx = async (tx: Tx, scope: NovelScope, episodeId: string, reason: string, actor: ActorRef) => {
+    const ep = await mustEpisode(tx, scope, episodeId, true);
+    const updated = await transition(tx, scope, episodeId, "approved", actor, {
+      ruleId: "E14",
+      reason,
+      patch: { publishedVersionId: null, publishedAt: null, publishedByActorType: null, publishedByActorId: null },
+      details: { previousPublishedVersionId: ep.publishedVersionId, confirmedNotPublishedExternally: true },
+    });
+    const demoted = await soft(() => ontology.demoteEpisodeFacts(tx, scope, episodeId, actor), null);
+    if (demoted) {
+      await audit.record(tx, { novelId: scope.novelId, actor, action: "fact.status_changed", target: epRef(episodeId), after: { canonStatus: "approved" }, details: { count: demoted.demoted, bulk: true } });
+    }
+    return updated;
   };
 
   // ── E8 entry ────────────────────────────────────────────────────────
@@ -832,21 +850,16 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
         throw new DomainValidationError("external_confirmation_required", "외부 플랫폼에 공개되지 않았음을 확인해야 공개를 취소할 수 있습니다."); // FR-MAN-03
       }
       if (!input.reason?.trim()) throw new DomainValidationError("reason_required", "공개 취소 사유를 입력하세요.");
-      return uow.run(async (tx) => {
-        const ep = await mustEpisode(tx, scope, episodeId, true);
-        const updated = await transition(tx, scope, episodeId, "approved", actor, {
-          ruleId: "E14",
-          reason: input.reason.trim(),
-          patch: { publishedVersionId: null, publishedAt: null, publishedByActorType: null, publishedByActorId: null },
-          details: { previousPublishedVersionId: ep.publishedVersionId, confirmedNotPublishedExternally: true },
-        });
-        const demoted = await soft(() => ontology.demoteEpisodeFacts(tx, scope, episodeId, actor), null);
-        if (demoted) {
-          await audit.record(tx, { novelId: scope.novelId, actor, action: "fact.status_changed", target: epRef(episodeId), after: { canonStatus: "approved" }, details: { count: demoted.demoted, bulk: true } });
-        }
-        return updated;
-      });
+      return uow.run((tx) => unpublishInTx(tx, scope, episodeId, input.reason.trim(), actor));
     },
+    // 설계 추가(화 삭제): application/episode-delete.ts
+    previewDelete: () => {
+      throw new Error("wired in module.ts");
+    },
+    deleteManuscript: () => {
+      throw new Error("wired in module.ts");
+    },
+    registerEpisodeDeleteParticipant: (p) => void reg.deleteParticipants.push(p),
 
     registerCheckGateContributor: (c) => void reg.contributors.push(c),
     async evaluateCheckGate(scope, episodeId, tx) {
@@ -981,6 +994,7 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
       afterGatePass,
       enterAwaitingApproval,
       requestEpisodeApproval,
+      unpublishInTx,
     },
   };
 }

@@ -1,5 +1,5 @@
 /** drizzle access to continuity_issues / continuity_issue_evidence. Every query filters by novel_id (03 T-3). */
-import { and, asc, desc, eq, inArray, sql } from "@ncs/db/orm";
+import { and, asc, desc, eq, inArray, or, sql } from "@ncs/db/orm";
 import { continuityIssueEvidence, continuityIssues } from "@ncs/db/schema";
 import type { IssueSeverity } from "@ncs/shared";
 import type { Db, NovelScope } from "../../../../platform/index.js";
@@ -46,6 +46,19 @@ export const continuityRepo = {
       .where(and(eq(continuityIssues.novelId, scope.novelId), eq(continuityIssues.id, id)))
       .returning();
     return i!;
+  },
+  /** 설계 추가(화 삭제): issues about the episode's text (its own, or detected on one of its versions) */
+  async listForDeletedText(db: Db, scope: NovelScope, episodeId: string, versionIds: string[]): Promise<ContinuityIssue[]> {
+    const where = versionIds.length ? or(eq(continuityIssues.episodeId, episodeId), inArray(continuityIssues.manuscriptVersionId, versionIds)) : eq(continuityIssues.episodeId, episodeId);
+    return db.select().from(continuityIssues).where(and(eq(continuityIssues.novelId, scope.novelId), where)).orderBy(asc(continuityIssues.displayNo));
+  },
+  /** 설계 추가(화 삭제): hard delete (evidence first; re-open chains pointing at them are cut) */
+  async deleteIssues(db: Db, scope: NovelScope, issueIds: string[]): Promise<number> {
+    if (!issueIds.length) return 0;
+    await db.delete(continuityIssueEvidence).where(and(eq(continuityIssueEvidence.novelId, scope.novelId), inArray(continuityIssueEvidence.issueId, issueIds)));
+    await db.update(continuityIssues).set({ previousIssueId: null, updatedAt: sql`now()` }).where(and(eq(continuityIssues.novelId, scope.novelId), inArray(continuityIssues.previousIssueId, issueIds)));
+    const rows = await db.delete(continuityIssues).where(and(eq(continuityIssues.novelId, scope.novelId), inArray(continuityIssues.id, issueIds))).returning({ id: continuityIssues.id });
+    return rows.length;
   },
   async countOpenBySeverity(db: Db, scope: NovelScope, episodeId?: string): Promise<Record<IssueSeverity, number>> {
     const conds = [eq(continuityIssues.novelId, scope.novelId), inArray(continuityIssues.status, ["open", "fixing"])];

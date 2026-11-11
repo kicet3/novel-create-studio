@@ -590,6 +590,60 @@ export function createForeshadowService(deps: ForeshadowPorts): ForeshadowIntern
       return beats.length;
     },
 
+    async countEpisodeBeats(scope, input, tx) {
+      const rows = await repo.listBeatsForDeletedText(tx?.db ?? platform.uow.db, scope, input.episodeId, input.versionIds);
+      return rows.filter((b) => b.status === "detected" || b.status === "missing" || b.status === "confirmed").length;
+    },
+    async purgeEpisodeBeats(tx, scope, input, actor) {
+      const all = await repo.listBeatsForDeletedText(tx.db, scope, input.episodeId, input.versionIds);
+      const beats = all.filter((b) => b.status === "detected" || b.status === "missing" || b.status === "confirmed");
+      const resetIds = new Set(beats.map((b) => b.id));
+      // beats that keep their status (e.g. `cancelled` by B6 after a `missing` result) still point at the text through
+      // manuscript_version_id / scene_id — the anchors go, or the caller's version / scene deletes hit the FK
+      const anchored = all.filter((b) => !resetIds.has(b.id) && (b.manuscriptVersionId || b.sceneId));
+      for (const b of anchored) {
+        await repo.updateBeat(tx.db, scope, b.id, { sceneId: null, charStart: null, charEnd: null, manuscriptVersionId: null, detectedByRunId: null });
+      }
+      if (!beats.length) return 0;
+      for (const b of beats) {
+        // B4-like reset (also from missing / confirmed: the text the result was about no longer exists)
+        await repo.updateBeat(tx.db, scope, b.id, { status: "planned", episodeId: null, sceneId: null, charStart: null, charEnd: null, manuscriptVersionId: null, detectedByRunId: null, confirmedAt: null, canonStatus: "candidate" });
+      }
+      // setups advanced by a confirmed beat of this text step back to what their remaining confirmed beats support
+      for (const setupId of new Set(beats.filter((b) => b.status === "confirmed").map((b) => b.setupId))) {
+        const s = await lockSetup(tx, scope, setupId);
+        if (s.narrativeStatus === "abandoned") continue;
+        const remaining = (await repo.listBeats(tx.db, scope, { setupIds: [s.id] })).filter((x) => x.status === "confirmed" && !resetIds.has(x.id));
+        const paidOff = remaining.find((x) => x.kind === "payoff");
+        const target: SetupNarrativeStatus = paidOff ? "paid_off" : remaining.some((x) => x.kind === "reinforce") ? "reinforced" : remaining.some((x) => x.kind === "plant") ? "planted" : "planned";
+        const patch: Partial<Setup> = {};
+        if (s.paidOffBeatId && resetIds.has(s.paidOffBeatId)) patch.paidOffBeatId = paidOff?.id ?? null;
+        if (s.narrativeStatus !== target) patch.narrativeStatus = target;
+        if (!Object.keys(patch).length) continue;
+        await repo.updateSetup(tx.db, scope, s.id, patch);
+        if (patch.narrativeStatus) {
+          await audit.record(tx, {
+            novelId: scope.novelId,
+            actor,
+            action: "setup.narrative_status_changed",
+            target: ref(s.id),
+            before: { narrativeStatus: s.narrativeStatus },
+            after: { narrativeStatus: target },
+            reason: "화 삭제(원고 폐기): 확정 비트가 사라져 되돌림",
+            details: { rule: "B4", episodeId: input.episodeId },
+          });
+        }
+      }
+      await audit.record(tx, {
+        novelId: scope.novelId,
+        actor,
+        action: "setup.beat_planned",
+        target: { type: "episode", id: input.episodeId },
+        details: { ids: beats.map((b) => b.id), count: beats.length, rule: "B4", reason: "화 삭제(원고 폐기)", anchorsCleared: anchored.map((b) => b.id) },
+      });
+      return beats.length;
+    },
+
     async pinLinkedFacts(tx, scope, setupId, versions) {
       if (!versions.length) return 0;
       const links = (await repo.listLinks(tx.db, scope, [setupId])).filter((l) => l.refType === "fact");

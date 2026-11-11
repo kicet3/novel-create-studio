@@ -15,8 +15,9 @@ import { Badge, Button, Callout, Card, Field, Input, QueryView, Select } from ".
 
 /**
  * 설치 설정 → 공개 사이트(snowpage) 연결 (GET /api/public-site, PUT /api/public-site/config, POST …/build, POST …/check,
- * GET …/role-sql). 쓰기용 연결 문자열은 비밀 저장소에 암호화해 두고 다시 보여 주지 않습니다(“설정됨”만 표시).
- * 공개된 화만 Supabase 공개 스키마로 나가며, 초안·설정·비밀은 이 컴퓨터를 떠나지 않습니다.
+ * GET …/role-sql). 쓰기용 연결 문자열과 snowpage 운영 토큰(ADMIN_TOKEN)은 비밀 저장소에 암호화해 두고 다시 보여 주지
+ * 않습니다(“설정됨”만 표시). 공개된 화만 Supabase 공개 스키마로 나가며, 초안·설정·비밀은 이 컴퓨터를 떠나지 않습니다.
+ * 운영 토큰이 있으면 동기화 직후 독자 페이지 캐시를 바로 비웁니다(status.revalidate).
  */
 export const publicSiteStatusKey = [...queryKeys.installSettings, "public-site"] as const;
 
@@ -34,6 +35,7 @@ const TARGET_LABEL: Record<PublicSiteTarget, string> = { supabase: "Supabase DB 
 function PublicSiteConnection({ status: s }: { status: PublicSiteStatusDto }) {
   const qc = useQueryClient();
   const [url, setUrl] = useState("");
+  const [adminToken, setAdminToken] = useState("");
   const [schema, setSchema] = useState(s.supabase.schema);
   const [target, setTarget] = useState<"" | PublicSiteTarget>(s.targetSource === "explicit" ? s.target : "");
   const [showSql, setShowSql] = useState(false);
@@ -44,6 +46,7 @@ function PublicSiteConnection({ status: s }: { status: PublicSiteStatusDto }) {
     onSuccess: (d) => {
       setStatus(d);
       setUrl("");
+      setAdminToken("");
     },
   });
   const sync = useMutation({ mutationFn: () => api.post("/public-site/build", undefined, { schema: publicSiteStatusDtoSchema }), onSuccess: setStatus });
@@ -56,13 +59,19 @@ function PublicSiteConnection({ status: s }: { status: PublicSiteStatusDto }) {
 
   const urlTrim = url.trim();
   const urlValid = urlTrim === "" || /^postgres(ql)?:\/\/\S+$/.test(urlTrim);
+  const tokenTrim = adminToken.trim();
+  const tokenValid = tokenTrim === "" || (tokenTrim.length >= 24 && /^\S+$/.test(tokenTrim));
   const schemaValid = PUBLIC_SITE_SCHEMA_RE.test(schema.trim());
   const patch: UpdatePublicSiteConfigRequest = {
     ...(urlTrim ? { databaseUrl: urlTrim } : {}),
+    ...(tokenTrim ? { adminToken: tokenTrim } : {}),
     ...(schema.trim() !== s.supabase.schema ? { schema: schema.trim() } : {}),
     ...((target || null) !== (s.targetSource === "explicit" ? s.target : null) ? { target: target || null } : {}),
   };
   const dirty = Object.keys(patch).length > 0;
+  /** which of the two "지우기" buttons (or the main save) is in flight */
+  const clearing = save.isPending ? (save.variables?.databaseUrl === null ? "url" : save.variables?.adminToken === null ? "token" : "save") : null;
+  const rv = s.revalidate;
   const copy = async () => {
     if (!roleSql.data) return;
     try {
@@ -82,6 +91,7 @@ function PublicSiteConnection({ status: s }: { status: PublicSiteStatusDto }) {
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <Badge tone={s.target === "supabase" ? "info" : "neutral"}>지금 대상: {TARGET_LABEL[s.target]}</Badge>
         <Badge tone={s.supabase.configured ? "ok" : "warn"}>{s.supabase.configured ? "연결 문자열 설정됨" : "연결 문자열 없음"}</Badge>
+        <Badge tone={rv.configured ? "ok" : "neutral"}>{rv.configured ? "운영 토큰 설정됨" : "운영 토큰 없음"}</Badge>
         {s.supabase.host && <span className="text-muted">호스트 {s.supabase.host}</span>}
       </div>
       <Field
@@ -94,6 +104,20 @@ function PublicSiteConnection({ status: s }: { status: PublicSiteStatusDto }) {
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           placeholder={s.supabase.configured ? "설정됨 — 바꿀 때만 입력" : "postgresql://postgres.xxxx:비밀번호@…pooler.supabase.com:6543/postgres"}
+          autoComplete="off"
+          spellCheck={false}
+        />
+      </Field>
+      <Field
+        label="snowpage 운영 토큰(ADMIN_TOKEN)"
+        hint="공개 사이트 Vercel 환경 변수 ADMIN_TOKEN 과 같은 값. 공개·공개 취소 직후 독자 페이지 캐시를 바로 비우는 데 씁니다. 비우면 최대 30초 뒤에 반영됩니다."
+        error={tokenValid ? undefined : "운영 토큰은 공백 없이 24자 이상이어야 합니다."}
+      >
+        <Input
+          type="password"
+          value={adminToken}
+          onChange={(e) => setAdminToken(e.target.value)}
+          placeholder={rv.configured ? "설정됨 — 바꿀 때만 입력" : "Vercel의 ADMIN_TOKEN 값(24자 이상)"}
           autoComplete="off"
           spellCheck={false}
         />
@@ -113,11 +137,16 @@ function PublicSiteConnection({ status: s }: { status: PublicSiteStatusDto }) {
       {save.error && <Callout tone="danger">{errorMessage(save.error)}</Callout>}
       <div className="flex flex-wrap justify-end gap-2">
         {s.supabase.configured && (
-          <Button variant="ghost" loading={save.isPending && save.variables?.databaseUrl === null} onClick={() => window.confirm("저장된 연결 문자열을 지울까요?") && save.mutate({ databaseUrl: null })}>
+          <Button variant="ghost" loading={clearing === "url"} onClick={() => window.confirm("저장된 연결 문자열을 지울까요?") && save.mutate({ databaseUrl: null })}>
             연결 문자열 지우기
           </Button>
         )}
-        <Button variant="primary" disabled={!dirty || !urlValid || !schemaValid} loading={save.isPending && save.variables?.databaseUrl !== null} onClick={() => save.mutate(patch)}>
+        {rv.configured && (
+          <Button variant="ghost" loading={clearing === "token"} onClick={() => window.confirm("저장된 운영 토큰을 지울까요? 공개 직후 캐시 갱신이 꺼지고 최대 30초 뒤에 반영됩니다.") && save.mutate({ adminToken: null })}>
+            운영 토큰 지우기
+          </Button>
+        )}
+        <Button variant="primary" disabled={!dirty || !urlValid || !tokenValid || !schemaValid} loading={clearing === "save"} onClick={() => save.mutate(patch)}>
           저장
         </Button>
       </div>
@@ -130,6 +159,13 @@ function PublicSiteConnection({ status: s }: { status: PublicSiteStatusDto }) {
         {s.lastRun && (
           <span>
             지난 실행: 작품 갱신 {s.lastRun.upsertedNovels} · 화 갱신 {s.lastRun.upsertedEpisodes} · 작품 삭제 {s.lastRun.deletedNovels} · 화 삭제 {s.lastRun.deletedEpisodes} · 그대로 {s.lastRun.unchangedNovels}
+          </span>
+        )}
+        {rv.configured && (
+          <span>
+            마지막 캐시 갱신: {rv.lastAt ? new Date(rv.lastAt).toLocaleString("ko-KR") : "아직 없음"}
+            {rv.lastOk !== null ? ` · ${rv.lastOk ? "성공" : "실패"}` : ""}
+            {rv.lastMessage ? ` · ${rv.lastMessage}` : ""}
           </span>
         )}
         {s.target === "files" && (

@@ -14,6 +14,8 @@ export function createRevisionModule(deps: RevisionModuleDeps): ServerModule<Rev
   // 설계 추가(수정 반영): facts of earlier versions follow an edited episode text (extract_facts commit)
   deps.linking?.registerFactReconciler({ reconcileEpisode: app.reconcile.reconcileEpisode });
   deps.agents.registerContextSection(app.notesSection);
+  // 설계 추가(화 삭제): the chat of a deleted manuscript is removed with it
+  deps.manuscript.registerEpisodeDeleteParticipant?.(app.deleteParticipant);
   const service: RevisionService = app.service;
   return {
     name: "revision",
