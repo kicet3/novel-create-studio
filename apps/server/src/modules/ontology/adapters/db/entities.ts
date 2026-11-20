@@ -11,12 +11,98 @@ import { activeSchema, appendFactVersion, currentContents, getEntityRow, resolve
 
 const actorCols = (a: ActorRef) => ({ createdByActorType: a.type, createdByActorId: a.id });
 
+// ── 설계 추가 0026: entity handles (E1, E2 …) never become ontology data ─────────────────────────────────────────
+// The ontology is the common gate of every write path (linker, resolver, HITL, bible, world, cast). Same token shape
+// as agents/domain/handle-text.ts — kept local because agents imports ontology (no import cycle).
+const HANDLE_SHAPED = /^[[(（]?E\d{1,3}[\])）]?$/;
+const HANDLE_TOKEN = /(?<![A-Za-z0-9_])E\d{1,3}(?![A-Za-z0-9_])/g;
+
+/** P5: the whole surface is a handle ("E6", "[E11]") — never a name, an alias or a mention surface */
+export function isHandleShapedSurface(surface: string | null | undefined): boolean {
+  return typeof surface === "string" && HANDLE_SHAPED.test(surface.trim());
+}
+
+function assertNotHandleShaped(surface: string): void {
+  if (isHandleShapedSurface(surface)) {
+    throw new DomainValidationError("handle_shaped_name", `'${surface.trim()}' 같은 'E숫자' 기호는 이름이 될 수 없습니다. 인물·장소의 실제 이름을 쓰세요.`, { surface: surface.trim() });
+  }
+}
+
+/** handle-looking tokens in every string leaf of a JSON-like value, deduplicated */
+export function handleTokensIn(value: unknown): string[] {
+  const out = new Set<string>();
+  const walk = (v: unknown) => {
+    if (typeof v === "string") for (const m of v.matchAll(HANDLE_TOKEN)) out.add(m[0]);
+    else if (Array.isArray(v)) v.forEach(walk);
+    else if (v && typeof v === "object") Object.values(v).forEach(walk);
+  };
+  walk(value);
+  return [...out];
+}
+
+/** a name may carry a handle-looking token only as story text: not handle-shaped, and no token outside `story` */
+const carriesHandle = (surface: string, story: ReadonlySet<string>) => isHandleShapedSurface(surface) || handleTokensIn(surface).some((t) => !story.has(t));
+
+/**
+ * P1: the story tokens of a novel — handle-looking tokens inside a live, non-handle-shaped name of a live entity that a
+ * PERSON created ("E3 구역" → E3). Names agents made (linker / resolver / bible ontology) never count: they are derived
+ * from stored sentences, so a leaked handle in one ("E12 일행") would exempt its token everywhere, forever.
+ */
+export async function storyHandleTokensOf(db: Tx["db"], scope: NovelScope): Promise<Set<string>> {
+  const names = await db
+    .select({ surface: entityNames.surface })
+    .from(entityNames)
+    .innerJoin(entities, and(eq(entities.novelId, entityNames.novelId), eq(entities.id, entityNames.entityId)))
+    .where(
+      and(
+        eq(entityNames.novelId, scope.novelId),
+        ne(entityNames.status, "retired"),
+        inArray(entities.status, ["candidate", "active"]),
+        eq(entities.createdByActorType, "user"),
+        sql`${entityNames.surface} ~ 'E[0-9]'`,
+      ),
+    );
+  return new Set(names.filter((n) => !isHandleShapedSurface(n.surface)).flatMap((n) => handleTokensIn(n.surface)));
+}
+
+/**
+ * P6 (agent-authored text only): the handle tokens of `value` that are not story tokens. [] = clean. The names are
+ * read only when a token is there.
+ */
+export async function leakedHandleTokensOf(db: Tx["db"], scope: NovelScope, value: unknown): Promise<string[]> {
+  const tokens = handleTokensIn(value);
+  if (tokens.length === 0) return [];
+  const story = await storyHandleTokensOf(db, scope);
+  return tokens.filter((t) => !story.has(t));
+}
+
+async function assertAgentTextClean(db: Tx["db"], scope: NovelScope, actor: ActorRef, what: string, value: unknown): Promise<void> {
+  if (actor.type !== "agent") return; // a person may type anything
+  const leaks = await leakedHandleTokensOf(db, scope, value);
+  if (leaks.length) throw new DomainValidationError("handle_token_in_text", `entity handle left in stored text (${what}): ${leaks.slice(0, 5).join(", ")}`, { what, tokens: leaks });
+}
+
+/** P5 / P1: a name an AGENT stores never carries a handle token ("E12 일행") — it would become a story token otherwise */
+async function assertAgentNamesClean(db: Tx["db"], scope: NovelScope, actor: ActorRef, surfaces: readonly string[]): Promise<void> {
+  if (actor.type !== "agent" || !handleTokensIn(surfaces).length) return;
+  const story = await storyHandleTokensOf(db, scope);
+  const bad = surfaces.find((s) => carriesHandle(s, story));
+  if (bad) throw new DomainValidationError("handle_token_in_name", `'${bad.trim()}'에는 'E숫자' 기호가 들어 있어 이름으로 저장할 수 없습니다. 인물·장소의 실제 이름을 쓰세요.`, { surface: bad.trim() });
+}
+
 export async function createEntity(d: OntoDeps, tx: Tx, scope: NovelScope, input: CreateEntityInput, actor: ActorRef): Promise<{ entity: Entity; preferredName: EntityName }> {
   const { schema } = await activeSchema(tx.db, scope);
   const type = schema.entityTypes.find((t) => t.key === input.entityType);
   if (!type) throw new DomainValidationError("unknown_entity_type", `스키마에 없는 엔티티 유형입니다: ${input.entityType}`);
   const surface = input.preferredName.surface.trim();
   if (!surface) throw new DomainValidationError("name_required", "엔티티에는 이름이 1개 이상 있어야 합니다.");
+  // 설계 추가 0026 (P5 / P6): checked before anything is written
+  const { main, variants } = splitParenthetical(surface);
+  assertNotHandleShaped(surface);
+  assertNotHandleShaped(main);
+  for (const n of input.names ?? []) assertNotHandleShaped(n.surface);
+  await assertAgentNamesClean(tx.db, scope, actor, [main, ...(input.names ?? []).map((n) => n.surface)]);
+  await assertAgentTextClean(tx.db, scope, actor, "entity summary", input.summary ?? null);
   const status: "candidate" | "active" = input.status ?? (actor.type === "user" ? "active" : "candidate");
   const id = d.platform.ids.next("ent");
   const now = d.platform.clock.date();
@@ -34,7 +120,6 @@ export async function createEntity(d: OntoDeps, tx: Tx, scope: NovelScope, input
     updatedAt: now,
   });
   const src = input.source ?? { kind: actor.type === "user" ? ("user_input" as const) : ("system_derived" as const), refType: "entity" as const, refId: id };
-  const { main, variants } = splitParenthetical(surface);
   const preferred = await insertName(d, tx, scope, id, {
     surface: main,
     nameKind: input.preferredName.nameKind ?? "true_name",
@@ -44,6 +129,7 @@ export async function createEntity(d: OntoDeps, tx: Tx, scope: NovelScope, input
   }, true);
   // N4: parenthetical (한자 병기) → hidden_variant proposal
   for (const v of variants) {
+    if (isHandleShapedSurface(v)) continue; // "서이온(E6)": a leaked reference mark, not a variant spelling
     await insertName(d, tx, scope, id, { surface: v, nameKind: "hidden_variant", status: "proposed", source: src }, false).catch((e) => {
       if (!(e instanceof ConflictError)) throw e;
     });
@@ -70,6 +156,7 @@ export async function createEntity(d: OntoDeps, tx: Tx, scope: NovelScope, input
 async function insertName(d: OntoDeps, tx: Tx, scope: NovelScope, entityId: string, n: AddEntityNameInput, isPreferred: boolean): Promise<EntityName> {
   const surface = n.surface.trim();
   if (!surface) throw new DomainValidationError("name_required", "이름 표기가 비어 있습니다.");
+  assertNotHandleShaped(surface); // 설계 추가 0026 (P5)
   if (n.nameKind === "address_term" && n.usedByCondition == null) {
     throw new DomainValidationError("address_condition_required", "호칭(address_term)에는 사용 조건(used_by_condition)이 필요합니다.");
   }
@@ -122,6 +209,7 @@ export async function addEntityName(d: OntoDeps, tx: Tx, scope: NovelScope, enti
   const id = await resolveId(tx.db, scope, entityId);
   const e = await getEntityRow(tx.db, scope, id);
   if (e.status === "retired") throw new DomainValidationError("entity_retired", "폐기된 엔티티에는 이름을 추가할 수 없습니다.");
+  await assertAgentNamesClean(tx.db, scope, actor, [n.surface]); // 설계 추가 0026 (P5 / P1)
   const status = n.status ?? (actor.type === "user" ? "active" : "proposed");
   const row = await insertName(d, tx, scope, id, { ...n, status }, false);
   await d.audit.record(tx, {
@@ -197,6 +285,7 @@ export async function updateEntity(d: OntoDeps, tx: Tx, scope: NovelScope, entit
   if (patch.summary !== undefined && patch.summary !== e.summary) set.summary = patch.summary;
   if (patch.disambiguator !== undefined && patch.disambiguator !== e.disambiguator) set.disambiguator = patch.disambiguator;
   if (!Object.keys(set).length) return e;
+  if (set.summary) await assertAgentTextClean(tx.db, scope, actor, "entity summary", set.summary); // 설계 추가 0026 (P6)
   const [row] = await tx.db
     .update(entities)
     .set({ ...set, updatedAt: d.platform.clock.date() })
@@ -223,6 +312,8 @@ export async function setEquivalenceCheck(d: OntoDeps, tx: Tx, scope: NovelScope
 // ── mentions ────────────────────────────────────────────────────────────
 export async function writeMentions(d: OntoDeps, tx: Tx, scope: NovelScope, drafts: MentionDraft[], actor: ActorRef): Promise<{ mentionIds: string[] }> {
   if (drafts.length === 0) return { mentionIds: [] };
+  // 설계 추가 0026 (P5): the linker drops such surfaces before they get here; one that still arrives is a bug upstream
+  for (const m of drafts) if (m.mentionKind !== "zero") assertNotHandleShaped(m.surface);
   const ids = drafts.flatMap((m) => [m.linkedEntityId, m.speakerEntityId, m.povEntityId, m.viaEntityId].filter((x): x is string => !!x));
   const resolved = await resolveIds(tx.db, scope, ids);
   const r = (id: string | null | undefined) => (id ? (resolved.get(id) ?? null) : null);

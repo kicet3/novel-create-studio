@@ -110,7 +110,7 @@ describe("extraction with the entity resolver (setting on, default)", () => {
     const ion = await character(nv, "서이온");
     t.claude.reply({
       when: { schemaHas: ["resolutions"] },
-      json: (r: ClaudeRequest) => ({ resolutions: [{ mention: handle(r, /(M\d+) "그"/), action: "link_existing", entity: handle(r, /(E\d+) \| 서이온/), confidence: 0.9, rationale: "앞 문장의 서이온" }] }),
+      json: (r: ClaudeRequest) => ({ resolutions: [{ mention: handle(r, /(M\d+) "그"/), action: "link_existing", entity: handle(r, /(K\d+) \| 서이온/), confidence: 0.9, rationale: "앞 문장의 서이온" }] }),
     });
     const { mvId } = await extract(nv, 1, "서이온은 화면을 보았다. 그는 웃었다.", [
       { key: "m1", surface: "서이온", quote: "서이온은 화면을", kind: "named", hint: "character" },
@@ -139,7 +139,7 @@ describe("extraction with the entity resolver (setting on, default)", () => {
     const ion = await character(nv, "서이온");
     t.claude.reply({
       when: { schemaHas: ["resolutions"], prompt: '"이온 씨"' },
-      json: (r: ClaudeRequest) => ({ resolutions: [{ mention: handle(r, /(M\d+) "이온 씨"/), action: "add_alias", entity: handle(r, /(E\d+) \| 서이온/), confidence: 0.92, rationale: "서이온을 부르는 호칭" }] }),
+      json: (r: ClaudeRequest) => ({ resolutions: [{ mention: handle(r, /(M\d+) "이온 씨"/), action: "add_alias", entity: handle(r, /(K\d+) \| 서이온/), confidence: 0.92, rationale: "서이온을 부르는 호칭" }] }),
     });
     const e2 = await extract(nv, 2, "이온 씨가 고개를 끄덕였다.", [{ key: "m1", surface: "이온 씨", quote: "이온 씨가 고개를", kind: "address", hint: "character" }]);
     const [m2] = await t.modules.ontology.service.listMentions(nv.scope, { manuscriptVersionId: e2.mvId });
@@ -163,7 +163,7 @@ describe("extraction with the entity resolver (setting on, default)", () => {
     t.claude.reply({ when: { schemaHas: ["choice"] }, json: { choice: "UNSURE", rationale: "둘 다 가능" }, times: Infinity });
     t.claude.reply({
       when: { schemaHas: ["resolutions"] },
-      json: (r: ClaudeRequest) => ({ resolutions: [{ mention: "M1", action: "link_existing", entity: handle(r, /(E\d+) \| 민준\(형\)/), confidence: 0.5, rationale: "형일 가능성이 조금 높음" }] }),
+      json: (r: ClaudeRequest) => ({ resolutions: [{ mention: "M1", action: "link_existing", entity: handle(r, /(K\d+) \| 민준\(형\)/), confidence: 0.5, rationale: "형일 가능성이 조금 높음" }] }),
     });
     await extract(nv, 1, "민준이 문을 열었다.", [{ key: "m1", surface: "민준", quote: "민준이 문을", kind: "named", hint: "character" }]);
     const qs = await entityQs(nv.scope);
@@ -180,7 +180,7 @@ describe("extraction with the entity resolver (setting on, default)", () => {
     t.claude.reply({ when: { schemaHas: ["choice"] }, json: { choice: "UNSURE", rationale: "둘 다 가능" }, times: Infinity });
     t.claude.reply({
       when: { schemaHas: ["resolutions"] },
-      json: (r: ClaudeRequest) => ({ resolutions: [{ mention: "M1", action: "link_existing", entity: handle(r, /(E\d+) \| 민준\(형\)/), confidence: 0.9, rationale: "형이 집에 있다" }] }),
+      json: (r: ClaudeRequest) => ({ resolutions: [{ mention: "M1", action: "link_existing", entity: handle(r, /(K\d+) \| 민준\(형\)/), confidence: 0.9, rationale: "형이 집에 있다" }] }),
     });
     const e2 = await extract(nv, 2, "민준이 창을 닫았다.", [{ key: "m1", surface: "민준", quote: "민준이 창을", kind: "named", hint: "character" }]);
     expect(await entityQs(nv.scope)).toHaveLength(1);
@@ -325,9 +325,9 @@ describe("backlog cleanup (resolve_entities)", () => {
       times: Infinity,
       json: (r: ClaudeRequest) => ({
         resolutions: [
-          ...(/"이온 씨"/.test(r.prompt) ? [{ mention: handle(r, /(M\d+) "이온 씨"/), action: "add_alias", entity: handle(r, /(E\d+) \| 서이온/), confidence: 0.9, rationale: "서이온을 부르는 호칭" }] : []),
-          ...(/"그"/.test(r.prompt) ? [{ mention: handle(r, /(M\d+) "그"/), action: "link_existing", entity: handle(r, /(E\d+) \| 서이온/), confidence: 0.3, rationale: "누군지 불분명" }] : []),
-          ...(/"민준"/.test(r.prompt) ? [{ mention: handle(r, /(M\d+) "민준"/), action: "link_existing", entity: handle(r, /(E\d+) \| 민준\(형\)/), confidence: 0.5, rationale: "확신 없음" }] : []),
+          ...(/"이온 씨"/.test(r.prompt) ? [{ mention: handle(r, /(M\d+) "이온 씨"/), action: "add_alias", entity: handle(r, /(K\d+) \| 서이온/), confidence: 0.9, rationale: "서이온을 부르는 호칭" }] : []),
+          ...(/"그"/.test(r.prompt) ? [{ mention: handle(r, /(M\d+) "그"/), action: "link_existing", entity: handle(r, /(K\d+) \| 서이온/), confidence: 0.3, rationale: "누군지 불분명" }] : []),
+          ...(/"민준"/.test(r.prompt) ? [{ mention: handle(r, /(M\d+) "민준"/), action: "link_existing", entity: handle(r, /(K\d+) \| 민준\(형\)/), confidence: 0.5, rationale: "확신 없음" }] : []),
           // the dedupe pass also paired the two 민준 (same name): different people
           ...[...r.prompt.matchAll(/(M\d+) \[중복 확인\]/g)].map((x) => ({ mention: x[1]!, action: "keep_distinct", confidence: 0.9, rationale: "형과 동생은 다른 인물" })),
         ],

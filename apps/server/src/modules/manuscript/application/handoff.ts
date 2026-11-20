@@ -16,13 +16,13 @@
 import { DEFAULTS } from "@ncs/shared";
 import { z } from "zod";
 import { actors, type Db, type NovelScope, type Tx } from "../../../platform/index.js";
-import { callWithRepair, type AgentTaskHandler, type ContextSectionProvider } from "../../agents/index.js";
+import { callWithRepair, handleLeakIssue, handleLeakRepairIssues, leakedHandleTokens, type AgentTaskHandler, type ContextSectionProvider } from "../../agents/index.js";
 import { TaskFailure, type RunHandle } from "../../orchestration/index.js";
 import { manuscriptRepo as repo } from "../adapters/db/manuscript-repository.js";
 import { recapRepo, type EpisodeRecapRow } from "../adapters/db/recap-repository.js";
 import { endTail, episodeRecapProposalSchema, handoffText, normalizeRecap, storySoFarText, validateRecap, type EpisodeHandoff, type EpisodeRecapProposal, type StoryEntry } from "../domain/handoff.js";
 import type { Episode, EpisodeEnd, EpisodeTransitionContext } from "../index.js";
-import type { Ports } from "./support.js";
+import { soft, type Ports } from "./support.js";
 
 export const SUMMARIZE_PROMPT_VERSION = "continuity_editor.summarize_episode@0.1.0";
 export const RECAP_SCHEMA_NAME = "EpisodeRecap";
@@ -36,7 +36,8 @@ const HAS_TEXT: readonly Episode["status"][] = ["checking", "polishing", "awaiti
 export const SUMMARIZE_INSTRUCTION = `당신은 연속성 편집자(continuity_editor)입니다. 다음 화 작가가 이 화 끝에서 바로 이어 쓸 수 있게 <manuscript>의 원고를 JSON으로 정리합니다.
 - handoff: 마지막 장면의 장소(place)·시간(time), 그 자리에 있는 인물(present, 이름), 인물들의 몸 상태(physical_state)와 마음 상태(emotional_state), 끝나지 않은 행동이나 회차 끝 훅(open_hook), 원고의 마지막 문장(last_line, 원문 그대로).
 - summary_lines: 이 화에서 일어난 일을 3~5줄로 씁니다. 한 줄에 한 사건, 시간 순서대로 씁니다.
-- 원고에 있는 내용만 씁니다. 추측하거나 다음 화를 예상해 쓰지 않습니다.`;
+- 원고에 있는 내용만 씁니다. 추측하거나 다음 화를 예상해 쓰지 않습니다.
+- 인물·장소는 이름으로 씁니다. 'E7'처럼 E와 숫자로 된 기호는 이름이 아니므로 어느 항목에도 쓰지 않습니다.`;
 
 export const summarizeInputSchema = z
   .object({
@@ -223,6 +224,10 @@ export function createHandoff(ports: Ports) {
       const v = versionId ? await repo.getVersion(db(), scope, versionId) : null;
       if (!v) throw new TaskFailure("internal", "정리할 원고 버전이 없습니다.", false);
       const content = v.content;
+      // 설계 추가 0026 (P1/P3): the recap is fed to every later episode — no handle token in it, except a story token
+      // ("E3 구역"). last_line is a verbatim quote of the text and is handled on its own below.
+      const story = await soft(() => ports.deps.ontology.storyHandleTokens(scope), new Set<string>());
+      const leaksOf = (p: EpisodeRecapProposal) => leakedHandleTokens(p, story, { skipKeys: ["last_line"] });
       const user = [`[EPISODE] no=${ep.episodeNo}${ep.title ? ` title=${ep.title}` : ""} version=${v.id}`, `<manuscript>\n${clipForSummary(content)}\n</manuscript>`].join("\n");
       const r = await callWithRepair({
         llm,
@@ -234,7 +239,7 @@ export function createHandoff(ports: Ports) {
           output: { kind: "object", schemaName: RECAP_SCHEMA_NAME, schema: episodeRecapProposalSchema },
           maxOutputTokens: 2_000,
         },
-        validate: (p) => ({ result: null, issues: validateRecap(p, content) }),
+        validate: (p) => ({ result: null, issues: [...validateRecap(p, content), ...handleLeakRepairIssues(leaksOf(p), "화 정리")] }),
         label: "화 정리 검사",
         critic: "연속성 검사 에이전트",
         instruction: "원고에 근거해 빠진 항목을 채우고 줄거리를 3~5줄로 맞추세요.",
@@ -243,6 +248,10 @@ export function createHandoff(ports: Ports) {
       });
       const recap = normalizeRecap(r.value, content);
       if (!recap.summary_lines.length) throw new TaskFailure("invalid_output", "화 정리에 줄거리가 없습니다.", true);
+      const leaks = leaksOf(recap);
+      if (leaks.length) throw new TaskFailure("invalid_output", `화 정리 ${handleLeakIssue(leaks)}`, true);
+      // a last line that carries a handle is not handed over (the next episode still reads the raw ending in recent_text)
+      if (leakedHandleTokens(recap.handoff.last_line, story).length) recap.handoff.last_line = "";
       return { episodeId: ep.id, versionId: v.id, recap };
     },
     async commit(tx, run, _input, p) {

@@ -359,6 +359,11 @@ export interface OntologyRepository {
   getEntityCards(scope: NovelScope, entityIds: string[], anchor: StoryAnchor, layer: "canon" | "reader" | "pov"): Promise<EntityCard[]>;
   getConstraints(scope: NovelScope, q: { entityIds: string[]; answerIds: string[]; anchor: StoryAnchor }): Promise<FactAtAnchor[]>;
   listEntities(scope: NovelScope, filter?: EntityListFilter, tx?: Tx): Promise<EntityListItem[]>;
+  /**
+   * 설계 추가 0026 (P1): the story tokens of the novel — handle-looking tokens ("E3") inside a live name of an entity a
+   * PERSON created ("E3 구역"). The one source of the exemption for every handle guard; names agents made never count.
+   */
+  storyHandleTokens(scope: NovelScope, tx?: Tx): Promise<Set<string>>;
   getEntityDetail(scope: NovelScope, entityId: string): Promise<EntityDetail>;
   listMentions(
     scope: NovelScope,

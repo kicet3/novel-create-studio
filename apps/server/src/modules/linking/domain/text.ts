@@ -5,6 +5,7 @@
  *  - quotation / speaker heuristic for L1
  *  - deterministic parse of series bible content for build_initial_ontology (07 B2)
  */
+import { handleTokenSpans, isHandleShaped } from "../../agents/index.js";
 import type { InitialOntology } from "./schemas.js";
 
 /**
@@ -162,7 +163,8 @@ export interface DictName {
 
 /** longest-first, non-overlapping verbatim matches (particles after the surface are allowed, N5) */
 export function dictionaryMentions(text: string, names: DictName[]): Array<{ start: number; end: number; surface: string; mentionKind: "named" | "title" }> {
-  const uniq = [...new Map(names.filter((n) => n.surface.length >= 2 || /[가-힣]/.test(n.surface)).map((n) => [n.surface, n])).values()].sort((a, b) => b.surface.length - a.surface.length);
+  // 설계 추가 0026 (P5): a handle-shaped name ("E11") is never matched
+  const uniq = [...new Map(names.filter((n) => (n.surface.length >= 2 || /[가-힣]/.test(n.surface)) && !isHandleShaped(n.surface)).map((n) => [n.surface, n])).values()].sort((a, b) => b.surface.length - a.surface.length);
   const taken: Array<[number, number]> = [];
   const out: Array<{ start: number; end: number; surface: string; mentionKind: "named" | "title" }> = [];
   for (const n of uniq) {
@@ -218,6 +220,18 @@ const SECTIONS: Array<{ keys: string[]; type: string }> = [
   { keys: ["titles", "positions"], type: "title" },
 ];
 
+/**
+ * A nameless rule is named after the start of its sentence. 설계 추가 0026: never with an entity handle in it
+ * ("신규 제안입니다. E1의 성장 조건은" → "신규 제안입니다"); too little left → a neutral name.
+ */
+function ruleNameOf(text: string, no: number): string {
+  const head = text.slice(0, 20);
+  const first = handleTokenSpans(head)[0];
+  if (!first) return head;
+  const cut = head.slice(0, first.start).replace(/[\s.,·:;'"‘“(（[]+$/u, "");
+  return [...cut].length >= 2 ? cut : `세계 규칙 ${no}`;
+}
+
 /** Recognizes common bible content shapes; unknown shapes yield nothing (the LLM output covers them). */
 export function parseBibleContent(content: unknown): InitialOntology {
   const out: InitialOntology = { entities: [], facts: [] };
@@ -268,7 +282,7 @@ export function parseBibleContent(content: unknown): InitialOntology {
         const name = isObj(r) ? (str(r.name) ?? str(r.title)) : null;
         if (!text) continue;
         const key = `r${++seq}`;
-        out.entities.push({ key, entity_type: "rule", name: name ?? text.slice(0, 20), aliases: [], disambiguator: null, summary: text, character_key: null });
+        out.entities.push({ key, entity_type: "rule", name: name ?? ruleNameOf(text, seq), aliases: [], disambiguator: null, summary: text, character_key: null });
         out.facts.push({ subject_key: key, predicate: "rule_statement", value: text, from_story_point: 0 });
       }
     }

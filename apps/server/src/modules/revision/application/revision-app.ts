@@ -24,7 +24,16 @@ import {
   type Tx,
 } from "../../../platform/index.js";
 import type { AuditService } from "../../audit/index.js";
-import { callWithRepair, type AgentsService, type AgentTaskHandler, type ContextPack, type ContextSectionProvider, type RepairIssue } from "../../agents/index.js";
+import {
+  callWithRepair,
+  humanHandleTokens,
+  summarizeIssues,
+  type AgentsService,
+  type AgentTaskHandler,
+  type ContextPack,
+  type ContextSectionProvider,
+  type RepairIssue,
+} from "../../agents/index.js";
 import { createFieldStreamer, createTurnStreamHub, type TurnStreamHub } from "../../concept/index.js";
 import type { ForeshadowService } from "../../foreshadow/index.js";
 import type { ApprovalDecisionContext, HitlService } from "../../hitl/index.js";
@@ -33,10 +42,10 @@ import type { Episode, EpisodeDeleteParticipant, ManuscriptService } from "../..
 import type { MessagingService } from "../../messaging/index.js";
 import type { NovelService } from "../../novel/index.js";
 import type { FactAtAnchor, OntologyService } from "../../ontology/index.js";
-import type { OrchestrationService, RunHandle, TaskKindHandler } from "../../orchestration/index.js";
+import { TaskFailure, type OrchestrationService, type RunHandle, type TaskKindHandler } from "../../orchestration/index.js";
 import { revisionRepo as repo } from "../adapters/db/repository.js";
 import { applyPatches, DEFAULT_MAX_PATCH_RATIO, excerptAround, locatePatches, normalizeText, type TextPatch } from "../domain/patch.js";
-import { ensureNoSourcePhrase, revisionTurnOutputSchema, type RevisionTurnOutput } from "../domain/turn.js";
+import { checkTurnHandles, dropLeakingSourceQuotes, ensureNoSourcePhrase, revisionTurnOutputSchema, TURN_HANDLE_RULE, type RevisionTurnOutput } from "../domain/turn.js";
 import type { FactEffect } from "../domain/reconcile.js";
 import type { LinkingService } from "../../linking/index.js";
 import { createFactReconcile, RECONCILE_PAYLOAD_KIND } from "./fact-reconcile.js";
@@ -313,7 +322,8 @@ export function createRevisionApp(deps: RevisionDeps) {
     if (draft?.runId) {
       const run = await orchestration.getRun(scope, draft.runId).catch(() => null);
       const pack = run?.contextSnapshotId ? await agents.getContextPack(scope, run.contextSnapshotId).catch(() => null) : null;
-      if (pack) promptInputs = clip(pack.messages.map((m) => m.content).join("\n\n"), 6000);
+      // 설계 추가 0026: a pack stored before 0025 (no handles.labels) shows entities as bare handles — never feed it back
+      if (pack && Array.isArray(pack.handles?.labels)) promptInputs = clip(pack.messages.map((m) => m.content).join("\n\n"), 6000);
     }
     return {
       manuscriptText,
@@ -436,10 +446,18 @@ export function createRevisionApp(deps: RevisionDeps) {
         const add = reply.push(ev.text);
         if (add) streams.delta(s.id, run.taskId, add);
       };
-      const validate = async (out: RevisionTurnOutput, round: number) => {
-        const issues: RepairIssue[] = [];
+      // 설계 추가 0026 (P1/P4): symbols inside names a person gave an entity are story text; symbols the author typed in
+      // this thread may be quoted back in the reply body only. A symbol that merely appears in the run's input is NOT exempt.
+      const story = await ontology.storyHandleTokens(scope).catch(() => new Set<string>());
+      const human = humanHandleTokens(...msgs.filter((m) => m.authorKind === "user").map((m) => m.body));
+      const replyAllow = new Set([...story, ...human]);
+      const validate = async (raw: RevisionTurnOutput, round: number) => {
+        const out = dropLeakingSourceQuotes(raw, replyAllow);
+        const handles = checkTurnHandles(out, story, human);
+        const issues: RepairIssue[] = [...handles.issues];
         const proposals: RevisionTurnOutput["proposals"] = [];
         for (const [pi, p] of out.proposals.entries()) {
+          if (handles.proposals.has(pi)) continue;
           if (p.kind === "text_patch") {
             if (!p.patches.length) {
               issues.push({ item: `proposals[${pi}]`, problem: "text_patch에 patches가 없습니다." });
@@ -448,7 +466,7 @@ export function createRevisionApp(deps: RevisionDeps) {
             const r = locatePatches(content.content, p.patches, { maxRatio: DEFAULT_MAX_PATCH_RATIO });
             for (const i of r.issues) issues.push({ item: `proposals[${pi}].patches[${i.idx}]`, problem: i.message, excerpt: clip(p.patches[i.idx]?.quote ?? "", 200) });
             const okIdx = new Set(r.located.map((x) => x.idx));
-            const kept = p.patches.filter((_x, i) => okIdx.has(i));
+            const kept = p.patches.filter((_x, i) => okIdx.has(i) && !handles.patches.get(pi)?.has(i));
             if (kept.length) proposals.push({ ...p, patches: kept });
           } else {
             const fid = p.fact_id?.replace(/^\[?F:/, "").replace(/\]$/, "") ?? null;
@@ -477,7 +495,7 @@ export function createRevisionApp(deps: RevisionDeps) {
           request: {
             run,
             purpose: "revision_chat_turn",
-            system: base.system,
+            system: `${base.system}\n${TURN_HANDLE_RULE}`,
             messages,
             output: { kind: "object", schemaName: "RevisionChatTurn", schema: revisionTurnOutputSchema },
             onStream,
@@ -489,7 +507,10 @@ export function createRevisionApp(deps: RevisionDeps) {
           maxRounds: 2,
           repairPurpose: "revision_chat_turn_repair",
         });
-        // issues still open after the repair rounds: the offending items were dropped (result), the reply stays
+        // issues still open after the repair rounds: the offending items were dropped (result), the reply stays —
+        // except a reply / question that still carries a handle symbol: that text is never stored (retry with feedback)
+        const left = checkTurnHandles(repaired.result, story, human);
+        if (left.blocking) throw new TaskFailure("invalid_output", summarizeIssues("수정 대화 답변 검증", left.issues), true);
         const impacts: Record<string, ImpactPayload> = {};
         const effects: Record<number, FactEffect[]> = {};
         for (const [pi, pr] of repaired.result.proposals.entries()) {

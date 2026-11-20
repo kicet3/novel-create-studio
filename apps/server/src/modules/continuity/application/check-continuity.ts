@@ -9,11 +9,22 @@
 import { z, ZodError } from "zod";
 import { DEFAULTS, type ContinuityIssueKind, type IssueFixScope, type IssueSeverity } from "@ncs/shared";
 import { actors, type NovelScope } from "../../../platform/index.js";
-import type { AgentTaskHandler, ContextPack } from "../../agents/index.js";
+import { callWithRepair, handleLeakRepairIssues, humanHandleTokens, type AgentTaskHandler, type ContextPack } from "../../agents/index.js";
 import type { LlmMessage } from "../../llm/index.js";
 import type { FactAtAnchor, Mention } from "../../ontology/index.js";
 import { TaskFailure, type RunHandle } from "../../orchestration/index.js";
-import { adjustSeverity, continuityReviewSchema, dedupeKeyOf, PENDING_PRIOR_EVIDENCE, RULES, type ContinuityReview } from "../domain/rules.js";
+import {
+  adjustSeverity,
+  continuityReviewSchema,
+  dedupeKeyOf,
+  dropHandleLeaks,
+  findHandleSymbolsByScene,
+  NEUTRAL_ISSUE_MESSAGE,
+  PENDING_PRIOR_EVIDENCE,
+  reviewHandleLeaks,
+  RULES,
+  type ContinuityReview,
+} from "../domain/rules.js";
 import { CHECK_CONTINUITY_KINDS } from "../domain/transitions.js";
 import type { IssueEvidenceInput } from "../index.js";
 import type { EpisodeEnd } from "../../manuscript/index.js";
@@ -62,6 +73,8 @@ export interface Candidate {
   evidenceCanon: string[];
   /** text shown to the LLM */
   prompt: string;
+  /** extra ids of the dedupe hash (what the finding is about when no fact / name evidence carries it) */
+  dedupeIds?: string[];
 }
 
 export interface CheckContinuityProposal {
@@ -115,6 +128,7 @@ export const CHECK_INSTRUCTION = `당신은 웹소설의 연속성 편집자(con
 evidence에 근거 사실 핸들(F1, F2 …)을 1개 이상 적으세요. 근거 사실이 없는 의심은 넣지 마세요.
 [작품 구성]의 결말·현재 부 목표·플롯 핵심 사건·이번 화 계획에서 벗어난 전개는 kind=plan_deviation, evidence ["PLAN"]으로 보고하세요(사실 핸들 불필요).
 ${OPENING_CHECK_INSTRUCTION}
+message와 proposed_fix에는 'E7'처럼 E와 숫자로 된 기호를 쓰지 마세요. 그런 기호는 이름이 아닙니다. 인물·장소는 반드시 이름으로 적고, 기호를 올바른 표기라고 안내하지 마세요(quote만 원고 그대로 옮깁니다).
 [FACTS]에서 "앞 화 승인 대기"로 표시된 사실은 아직 승인 전인 앞 화의 미확정 설정입니다. 이번 화가 그 설정과 모순되면 그 핸들을 근거로 issues에 넣되 severity는 medium 이하로 적으세요. 확정 사실과 미확정 사실이 어긋나면 확정 사실이 우선입니다.`;
 
 /** [PREV_END] block of the review prompt */
@@ -340,6 +354,11 @@ export function checkContinuityHandler(deps: ContinuityPorts, svc: ContinuityInt
     return { candidates, facts: [...allFacts.values()], povKnowledge, entityIds, pendingNo };
   }
 
+  /** 설계 추가 0026 (P1): the only exemption — the novel's story tokens (inside a name a person gave an entity, "E3 구역") */
+  async function storyTokens(scope: NovelScope): Promise<Set<string>> {
+    return typeof deps.ontology.storyHandleTokens === "function" ? orPlaceholder(() => deps.ontology.storyHandleTokens(scope), new Set<string>()) : new Set<string>();
+  }
+
   return {
     kind: "check_continuity",
     role: "continuity_editor",
@@ -366,6 +385,34 @@ export function checkContinuityHandler(deps: ContinuityPorts, svc: ContinuityInt
       const skippedRules: string[] = [];
       const { candidates, facts, povKnowledge, pendingNo } = await prefilter(scope, ctx, input, skippedRules);
       if (skippedRules.length) log.warn({ episodeId: ctx.ep.id, skippedRules }, "check_continuity: ontology port not implemented for some rules");
+
+      // 설계 추가 0026: a handle symbol in the prose is itself a defect (CR-17, deterministic, blocks the gate) — one
+      // issue per scene that has one, so the automatic rewrite reaches every such scene. Text a person typed is theirs.
+      const story = await storyTokens(scope);
+      const typed = ((ctx.version.attributionSpans ?? []) as Array<{ start: number; end: number; actorType: string }>).filter((s) => s.actorType === "user");
+      const symbolFindings = findHandleSymbolsByScene(ctx.version.content, story, ctx.scenes.map((s) => ({ start: s.charStart, end: s.charEnd, id: s.id, ord: s.ord })), typed);
+      symbolFindings.forEach((symbols, i) => {
+        const rule = RULES["CR-17"]!;
+        candidates.push({
+          id: `H${i + 1}`,
+          ruleId: rule.id,
+          kind: rule.kind,
+          severity: rule.severity,
+          needsLlm: rule.llm,
+          message: symbols.message,
+          fixScope: "span",
+          sceneId: symbols.scene?.id ?? null,
+          charStart: symbols.charStart,
+          charEnd: symbols.charEnd,
+          evidence: [{ manuscriptVersionId: ctx.versionId }],
+          entityIds: [],
+          evidenceCanon: [],
+          prompt: "",
+          dedupeIds: [...[...symbols.tokens].sort().map((t) => `handle:${t}`), ...(symbols.scene ? [`scene:${symbols.scene.ord}`] : [])],
+        });
+      });
+      // P4: the review may quote a symbol the author typed into this manuscript
+      const allow = new Set([...story, ...humanHandleTokens(...typed.map((r) => ctx.version.content.slice(r.start, r.end)))]);
 
       // 설계 추가 0019: how N-1 ended — always its LATEST text (full_auto may change it after N started); the stored
       // handoff only when it was made from that text (a stale one is left out)
@@ -394,16 +441,31 @@ export function checkContinuityHandler(deps: ContinuityPorts, svc: ContinuityInt
         .filter((x) => x !== "")
         .join("\n");
       const messages: LlmMessage[] = [...context.messages, { role: "user", content: user }];
-      const out = await llm.call({
-        run,
-        purpose: "check",
-        system: [context.system, CHECK_INSTRUCTION].filter(Boolean).join("\n\n"),
-        messages,
-        output: { kind: "object", schemaName: CONTINUITY_REVIEW_SCHEMA, schema: continuityReviewSchema },
-      });
+      // 설계 추가 0026 (P4): the review's own sentences never carry a handle symbol — critique → correction in the same
+      // conversation; what still leaks afterwards is never stored, and never fails the check either (a gate task that
+      // fails leaves the episode waiting in `checking` with nothing to act on)
       let review: ContinuityReview;
       try {
-        review = continuityReviewSchema.parse(out.value);
+        const repaired = await callWithRepair({
+          llm,
+          request: {
+            run,
+            purpose: "check",
+            system: [context.system, CHECK_INSTRUCTION].filter(Boolean).join("\n\n"),
+            messages,
+            output: { kind: "object", schemaName: CONTINUITY_REVIEW_SCHEMA, schema: continuityReviewSchema },
+          },
+          validate: (value) => ({ result: value, issues: handleLeakRepairIssues(reviewHandleLeaks(value, allow), "검사 결과") }),
+          label: "검사 문장 검증",
+          instruction: "message와 proposed_fix의 기호를 인물·장소의 이름으로 바꿔 쓰세요. quote는 원고 그대로 둡니다.",
+        });
+        review = repaired.value;
+        if (repaired.issues.length) {
+          // an open issue is kept under a neutral message (its kind, quote and evidence still point at the problem)
+          const dropped = dropHandleLeaks(review, allow, NEUTRAL_ISSUE_MESSAGE);
+          log.warn({ episodeId: ctx.ep.id, versionId: ctx.versionId, neutralized: dropped.neutralized, leaks: repaired.issues.length }, "check_continuity: handle symbols left in the review were dropped");
+          review = dropped.review;
+        }
       } catch (err) {
         if (err instanceof ZodError) throw new TaskFailure("invalid_output", "ContinuityReview 출력 형식이 올바르지 않습니다.", true);
         throw err;
@@ -420,6 +482,7 @@ export function checkContinuityHandler(deps: ContinuityPorts, svc: ContinuityInt
         if (m.kind === "plan_deviation") ids.push(`plan:${m.evidence[0]?.arcId ?? ""}:${ctx.scenes.find((x) => x.id === m.sceneId)?.ord ?? "ep"}`);
         // opening continuity: one issue per episode against its predecessor (N-1 versions / wording change per run)
         if (m.kind === "opening_continuity") ids.push(`opening:${prevEnd?.episodeId ?? ""}`);
+        if (m.dedupeIds) ids.push(...m.dedupeIds);
         return {
           kind: m.kind,
           severity,

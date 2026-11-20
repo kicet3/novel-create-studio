@@ -5,7 +5,7 @@
  */
 import { z } from "zod";
 import { actors, NotImplementedError, type NovelScope, type Platform } from "../../../platform/index.js";
-import type { AgentsService, ContextPack, ContextSpec } from "../../agents/index.js";
+import { callWithRepair, handleLeakRepairIssues, humanHandleTokens, leakedHandleTokens, NO_HANDLE_RULE, type AgentsService, type ContextPack, type ContextSpec } from "../../agents/index.js";
 import type { AuditService } from "../../audit/index.js";
 import type { ModelCallPort } from "../../llm/index.js";
 import type { OntologyService } from "../../ontology/index.js";
@@ -47,6 +47,37 @@ async function minimalContext(deps: HitlTaskDeps, run: RunHandle, builderArgs: {
     maxInputTokens: 8000,
     hopPredicates: { hop2: [] },
   });
+}
+
+// ── 설계 추가 0026: the sentences of an interpretation / a grade never keep an entity handle ("E7") ──
+/** id reference fields of an interpretation (never sentences) */
+const INTERPRET_REFS = { skipKeys: ["entity_ids", "subject_entity_id", "object_entity_id", "predicate"] };
+const NEUTRAL_SUMMARY = "답변을 해석했습니다. 아래 항목을 확인해 주세요.";
+
+/**
+ * What the repair round left (P3 / P4): a change whose description still names someone by a handle is dropped, such a
+ * follow-up question is removed, such a summary becomes a neutral line. Nothing with a handle reaches the
+ * interpretation row or the confirmation question. `allow`: story tokens + what the person typed in the answer.
+ */
+export function scrubInterpretation(out: InterpretAnswerOutput, allow: ReadonlySet<string>): InterpretAnswerOutput {
+  const leaks = (v: unknown) => leakedHandleTokens(v, allow).length > 0;
+  if (!leakedHandleTokens(out, allow, INTERPRET_REFS).length) return out;
+  const { followup_question_ko: followup, ...rest } = out;
+  return {
+    ...rest,
+    summary_ko: leaks(out.summary_ko) ? NEUTRAL_SUMMARY : out.summary_ko,
+    changes: out.changes.filter((c) => !leaks(c.description_ko)),
+    ...(followup && !leaks(followup) ? { followup_question_ko: followup } : {}),
+  };
+}
+
+/** story tokens of the novel; none while the ontology is a placeholder */
+async function storyTokensOf(deps: HitlTaskDeps, scope: NovelScope): Promise<Set<string>> {
+  try {
+    return await deps.ontology.storyHandleTokens(scope);
+  } catch {
+    return new Set();
+  }
 }
 
 function parseOutput<T>(schema: z.ZodType<T>, v: unknown): T {
@@ -110,25 +141,39 @@ export function registerHitlTasks(core: HitlCore, deps: HitlTaskDeps, already: {
           const answer = await repo.getAnswer(platform.uow.db, scope, input.answer_id);
           const options = await repo.listOptions(platform.uow.db, scope, root.id);
           const text = input.correction_text ?? (answer?.payload as AnswerPayload | undefined)?.text ?? "";
-          const r = await llm.call<InterpretAnswerOutput>({
-            run,
-            purpose: "interpret",
-            system: `${context.system}\n\n당신은 world_keeper입니다. 사용자의 서술형 답을 작품 변경 후보(사실·제약·작업 변경·이름 규칙)로 해석합니다. 엔티티는 ID로만 가리키고, 모호하면 status=needs_followup과 followup_question_ko를 냅니다. 확인 전에는 아무것도 캐논이 되지 않습니다.`,
-            messages: [
-              ...context.messages,
-              {
-                role: "user",
-                content: JSON.stringify({
-                  question: { title: root.title, body: root.body, options: options.map((o) => ({ idx: o.idx, label: o.label, value: o.value })), recommendation: readRecommendation(root.recommendation).rationale },
-                  answering_question: q.id === root.id ? null : { title: q.title, body: q.body },
-                  answer_text: text,
-                  correction_round: input.round,
-                }),
-              },
-            ],
-            output: { kind: "object", schemaName: "interpret_answer", schema: interpretAnswerOutputSchema as z.ZodType<InterpretAnswerOutput> },
+          // P4: the interpretation may quote a symbol the person typed in the answer; nothing else
+          const allow = new Set([...(await storyTokensOf(deps, scope)), ...humanHandleTokens(text)]);
+          const r = await callWithRepair<InterpretAnswerOutput, null>({
+            llm,
+            request: {
+              run,
+              purpose: "interpret",
+              system: `${context.system}\n\n당신은 world_keeper입니다. 사용자의 서술형 답을 작품 변경 후보(사실·제약·작업 변경·이름 규칙)로 해석합니다. 엔티티는 ID로만 가리키고, 모호하면 status=needs_followup과 followup_question_ko를 냅니다. 확인 전에는 아무것도 캐논이 되지 않습니다. ${NO_HANDLE_RULE}`,
+              messages: [
+                ...context.messages,
+                {
+                  role: "user",
+                  content: JSON.stringify({
+                    question: { title: root.title, body: root.body, options: options.map((o) => ({ idx: o.idx, label: o.label, value: o.value })), recommendation: readRecommendation(root.recommendation).rationale },
+                    answering_question: q.id === root.id ? null : { title: q.title, body: q.body },
+                    answer_text: text,
+                    correction_round: input.round,
+                  }),
+                },
+              ],
+              output: { kind: "object", schemaName: "interpret_answer", schema: interpretAnswerOutputSchema as z.ZodType<InterpretAnswerOutput> },
+            },
+            validate: (v) => {
+              const parsed = interpretAnswerOutputSchema.safeParse(v);
+              return { result: null, issues: parsed.success ? handleLeakRepairIssues(leakedHandleTokens(parsed.data, allow, INTERPRET_REFS), "해석 문장") : [] };
+            },
+            label: "해석 문장 표기 검사",
+            maxRounds: 1,
           });
-          return parseOutput(interpretAnswerOutputSchema, r.value);
+          const out = scrubInterpretation(parseOutput(interpretAnswerOutputSchema, r.value), allow);
+          // a follow-up was needed but its question could not be kept: the next attempt writes it with names
+          if (out.status === "needs_followup" && !out.followup_question_ko) throw new TaskFailure("invalid_output", "후속 질문 문장에 'E숫자' 기호가 남아 있습니다. 인물·장소의 이름으로 다시 쓰세요.", true);
+          return out;
         },
         async commit(tx, run, input, proposal) {
           const res = await core.commitInterpretation(tx, scopeOf(run), { ...input, round: input.round ?? 0 }, run.runId, actors.agent("world_keeper", run.runId), proposal);
@@ -156,11 +201,13 @@ export function registerHitlTasks(core: HitlCore, deps: HitlTaskDeps, already: {
           const r = await llm.call<GradeQuestionOutput>({
             run,
             purpose: "grade",
-            system: `${context.system}\n\n당신은 showrunner입니다. 이 질문의 결정이 결말 방향·아크 목표·주요 인물 생사·승인된 캐논·공개된 캐논에 닿는지 판단합니다. 닿으면 blocking=true와 basis를 냅니다. 확실하지 않으면 blocking=false입니다.`,
+            system: `${context.system}\n\n당신은 showrunner입니다. 이 질문의 결정이 결말 방향·아크 목표·주요 인물 생사·승인된 캐논·공개된 캐논에 닿는지 판단합니다. 닿으면 blocking=true와 basis를 냅니다. 확실하지 않으면 blocking=false입니다. ${NO_HANDLE_RULE}`,
             messages: [...context.messages, { role: "user", content: JSON.stringify({ topic: q.topic, title: q.title, body: q.body, options: options.map((o) => o.label), current_grade: q.grade }) }],
             output: { kind: "object", schemaName: "grade_question", schema: gradeQuestionOutputSchema as z.ZodType<GradeQuestionOutput> },
           });
-          return parseOutput(gradeQuestionOutputSchema, r.value);
+          const out = parseOutput(gradeQuestionOutputSchema, r.value);
+          // 설계 추가 0026 (P3): the reason is appended to the question's grade reason — never with a handle (the grade stays)
+          return leakedHandleTokens(out.reason_ko, await storyTokensOf(deps, scopeOf(run))).length ? { ...out, reason_ko: "" } : out;
         },
         async commit(tx, run, input, proposal) {
           const scope = scopeOf(run);

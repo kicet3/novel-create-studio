@@ -50,6 +50,7 @@ export function createOntologyService(deps: OntologyModuleDeps): OntologyService
 
     // ── entities ──
     listEntities: (scope, filter, tx) => R.listEntities(db(tx), scope, filter),
+    storyHandleTokens: (scope, tx) => E.storyHandleTokensOf(db(tx), scope),
     getEntityDetail: (scope, id) => R.getEntityDetail(db(), scope, id),
     async getEntity(scope, entityId, tx) {
       const id = await resolveId(db(tx), scope, entityId);

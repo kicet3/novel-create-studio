@@ -28,7 +28,8 @@ export type ManuscriptPort = Pick<
   | "registerEpisodeDeleteParticipant"
 >;
 
-export type OntologyPort = Pick<OntologyService, "getSetupLinkedFacts" | "getDefaultTimeline">;
+/** `storyHandleTokens` (설계 추가 0026): the story-token exemption — optional so narrow stubs still work */
+export type OntologyPort = Pick<OntologyService, "getSetupLinkedFacts" | "getDefaultTimeline"> & Partial<Pick<OntologyService, "storyHandleTokens">>;
 export type HitlPort = Pick<HitlService, "createQuestion" | "requestApproval" | "listQuestions" | "getApproval" | "registerAnswerApplier" | "registerApprovalHandler">;
 export type NovelPort = Pick<NovelService, "nextDisplayNo" | "listArcs" | "getArc" | "getNovel">;
 export type OrchestrationPort = Pick<OrchestrationService, "createTask" | "listTasks" | "registerTaskKind">;

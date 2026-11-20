@@ -47,14 +47,14 @@ export interface Harness {
     safetySinks: ManuscriptIssueSink[];
   };
   calls: { advanceCheckGate: string[]; requestArcPlanApproval: string[]; createTask: any[]; createQuestion: any[]; requestApproval: any[] };
-  ontology: { linkedFacts: FactAtAnchor[]; mentions: any[]; leaks: any[]; violations: any[]; canon: FactAtAnchor[]; constraints: FactAtAnchor[] };
+  ontology: { linkedFacts: FactAtAnchor[]; mentions: any[]; leaks: any[]; violations: any[]; canon: FactAtAnchor[]; constraints: FactAtAnchor[]; storyTokens: string[] };
   /** 설계 추가 0019: manuscript.getEpisodeEnd stub (episode no → end) */
   episodeEnds: Map<number, import("../../src/modules/manuscript/index.js").EpisodeEnd>;
   run(tx: Tx): <T>(fn: (tx: Tx) => Promise<T>) => Promise<T>;
   tx<T>(fn: (tx: Tx) => Promise<T>): Promise<T>;
   createArc(from: number, to: number, status?: string): Promise<string>;
   createEpisode(arcId: string, no: number): Promise<string>;
-  createVersion(episodeId: string, content: string, opts?: { isHumanEdit?: boolean; scenes?: Array<[number, number]> }): Promise<{ versionId: string; sceneIds: string[] }>;
+  createVersion(episodeId: string, content: string, opts?: { isHumanEdit?: boolean; scenes?: Array<[number, number]>; typedSpans?: Array<[number, number]> }): Promise<{ versionId: string; sceneIds: string[] }>;
   createRun(kind: string, role: string, targetType: string, targetId: string): Promise<RunHandle & { task: any }>;
   createQuestion(topic?: string, tx?: Tx): Promise<string>;
   createApproval(type: string, subjectType: string, subjectId: string, status?: string, tx?: Tx): Promise<string>;
@@ -110,7 +110,7 @@ export async function createHarness(): Promise<Harness> {
     safetySinks: [],
   };
   const calls: Harness["calls"] = { advanceCheckGate: [], requestArcPlanApproval: [], createTask: [], createQuestion: [], requestApproval: [] };
-  const ont: Harness["ontology"] = { linkedFacts: [], mentions: [], leaks: [], violations: [], canon: [], constraints: [] };
+  const ont: Harness["ontology"] = { linkedFacts: [], mentions: [], leaks: [], violations: [], canon: [], constraints: [], storyTokens: [] };
   const db = () => testDb.db as unknown as Db;
   const episodeEnds: Harness["episodeEnds"] = new Map();
 
@@ -189,6 +189,10 @@ export async function createHarness(): Promise<Harness> {
     },
     async getDefaultTimeline() {
       return { id: timelineId } as any;
+    },
+    // 설계 추가 0026 (P1): story tokens — in the real ontology, tokens inside names a person gave an entity
+    async storyHandleTokens() {
+      return new Set(ont.storyTokens);
     },
     async listMentions() {
       return ont.mentions;
@@ -287,8 +291,8 @@ export async function createHarness(): Promise<Harness> {
       const [{ c }] = (await testDb.query<{ c: number }>(`SELECT count(*)::int AS c FROM manuscript_versions WHERE episode_id = $1`, [episodeId])) as [{ c: number }];
       const versionId = platform.ids.next("mnv");
       await testDb.exec(
-        `INSERT INTO manuscript_versions (id, novel_id, episode_id, version_no, kind, stage, content, char_count_with_spaces, char_count_without_spaces, content_hash, author_actor_type, author_actor_id, is_human_edit)
-         VALUES ('${versionId}', '${n.id}', '${episodeId}', ${Number(c) + 1}, 'draft', 'drafting', '${q(content)}', ${content.length}, ${content.replace(/\s/g, "").length}, 'h${c}', 'user', '${owner.id}', ${opts.isHumanEdit ? "true" : "false"})`,
+        `INSERT INTO manuscript_versions (id, novel_id, episode_id, version_no, kind, stage, content, char_count_with_spaces, char_count_without_spaces, content_hash, author_actor_type, author_actor_id, is_human_edit, attribution_spans)
+         VALUES ('${versionId}', '${n.id}', '${episodeId}', ${Number(c) + 1}, 'draft', 'drafting', '${q(content)}', ${content.length}, ${content.replace(/\s/g, "").length}, 'h${c}', 'user', '${owner.id}', ${opts.isHumanEdit ? "true" : "false"}, '${JSON.stringify((opts.typedSpans ?? []).map(([start, end]) => ({ start, end, actorType: "user", actorId: owner.id, originVersionId: versionId })))}'::jsonb)`,
       );
       await testDb.exec(`UPDATE episodes SET current_version_id = '${versionId}' WHERE id = '${episodeId}'`);
       const [ep] = await testDb.query<{ episode_no: number }>(`SELECT episode_no FROM episodes WHERE id = $1`, [episodeId]);

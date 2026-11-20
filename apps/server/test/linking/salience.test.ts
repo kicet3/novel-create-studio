@@ -83,16 +83,16 @@ describe("decisions", () => {
       { key: "c", surface: "", mentionKind: "named", contexts: [], candidateIds: ["X", "Y"], salience: "candidate", pair: { a: "X", b: "Y" } },
     ];
     const ents = new Map([
-      ["E1", "X"],
-      ["E2", "Y"],
+      ["K1", "X"],
+      ["K2", "Y"],
     ]);
     const types = new Set(["character", "place"]);
     const ok = checkResolution(
       {
         resolutions: [
-          { mention: "M1", action: "add_alias", entity: "E1", confidence: 0.9, rationale: "" },
+          { mention: "M1", action: "add_alias", entity: "K1", confidence: 0.9, rationale: "" },
           { mention: "M2", action: "create_entity", entity_type: "location", confidence: 0.8, rationale: "" },
-          { mention: "M3", action: "merge", merge_with: "E2", confidence: 0.9, rationale: "" },
+          { mention: "M3", action: "merge", merge_with: "K2", confidence: 0.9, rationale: "" },
         ],
       },
       items,

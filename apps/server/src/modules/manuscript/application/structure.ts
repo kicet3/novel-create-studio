@@ -13,7 +13,7 @@ import {
   type StructureView,
 } from "@ncs/shared";
 import { actors, AppError, ConflictError, DomainValidationError, NotFoundError, type ActorRef, type NovelScope, type Tx } from "../../../platform/index.js";
-import type { ContextSectionProvider } from "../../agents/index.js";
+import { callWithRepair, handleLeakIssue, handleLeakRepairIssues, leakedHandleTokens, storyHandleTokens, type ContextPack, type ContextSectionProvider, type RepairIssue } from "../../agents/index.js";
 import type { ApprovalDecisionContext } from "../../hitl/index.js";
 import { normalizeStructure, structureCompleteness, structureTotal, toStoryStructureDto, distribute, type Arc, type StoryStructureWithParts, type StructureProposalInput } from "../../novel/index.js";
 import { TaskFailure } from "../../orchestration/index.js";
@@ -21,10 +21,84 @@ import { manuscriptRepo as repo } from "../adapters/db/manuscript-repository.js"
 import { planStructureInputSchema, structureProposalSchema, type PlanStructureInput, type StructureProposal } from "../domain/schemas.js";
 import { countBasisLabel } from "../domain/text.js";
 import type { ManuscriptService, PlanningRosterEntry } from "../index.js";
-import { promptOf, type PipelineHandler } from "./agent-task.js";
+import { promptOf, type PipelineCall, type PipelineHandler, type PipelineLlm } from "./agent-task.js";
 import type { ManuscriptInternals } from "./manuscript-service.js";
 import { isRetitleTask } from "./episode-units.js";
 import { castPortOf, soft } from "./support.js";
+import type { ModelCallPort, ModelCallWebSearch } from "../../llm/index.js";
+import type { z } from "zod";
+
+// ── 설계 추가 0026: planning text never keeps an entity handle ("E7") ──
+// Planning runs are not shown handle marks, so a handle-looking token in their output cannot be mapped to anyone
+// (it is echoed from older stored text or invented): the answer is sent back for repair and never stored.
+
+/** P7: prompt rule of every planning instruction (planner tone) */
+export const PLAN_NO_HANDLE_RULE = `- 'E7'처럼 E와 숫자로 된 기호는 이름이 아닙니다. 문장에는 절대 쓰지 않고 반드시 인물·장소의 이름으로 씁니다.`;
+/** closing instruction of the repair critique */
+export const PLAN_HANDLE_REPAIR = "문장에 남은 'E숫자' 기호는 모두 인물·장소의 실제 이름으로 바꿔 쓰세요.";
+/** id reference fields of the planning proposals (never sentences) */
+const PLAN_REF_KEYS = ["character_id", "characterId", "involved_character_ids", "source_field_path", "character_key"];
+const PLAN_SCAN = { skipKeys: PLAN_REF_KEYS };
+
+/**
+ * P1: the only handle-looking tokens that are story text for a planning run — the novel's story tokens
+ * (ontology.storyHandleTokens: names a person gave an entity) and those inside a confirmed cast name ("E3 구역").
+ * Never the labels of the run's pack: they include names agents derived from stored text.
+ */
+export function planStoryTokens(story: Iterable<string>, rosterNames: Iterable<string | null | undefined>): Set<string> {
+  return new Set([...story, ...storyHandleTokens(rosterNames)]);
+}
+
+/** P3: repair issues of the handle tokens left in the sentence fields of a planning answer */
+export function planHandleIssues(value: unknown, story: ReadonlySet<string>, label: string): RepairIssue[] {
+  return handleLeakRepairIssues(leakedHandleTokens(value, story, PLAN_SCAN), label);
+}
+
+/** P3: a proposal that still carries a handle token is not handed to commit (invalid_output → retry with feedback) */
+export function rejectPlanHandles(value: unknown, story: ReadonlySet<string>, label: string): void {
+  const leaks = leakedHandleTokens(value, story, PLAN_SCAN);
+  if (leaks.length) throw new TaskFailure("invalid_output", `${label} 검사 실패: ${handleLeakIssue(leaks)}`, true);
+}
+
+/**
+ * P3: a planner call whose answer goes back to the planner (repair dialogue) while a sentence field carries a handle
+ * token; `issues` adds the task's own deterministic checks to the same dialogue. The caller still runs
+ * `rejectPlanHandles` on what it finally proposes (fallback texts included).
+ */
+export async function callPlanText<T>(
+  llm: PipelineLlm,
+  request: PipelineCall<T> & { output: { kind: "object"; schemaName: string; schema: z.ZodType<T> } },
+  o: { story: ReadonlySet<string>; /** what the leak issues name, e.g. "기획서 문장" */ label: string; /** dialogue label (default `<label> 검사`) */ check?: string; issues?: (value: T) => RepairIssue[]; instruction?: string; maxRounds?: number; repairPurpose?: string },
+): Promise<{ value: T; modelId: string; webSearch?: ModelCallWebSearch }> {
+  if (!llm.port) {
+    const out = await llm.call(request);
+    return { value: out.value as T, modelId: out.modelId, ...(out.webSearch ? { webSearch: out.webSearch } : {}) };
+  }
+  // web search belongs to the first call: a repair round only rewrites sentences (no second search), and the sources
+  // the first call found stay with the plan when a repaired answer is the one that is kept
+  const port = llm.port;
+  let searched: ModelCallWebSearch | undefined;
+  let calls = 0;
+  const once: ModelCallPort = {
+    call: async (input) => {
+      const out = await port.call(calls++ === 0 ? input : { ...input, webSearch: undefined });
+      if (out.webSearch?.status === "used") searched ??= out.webSearch;
+      return out;
+    },
+  };
+  const r = await callWithRepair({
+    llm: once,
+    request,
+    validate: (x) => ({ result: null, issues: [...(o.issues?.(x) ?? []), ...planHandleIssues(x, o.story, o.label)] }),
+    label: o.check ?? `${o.label} 검사`,
+    critic: "구성 검사 에이전트",
+    instruction: [o.instruction, PLAN_HANDLE_REPAIR].filter(Boolean).join(" "),
+    ...(o.maxRounds !== undefined ? { maxRounds: o.maxRounds } : {}),
+    ...(o.repairPurpose ? { repairPurpose: o.repairPurpose } : {}),
+  });
+  const webSearch = searched ?? r.output.webSearch;
+  return { value: r.value, modelId: r.output.modelId, ...(webSearch ? { webSearch } : {}) };
+}
 
 const PLAN_STRUCTURE_INSTRUCTION = `당신은 웹소설 기획자(planner)입니다. 승인된 기획서와 확정 캐스트를 바탕으로 작품 전체 구성(1~4부와 결말)을 JSON으로 설계합니다.
 - 결말을 먼저 정하고, 각 부가 결말로 가는 단계가 되게 합니다.
@@ -33,7 +107,8 @@ const PLAN_STRUCTURE_INSTRUCTION = `당신은 웹소설 기획자(planner)입니
 - 인물은 roster의 id(character_id)로만 가리킵니다. 주인공과 서브 주인공마다 부 끝 상태(character_states)와 결말 최종 상태(character_final_states)를 적습니다.
 - 결말에는 세계·갈등의 최종 상태, 갈등이 끝나는 방식, 주인공의 변화(시작 → 끝), 회수할 떡밥을 적습니다.
 - first_appearances에는 인물마다 첫 등장 화를 적습니다. 연령 등급을 넘는 내용은 넣지 않습니다.
-- "기존 구성"이 있으면 사용자 확정(user) 항목은 그대로 두고 나머지만 고칩니다. 반려 사유가 있으면 반영합니다.`;
+- "기존 구성"이 있으면 사용자 확정(user) 항목은 그대로 두고 나머지만 고칩니다. 반려 사유가 있으면 반영합니다.
+${PLAN_NO_HANDLE_RULE}`;
 
 const ACTIVE = ["pending", "ready", "running", "blocked"] as const;
 
@@ -73,7 +148,7 @@ export function storyEpisodeLine(episodeNo: number, u: import("../index.js").Epi
 
 export function createStructure(m: ManuscriptInternals, getService: () => ManuscriptService): StructureApi {
   const { ports } = m;
-  const { novel, orchestration, hitl, platform } = ports.deps;
+  const { novel, orchestration, hitl, ontology, platform } = ports.deps;
   const cast = () => castPortOf(ports.reg);
   const db = () => platform.uow.db;
 
@@ -175,16 +250,22 @@ export function createStructure(m: ManuscriptInternals, getService: () => Manusc
         instructions: input.instructions ?? null,
         rejection_note: input.rejection_note ?? null,
       });
-      const out = await llm.call({
-        run,
-        purpose: "plan_structure",
-        ...promptOf(context, PLAN_STRUCTURE_INSTRUCTION, data),
-        output: { kind: "object", schemaName: "StoryStructureProposal", schema: structureProposalSchema },
-        maxOutputTokens: 12_000,
-        // 설계 추가 0011: facts / genre conventions (novel setting 인터넷 검색); sources stay on the provider call
-        webSearch: true,
-      });
-      const v = out.value as StructureProposal;
+      // 설계 추가 0026: no handle token in the structure text (real entity names such as "E3 구역" are story text)
+      const story = planStoryTokens(await soft(() => ontology.storyHandleTokens(scope), new Set<string>()), roster.map((r) => r.name));
+      const out = await callPlanText<StructureProposal>(
+        llm,
+        {
+          run,
+          purpose: "plan_structure",
+          ...promptOf(context, PLAN_STRUCTURE_INSTRUCTION, data),
+          output: { kind: "object", schemaName: "StoryStructureProposal", schema: structureProposalSchema },
+          maxOutputTokens: 12_000,
+          // 설계 추가 0011: facts / genre conventions (novel setting 인터넷 검색); sources stay on the provider call
+          webSearch: true,
+        },
+        { story, label: "전체 구성 문장" },
+      );
+      const v = out.value;
       const raw: StructureProposalInput = {
         ending: {
           worldState: v.ending.world_state.trim(),
@@ -206,6 +287,7 @@ export function createStructure(m: ManuscriptInternals, getService: () => Manusc
         firstAppearances: v.first_appearances.map((f) => ({ characterId: f.character_id, episodeNo: f.episode_no })),
       };
       const proposal = normalizeStructure(raw, { total, characterIds: roster.map((r) => r.id) });
+      rejectPlanHandles(proposal, story, "전체 구성 문장");
       return { proposal: { ...proposal, scope: input.scope }, modelId: out.modelId, bibleId: bible?.id ?? null };
     },
     async commit(tx, run, _input, p) {

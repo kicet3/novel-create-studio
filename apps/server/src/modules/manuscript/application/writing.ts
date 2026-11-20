@@ -6,7 +6,21 @@
 import type { TaskKind } from "@ncs/shared";
 import { actors, DomainValidationError, type NovelScope, type Tx } from "../../../platform/index.js";
 import { ModelCallError } from "../../llm/index.js";
-import { findHandleTokens, parseHandle, replaceHandleTokens, type ContextPack, type ContextSectionKind } from "../../agents/index.js";
+import {
+  callWithRepair,
+  handleLeakIssue,
+  handleLeakRepairIssues,
+  humanHandleTokens,
+  carriesHandle,
+  findHandleTokens,
+  handleTokenSpans,
+  leakedHandleTokens,
+  parseHandle,
+  rewriteHandlesDeep,
+  type ContextPack,
+  type ContextSectionKind,
+  type HandleLeak,
+} from "../../agents/index.js";
 import type { CommitOutcome, RunHandle } from "../../orchestration/index.js";
 import { manuscriptRepo as repo } from "../adapters/db/manuscript-repository.js";
 import { userRanges } from "../domain/attribution.js";
@@ -14,6 +28,7 @@ import { diffText } from "../domain/diff.js";
 import { deterministicRanges, mapRanges, rangesFromSceneBreaks, rangesFromStarts, type Range } from "../domain/scenes.js";
 import {
   episodeTaskInputSchema,
+  OUTLINE_REF_KEYS,
   outlineDataSchema,
   outlineProposalSchema,
   reworkPlanSchema,
@@ -33,7 +48,7 @@ import {
   countBasisLabel,
   countChars,
   dedupeRewrite,
-  factSignature,
+  factsKept,
   firstSentence,
   guardSceneGrowth,
   guardSceneLength,
@@ -45,7 +60,6 @@ import {
   SCENE_TAIL,
   sceneTargets,
   separatorSceneStarts,
-  signaturesEqual,
   TRAILING_SEPARATOR,
   type LengthCheck,
 } from "../domain/text.js";
@@ -55,7 +69,7 @@ import { applyBlocks, hasSeparatorLine, measureRhythm, rhythmBlocks, rhythmChars
 import type { RhythmPassInfo } from "./manuscript-service.js";
 import { REWORK_TARGET } from "../domain/transitions.js";
 import type { Episode, ManuscriptService, SceneDraft } from "../index.js";
-import { promptOf, type PipelineHandler, type PipelineLlm } from "./agent-task.js";
+import { promptOf, type PipelineCall, type PipelineHandler, type PipelineLlm } from "./agent-task.js";
 import { lengthWarningOf, type ManuscriptInternals } from "./manuscript-service.js";
 import { settings, soft } from "./support.js";
 import { storyEpisodeLine, structureGateRef } from "./structure.js";
@@ -115,25 +129,33 @@ const DRAFT_INSTRUCTION = `당신은 웹소설 작가(writer)입니다. 아웃�
 const CONTINUE_INSTRUCTION = `당신은 웹소설 작가(writer)입니다. 이 화의 초고가 최소 분량보다 짧습니다. 지금까지 쓴 본문 바로 뒤에 이어질 본문만 씁니다.
 - 앞 내용을 반복하거나 요약하지 않고, 이미 쓴 씬을 처음부터 다시 쓰지 않습니다. 아웃라인의 남은 씬을 이어서 쓰고, 씬이 바뀌면 "${SCENE_SEPARATOR}" 한 줄을 둡니다.
 - 부족한 분량만큼만 씁니다. 화 전체가 최대 분량을 넘지 않게 합니다.
+- 인물·장소·조직은 컨텍스트에 적힌 이름으로 부릅니다. 'E7'처럼 영문·숫자로 된 기호나 ID를 이름 자리에 쓰지 않습니다.
 - 제목·메모·설명 없이 이어지는 본문만 출력합니다.`;
+/** 설계 추가 0026 (P7): the one rule every prose rewrite carries — a handle-looking symbol is never a name */
+const NO_SYMBOL_RULE = "'E7'처럼 E와 숫자로 된 기호는 이름이 아닙니다. 본문에 쓰지 않고, 원문에 있으면 컨텍스트에 적힌 인물·장소의 이름으로 고쳐 씁니다.";
 const REVISE_INSTRUCTION = `당신은 웹소설 작가(writer)입니다. 주어진 씬 하나만 다시 씁니다. 지적된 문제를 고치고 앞뒤 씬과 이어지게 씁니다.
 - 원문을 그대로 다시 붙이거나 다음 씬 내용을 이어 쓰지 않습니다. 고친 씬 하나만 씁니다.
+- ${NO_SYMBOL_RULE}
 - 씬 분량은 주어진 목표 분량에 맞춥니다. 씬 본문만 출력합니다.`;
-const POLISH_INSTRUCTION = `당신은 문장 교정자(line_editor)입니다. 주어진 씬의 문장만 다듬습니다. 사건·인물·숫자·고유명사는 바꾸지 않습니다. 분량은 주어진 목표를 넘기지 않습니다. 다듬은 씬 본문만 출력합니다.`;
+const POLISH_INSTRUCTION = `당신은 문장 교정자(line_editor)입니다. 주어진 씬의 문장만 다듬습니다. 사건·인물·숫자·고유명사는 바꾸지 않습니다. 분량은 주어진 목표를 넘기지 않습니다. 다듬은 씬 본문만 출력합니다.
+- ${NO_SYMBOL_RULE}`;
 /** 설계 추가 0017: length adjustment passes (one call per scene; the episode total lands in the profile range) */
 const TRIM_INSTRUCTION = `당신은 분량 편집자(trim)입니다. 주어진 씬을 목표 분량으로 줄입니다.
 - 겹치는 묘사·설명, 늘어지는 대사, 반복되는 내면 독백을 덜어 냅니다.
 - 플롯 비트·떡밥·복선·인물의 행동·회차 말 훅은 남깁니다. 요약문으로 바꾸지 않고 장면으로 씁니다.
-- 사건·인물·숫자·고유명사는 바꾸지 않습니다. 줄인 씬 본문만 출력합니다.`;
+- 사건·인물·숫자·고유명사는 바꾸지 않습니다. 줄인 씬 본문만 출력합니다.
+- ${NO_SYMBOL_RULE}`;
 const EXPAND_INSTRUCTION = `당신은 분량 편집자(expand)입니다. 주어진 씬을 목표 분량으로 늘립니다.
 - 장면 묘사·감각·인물의 내면·대사 주고받기를 보탭니다.
 - 새 사건·새 인물·새 설정을 만들지 않고, 다음 씬 내용을 앞당겨 쓰지 않습니다.
-- 사건·인물·숫자·고유명사는 바꾸지 않습니다. 늘린 씬 본문만 출력합니다.`;
+- 사건·인물·숫자·고유명사는 바꾸지 않습니다. 늘린 씬 본문만 출력합니다.
+- ${NO_SYMBOL_RULE}`;
 /** 설계 추가 0024: targeted rhythm pass — only the flagged paragraph blocks, one call per episode */
 const RHYTHM_INSTRUCTION = `당신은 문장 교정자(line_editor)입니다. 표시된 문단 묶음(block)의 문장 리듬만 고칩니다.
 - 짧은 평서문('~였다. ~다.')이 연달아 끊기는 곳을 연결어미로 잇고, 문장 길이와 어미를 고르게 섞습니다.
 - 사건·사실·인물·숫자·고유명사·대사(따옴표 안)는 바꾸지 않습니다. 내용을 보태거나 빼지 않고 순서를 지킵니다.
 - 묶음마다 분량은 원문의 ±5% 안으로 유지합니다. 앞뒤 문단(before·after)은 맥락일 뿐 고치지 않습니다.
+- ${NO_SYMBOL_RULE}
 - 묶음 번호(block)와 고친 본문(text)만 JSON으로 답합니다. 고칠 필요가 없는 묶음은 빼도 됩니다.`;
 const rhythmRewriteSchema = z.object({ rewrites: z.array(z.object({ block: z.number().int(), text: z.string() })).default([]) });
 /** the most blocks one rhythm pass sends */
@@ -141,13 +163,41 @@ const RHYTHM_MAX_BLOCKS = 40;
 const withRhythm = (instruction: string, mode: ProseRhythm | null | undefined) => `${instruction}
 ${proseRhythmBlock(mode)}`;
 const quotesOf = (t: string) => [...t.matchAll(/["“「『][^"”」』]*["”」』]/gu)].map((m) => m[0]);
-const REWORK_INSTRUCTION = `당신은 쇼러너(showrunner)입니다. 사람이 반려한 사유를 읽고 다시 쓸 씬 번호와 작업 지시를 JSON으로 정합니다. 원고는 쓰지 않습니다.`;
-const SAFETY_INSTRUCTION = `당신은 원고 안전 검수자입니다. 씬마다 (1) 작품 연령 등급을 넘는 성적·폭력·언어 수위 (2) 미성년 인물의 성적 묘사 (3) 실존 인물 사칭·명예훼손이 있는지 판정해 violations JSON으로만 답합니다. 문제가 없으면 빈 배열입니다.`;
+const REWORK_INSTRUCTION = `당신은 쇼러너(showrunner)입니다. 사람이 반려한 사유를 읽고 다시 쓸 씬 번호와 작업 지시를 JSON으로 정합니다. 원고는 쓰지 않습니다. 작업 지시에서 인물·장소는 이름으로 부르고, 'E7'처럼 E와 숫자로 된 기호는 쓰지 않습니다(반려 사유에 적힌 표기를 그대로 옮기는 경우만 예외).`;
+const SAFETY_INSTRUCTION = `당신은 원고 안전 검수자입니다. 씬마다 (1) 작품 연령 등급을 넘는 성적·폭력·언어 수위 (2) 미성년 인물의 성적 묘사 (3) 실존 인물 사칭·명예훼손이 있는지 판정해 violations JSON으로만 답합니다. 문제가 없으면 빈 배열입니다. 판정 근거(rationale)에서 인물·장소는 이름으로 부르고, 'E7'처럼 E와 숫자로 된 기호는 쓰지 않습니다.`;
+const SEGMENT_INSTRUCTION = "본문을 장소·시간·시점 인물이 바뀌는 곳에서 씬으로 나눕니다. 씬마다 시작 위치(char_start)와 한 줄 요약을 JSON으로 답합니다. 요약에서 인물·장소는 이름으로 부르고, 'E7'처럼 E와 숫자로 된 기호는 쓰지 않습니다.";
 
-/** handle-looking tokens of a run's own input (context text without the "[E1]" marks + task data): story text, not handles */
-function inputHandleTokens(context: Pick<ContextPack, "messages">, data: string): Set<string> {
-  const text = context.messages.map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content))).join("\n").replace(/[[(]E\d{1,3}[\])]/g, "");
+
+/**
+ * 설계 추가 0026 (P2): handle-looking tokens a run's own input carries bare (context text without the "[E1]" marks + task
+ * data). They are NOT exempt — they mark tokens whose numbering is not this pack's, so they must not be rewritten with
+ * this pack's labels.
+ */
+export function inputHandleTokens(context: Pick<ContextPack, "messages">, data: string): Set<string> {
+  const text = context.messages.map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content))).join("\n").replace(/[[(（]E\d{1,3}[\])）]/g, "");
   return new Set(findHandleTokens(`${text}\n${data}`));
+}
+
+/**
+ * 설계 추가 0026 (P2) for an outline proposal: handle tokens the planner left in sentences become names through the
+ * pack's labels; `story` tokens stay; `foreign` tokens (carried bare by the run's input) are left as they are — this
+ * pack's label for them could be another person. `left` = what must not be stored (non-empty → reject the answer).
+ */
+export function nameOutlineHandles<T>(draft: T, labels: readonly string[], story: ReadonlySet<string>, foreign: ReadonlySet<string>): { value: T; left: HandleLeak[] } {
+  const named = rewriteHandlesDeep(draft, labels, new Set([...story, ...foreign]), { skipKeys: OUTLINE_REF_KEYS });
+  return { value: named.value, left: leakedHandleTokens(named.value, story, { skipKeys: OUTLINE_REF_KEYS }) };
+}
+
+/**
+ * E7 input of a polish: did the fact-bearing tokens change? 설계 추가 0026: a handle of the checked text ("E7") is no
+ * numeral and the name written in its place no new fact (the fact guard must not refuse symbol → name) — but when
+ * handles did go away, the checked text was extracted without those mentions (P5 drops them), so the new names have
+ * to be extracted and checked: that is a fact change.
+ */
+export function factsChanged(checked: string, final: string, names: readonly string[], story: ReadonlySet<string>): boolean {
+  const leaked = (text: string) => handleTokenSpans(text).filter((t) => !story.has(t.token));
+  const before = leaked(checked);
+  return !factsKept(checked, final, names, before.map((t) => t.token)) || leaked(final).length < before.length;
 }
 
 const ENTITY_ID = /^ent_[0-9A-HJKMNP-TV-Z]{26}$/;
@@ -184,6 +234,32 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
   const skip = (): CommitOutcome => ({ kind: "done", outputRefs: [] });
   /** 설계 추가 0024: the novel's 문장 리듬 setting (prompt rules + metric thresholds) */
   const proseRhythmOf = async (scope: NovelScope): Promise<ProseRhythm> => (await soft(() => novel.getNovel(scope), null))?.proseRhythm ?? "normal";
+  const entityNames = async (scope: NovelScope) => (await soft(() => ontology.listEntities(scope, { limit: 500 }), [])).map((e) => e.preferredName);
+  /**
+   * 설계 추가 0026 (P1): the only handle-looking tokens a stored sentence may keep are the novel's "story tokens" — the
+   * ones inside a name a person gave an entity ("E3 구역"; ontology.storyHandleTokens). A token that merely appears in
+   * the run's input, or in a name an agent derived from stored text, is NOT exempt (it would whitelist a leak forever).
+   */
+  const storyTokens = (scope: NovelScope): Promise<Set<string>> => soft(() => ontology.storyHandleTokens(scope), new Set<string>());
+  /**
+   * 설계 추가 0026 (P3 / P4): a structured answer of a run that was shown no handle marks. A handle token in one of its
+   * sentences cannot be mapped to anyone: the producer gets it back once (repair dialogue), then the run is invalid_output.
+   * `onLeak: "return"`: the caller drops the leaking sentences itself (a check whose verdict must not be lost with them).
+   */
+  const callNamed = async <T,>(llm: PipelineLlm, request: PipelineCall<T> & { output: { kind: "object"; schemaName: string; schema: z.ZodType<T> } }, allow: ReadonlySet<string>, label: string, onLeak: "fail" | "return" = "fail"): Promise<{ value: T; modelId: string }> => {
+    const issuesOf = (v: unknown) => handleLeakRepairIssues(leakedHandleTokens(v, allow), label);
+    if (llm.port) {
+      const r = await callWithRepair({ llm: llm.port, request, validate: (v) => ({ result: null, issues: issuesOf(v) }), label: `${label} 표기 검사`, maxRounds: 1 });
+      if (r.issues.length && onLeak === "fail") throw new ModelCallError("invalid_output", null, undefined, r.issues[0]!.problem);
+      return { value: r.value, modelId: r.output.modelId };
+    }
+    const out = await llm.call(request);
+    const issues = issuesOf(out.value);
+    if (issues.length && onLeak === "fail") throw new ModelCallError("invalid_output", null, undefined, issues[0]!.problem);
+    return { value: out.value as T, modelId: out.modelId };
+  };
+  /** a scene summary an agent stores: never one that carries a handle (the next candidate, else none) */
+  const cleanSummary = (story: ReadonlySet<string>, ...candidates: Array<string | null | undefined>) => candidates.find((c) => !!c && !leakedHandleTokens(c, story).length) ?? "";
 
   /**
    * entity seeds of the writing contexts (04 §9.5 entity_cards / canon_1hop): the cast referenced by the episode's
@@ -316,7 +392,10 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
         countBasis: countBasisLabel(profile.countBasis),
         rework: input.rework_cause ? { cause: input.rework_cause, issues: input.issue_refs ?? [], instructions: input.instructions ?? null } : null,
       });
-      const synth = synthOutline(ep, target, beatIds);
+      // 설계 추가 0026: only a token inside a real entity name ("E3 구역") is story text
+      const story = await storyTokens(scope);
+      // a stored hook note that carries a handle is never the fallback (it would fail this run whatever the model says)
+      const synth = synthOutline(leakedHandleTokens(ep.hookNote, story).length ? { ...ep, hookNote: null } : ep, target, beatIds);
       const out = await llm.call({ run, purpose: "outline", ...promptOf(context, unit ? `${OUTLINE_INSTRUCTION}\n${unitRule(unit, ep.episodeNo)}` : OUTLINE_INSTRUCTION, data), output: { kind: "object", schemaName: "OutlineProposal", schema: outlineProposalSchema } });
       const v = out.value as OutlineProposal;
       const scenes = (v.outline.scenes.length ? v.outline.scenes : synth.outline.scenes).slice(0, cfg.maxScenes);
@@ -344,24 +423,26 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       const missing = beatIds.filter((b) => !assigned.has(b));
       if (missing.length) scenes[Math.floor(scenes.length / 2)]!.setup_beat_ids.push(...missing);
       // 설계 추가 0025: a handle the planner left inside a sentence becomes the entity's name (never reaches the writer)
-      // (a token the planner's own input uses — "E3 구역", "E1급" — is story text, not a handle)
-      const keep = inputHandleTokens(context, data);
-      const left = new Set<string>();
-      const named = (t: string) => {
-        const r = replaceHandleTokens(t, context.handles.labels ?? [], keep);
-        for (const h of r.unresolved) if (!keep.has(h) && Number(h.slice(1)) <= context.handles.entities.length) left.add(h);
-        return r.text;
+      // 설계 추가 0026 (P1/P2): whatever cannot be rewritten with this run's labels is rejected. A token the input
+      // already carried bare (a plan / arc sentence stored with the numbering of another pack) is no exception — and it
+      // is not rewritten either: this pack's label for it would be a different person. It is rejected as it stands.
+      const foreign = inputHandleTokens(context, data);
+      const draft = {
+        summary: v.summary || synth.summary,
+        title: v.title ?? null,
+        outline: {
+          ...v.outline,
+          scenes,
+          // P5 / P1: a handle is never the name of a new entity, nor part of it (never rewritten into another name)
+          new_entity_proposals: (v.outline.new_entity_proposals ?? []).filter((n) => !carriesHandle(n.proposed_name, story)),
+          hook: v.outline.hook || synth.outline.hook,
+        },
       };
-      for (const s of scenes) s.summary = named(s.summary);
-      const outline: OutlineData = outlineDataSchema.parse({
-        ...v.outline,
-        beats: (v.outline.beats ?? []).map((b) => ({ ...b, purpose: named(b.purpose ?? "") })),
-        scenes,
-        hook: named(v.outline.hook || synth.outline.hook),
-        target_chars: targetIn(profile, v.outline.target_chars || target),
-      });
-      const proposal = { summary: named(v.summary || synth.summary), title: v.title ? named(v.title) : ep.title, outline };
-      if (left.size) throw new ModelCallError("invalid_output", null, undefined, `아웃라인 문장에 엔티티 핸들(${[...left].join(", ")})이 남아 있습니다. 문장에는 이름을 써야 합니다.`);
+      const named = nameOutlineHandles(draft, context.handles.labels ?? [], story, foreign);
+      const left = named.left;
+      if (left.length) throw new ModelCallError("invalid_output", null, undefined, `아웃라인 ${handleLeakIssue(left)}`);
+      const outline: OutlineData = outlineDataSchema.parse({ ...named.value.outline, target_chars: targetIn(profile, v.outline.target_chars || target) });
+      const proposal = { summary: named.value.summary, title: named.value.title || ep.title, outline };
       return { outline: proposal, modelId: out.modelId };
     },
     async commit(tx, run, input, p) {
@@ -428,11 +509,12 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       });
       let content = normalizeText(String(out.value)).trim();
       if (!content) throw new ModelCallError("invalid_output", null, undefined, "모델이 빈 초고를 반환했습니다.");
-      // 설계 추가 0025: a handle-looking token the prompt never contained is an invented stand-in for a name
-      const allowed = inputHandleTokens(context, data);
+      // 설계 추가 0025: a handle-looking token is a stand-in for a name, never prose
+      // 설계 추가 0026 (P1/P3): the writer saw no marks, so nothing can be mapped — only story tokens ("E3 구역") pass
+      const story = await storyTokens(scope);
       const assertNamed = (text: string) => {
-        const bad = findHandleTokens(text).filter((h) => !allowed.has(h));
-        if (bad.length) throw new ModelCallError("invalid_output", null, undefined, `본문에 이름 대신 기호(${bad.join(", ")})가 쓰였습니다.`);
+        const bad = leakedHandleTokens(text, story);
+        if (bad.length) throw new ModelCallError("invalid_output", null, undefined, `본문 ${handleLeakIssue(bad)}`);
       };
       assertNamed(content);
       // continuation while short (max attempts, stop when a continuation barely grows the text)
@@ -553,6 +635,7 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
     const lengthKept: string[] = [];
     const count = (t: string) => (limits ? countChars(t, limits.basis) : t.length);
     let projected = limits ? count(base.content) : 0;
+    const story = await storyTokens(scopeOf(run));
     for (const s of scenes) {
       const text = base.content.slice(s.start, s.end);
       out += base.content.slice(pos, s.start);
@@ -569,8 +652,24 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       const lead = /^\s*/.exec(text)![0];
       const trail = lead.length < text.length ? SCENE_TAIL.exec(text)![0] : "";
       const core = text.slice(lead.length, text.length - trail.length);
-      const r = await llm.call({ run, purpose, ...promptOf(context, instruction, payload({ ord: s.ord, summary: s.summary, text })), output: { kind: "text" } });
+      const prompt = promptOf(context, instruction, payload({ ord: s.ord, summary: s.summary, text }));
+      const r = await llm.call({ run, purpose, ...prompt, output: { kind: "text" } });
       let body = normalizeText(String(r.value)).trim();
+      // 설계 추가 0026 (P3): a rewritten scene never carries a handle — the writer gets it back once, then the run is invalid_output
+      let leaks = leakedHandleTokens(body, story);
+      if (leaks.length) {
+        await run.checkpoint();
+        const again = await llm.call({
+          run,
+          purpose: `${purpose}_repair`,
+          system: prompt.system,
+          messages: [...prompt.messages, { role: "assistant", content: body }, { role: "user", content: `${handleLeakIssue(leaks)} 고친 씬 본문만 다시 출력하세요.` }],
+          output: { kind: "text" },
+        });
+        body = normalizeText(String(again.value)).trim();
+        leaks = leakedHandleTokens(body, story);
+        if (leaks.length) throw new ModelCallError("invalid_output", null, undefined, `씬 본문 ${handleLeakIssue(leaks)}`);
+      }
       if (body && /\S/.test(trail)) body = body.replace(TRAILING_SEPARATOR, "").trim();
       if (body && opts.dedupe !== false) body = dedupeRewrite(core, body);
       let next = body ? `${lead}${body}${trail}` : text;
@@ -727,8 +826,8 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       if (phase === "polish") {
         // after polishing: the checked version (polish base) is what the scenes and facts were checked against
         const checked = (await loadVersion(scope, (input as { checked_version_id?: string }).checked_version_id ?? base.parentVersionId)) ?? base;
-        const names = (await soft(() => ontology.listEntities(scope, { limit: 500 }), [])).map((e) => e.preferredName);
-        factDiff = !signaturesEqual(factSignature(checked.content, names), factSignature(final, names));
+        const names = await entityNames(scope);
+        factDiff = factsChanged(checked.content, final, names, await storyTokens(scope));
         sceneDrafts = final === checked.content ? [] : await scenesThrough(scope, ep, checked.content, final);
       }
       return { phase, action, baseVersionId: base.id, before, after: improved ? after : before, improved, content: final, modelId, changed: r.changed, skipped: r.skipped, lengthKept: r.lengthKept, factDiff, sceneDrafts };
@@ -806,7 +905,7 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
         const out = await llm.call({
           run,
           purpose: "scene_segmentation",
-          ...promptOf(context, "본문을 장소·시간·시점 인물이 바뀌는 곳에서 씬으로 나눕니다. 씬마다 시작 위치(char_start)와 한 줄 요약을 JSON으로 답합니다.", JSON.stringify({ expectedScenes: expected, text: v.content })),
+          ...promptOf(context, SEGMENT_INSTRUCTION, JSON.stringify({ expectedScenes: expected, text: v.content })),
           output: { kind: "object", schemaName: "SceneSegmentationResult", schema: sceneSegmentationSchema },
         });
         const seg = out.value as import("../domain/schemas.js").SceneSegmentation;
@@ -816,11 +915,13 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
         summaries = okStarts ? seg.scenes.map((s) => s.summary) : [];
         if (!okStarts) method = "deterministic";
       }
+      // 설계 추가 0026 (P3): a summary that carries a handle (an estimate's, or the first sentence of a text that has one) is not stored
+      const story = await storyTokens(scope);
       const drafts: SceneDraft[] = ranges.slice(0, cfg.maxScenes).map((r, i) => ({
         ord: i + 1,
         charStart: r.start,
         charEnd: r.end,
-        summary: summaries[i] || firstSentence(v.content.slice(r.start, r.end)),
+        summary: cleanSummary(story, summaries[i], firstSentence(v.content.slice(r.start, r.end))),
         povEntityId: outline.scenes[i]?.pov_entity_id ?? undefined,
         locationEntityId: outline.scenes[i]?.location_entity_id ?? undefined,
       }));
@@ -860,14 +961,21 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       const scenes = (await repo.listScenes(db(), scope, ep.id)).filter((s) => s.manuscriptVersionId === v.id);
       const blocks = scenes.length ? scenes.map((s) => ({ ord: s.ord, text: v.content.slice(s.charStart, s.charEnd) })) : [{ ord: 1, text: v.content }];
       // NFR-SAFE-02 real-person list is install data shipped with releases (none bundled in MVP-α)
-      const out = await llm.call({
-        run,
-        purpose: "text_safety",
-        ...promptOf(context, SAFETY_INSTRUCTION, JSON.stringify({ ageRating: n.ageRating, scenes: blocks })),
-        output: { kind: "object", schemaName: "TextSafetyVerdict", schema: safetyVerdictSchema },
-      });
-      const verdict = out.value as SafetyVerdict;
-      return { versionId: v.id, findings: verdict.violations.map((f) => ({ ...f, sceneId: scenes.find((s) => s.ord === f.scene_ord)?.id ?? null })) };
+      // 설계 추가 0026 (P3): the rationale becomes an issue message a person reads — names, never handles
+      // (meta text: a symbol the author typed into the manuscript may be quoted)
+      const typed = userRanges((v.attributionSpans as never) ?? []).map((h) => v.content.slice(h.start, h.end));
+      const allow = new Set([...(await storyTokens(scope)), ...humanHandleTokens(...typed)]);
+      // a rationale that still names someone by a handle after the repair round is dropped — the verdict (kind, scene)
+      // stays: a safety violation is never lost, and the gate never stalls, over the wording of its reason
+      const out = await callNamed<SafetyVerdict>(
+        llm,
+        { run, purpose: "text_safety", ...promptOf(context, SAFETY_INSTRUCTION, JSON.stringify({ ageRating: n.ageRating, scenes: blocks })), output: { kind: "object", schemaName: "TextSafetyVerdict", schema: safetyVerdictSchema as z.ZodType<SafetyVerdict> } },
+        allow,
+        "판정 근거",
+        "return",
+      );
+      const verdict = out.value;
+      return { versionId: v.id, findings: verdict.violations.map((f) => ({ ...f, rationale: leakedHandleTokens(f.rationale, allow).length ? "" : f.rationale, sceneId: scenes.find((s) => s.ord === f.scene_ord)?.id ?? null })) };
     },
     async commit(tx, run, input, p) {
       const scope = scopeOf(run);
@@ -876,7 +984,7 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       if (ep.currentVersionId !== p.versionId) return skip();
       const kept: Array<{ sceneId: string | null; message: string }> = [];
       for (const f of p.findings) {
-        const message = `${f.kind === "safety_age_rating" ? "연령 등급 수위 초과" : f.kind === "safety_minor_sexual" ? "미성년 인물 성적 묘사" : "실존 인물 사칭·명예훼손"} 의심: ${f.rationale}`.slice(0, 1000);
+        const message = `${f.kind === "safety_age_rating" ? "연령 등급 수위 초과" : f.kind === "safety_minor_sexual" ? "미성년 인물 성적 묘사" : "실존 인물 사칭·명예훼손"} 의심${f.rationale ? `: ${f.rationale}` : ""}`.slice(0, 1000);
         const issueId = await ports.openIssue(
           tx,
           scope,
@@ -906,7 +1014,8 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
     const current = await repo.listScenes(db(), scope, ep.id);
     const oldRanges = current.map((x) => ({ start: x.charStart, end: x.charEnd }));
     const mapped = (current.length ? mapRanges(oldRanges, diffText(from, content), content.length) : null) ?? deterministicRanges(content, Math.max(1, current.length));
-    const drafts: SceneDraft[] = mapped.map((rg, i) => ({ ord: i + 1, charStart: rg.start, charEnd: rg.end, summary: current[i]?.summary || firstSentence(content.slice(rg.start, rg.end)) }));
+    const story = await storyTokens(scope);
+    const drafts: SceneDraft[] = mapped.map((rg, i) => ({ ord: i + 1, charStart: rg.start, charEnd: rg.end, summary: current[i]?.summary || cleanSummary(story, firstSentence(content.slice(rg.start, rg.end))) }));
     if (drafts.length) drafts[drafts.length - 1]!.charEnd = content.length;
     return drafts;
   };
@@ -1004,6 +1113,9 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
     }
     const value = rhythmRewriteSchema.safeParse(out.value ?? {});
     const byNo = new Map(blocks.map((b) => [b.no, b]));
+    // 설계 추가 0026 (P3): a rewrite that carries a handle keeps the original block; a handle of the original is no
+    // numeral and the name written in its place no new fact (the fact guard must not refuse symbol → name)
+    const story = await storyTokens(scopeOf(run));
     const accepted: Array<{ start: number; end: number; text: string }> = [];
     const seen = new Set<number>();
     for (const r of value.success ? value.data.rewrites : []) {
@@ -1013,7 +1125,8 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       const text = normalizeText(r.text).trim();
       if (!text || text === b.text || hasSeparatorLine(text)) continue;
       if (!withinLengthBound(b.text, text)) continue;
-      if (!signaturesEqual(factSignature(b.text, names), factSignature(text, names))) continue;
+      if (leakedHandleTokens(text, story).length) continue;
+      if (!factsKept(b.text, text, names, leakedHandleTokens(b.text, story).map((l) => l.token))) continue;
       if (JSON.stringify(quotesOf(b.text)) !== JSON.stringify(quotesOf(text))) continue;
       accepted.push({ start: b.start, end: b.end, text });
     }
@@ -1065,14 +1178,14 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
     // superseded: the episode moved on to another version since this pass was queued
     if (input.manuscript_version_id && input.manuscript_version_id !== base.id) return { rhythm: empty };
     const setting = await proseRhythmOf(scope);
-    const names = (await soft(() => ontology.listEntities(scope, { limit: 500 }), [])).map((e) => e.preferredName);
+    const names = await entityNames(scope);
     const r = await rhythmRewrite(run, llm, context, base, setting, mode, names);
     let factDiff = false;
     let sceneDrafts: SceneDraft[] = [];
     if (mode === "pipeline") {
       // the checked version (polish base) is what the scenes and facts were checked against
       const checked = (await loadVersion(scope, checkedVersionId)) ?? base;
-      factDiff = !signaturesEqual(factSignature(checked.content, names), factSignature(r.content, names));
+      factDiff = factsChanged(checked.content, r.content, names, await storyTokens(scope));
       sceneDrafts = r.content === checked.content ? [] : await scenesThrough(scope, ep, checked.content, r.content);
     }
     return { rhythm: { ...empty, content: r.content, improved: r.improved, info: r.info, factDiff, sceneDrafts, modelId: r.modelId } };
@@ -1163,8 +1276,8 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
         { basis: profile.countBasis, min: Math.max(EPISODE_HARD_MIN_CHARS, profile.minChars), ceiling: Math.max(profile.maxChars, total) },
       );
       const content = normalizeText(r.content);
-      const names = (await soft(() => ontology.listEntities(scope, { limit: 500 }), [])).map((e) => e.preferredName);
-      const factDiff = !signaturesEqual(factSignature(base.content, names), factSignature(content, names));
+      const names = await entityNames(scope);
+      const factDiff = factsChanged(base.content, content, names, await storyTokens(scope));
       const sceneDrafts = await scenesThrough(scope, ep, base.content, content);
       return { content, modelId, baseVersionId: base.id, factDiff, changed: r.changed, skipped: r.skipped, sceneDrafts, rejected: r.rejected, lengthKept: r.lengthKept };
     },
@@ -1207,15 +1320,25 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       const rejection = input.rejection_id ? await repo.getRejection(db(), scope, input.rejection_id) : null;
       const reason = rejection?.reason ?? input.instructions ?? "";
       const scenes = await repo.listScenes(db(), scope, ep.id);
-      const out = await llm.call({
-        run,
-        purpose: "plan_rework",
-        ...promptOf(context, REWORK_INSTRUCTION, JSON.stringify({ reworkFrom: rejection?.reworkFrom ?? input.rework_from, reason, scenes: scenes.map((s) => ({ ord: s.ord, summary: s.summary })) })),
-        output: { kind: "object", schemaName: "ReworkPlan", schema: reworkPlanSchema },
-      });
-      const plan = out.value as ReworkPlan;
+      // 설계 추가 0026 (P4): the instructions go into the next writer run — names only, except what the human who
+      // rejected the episode typed (a quoted "E7" of the rejection reason stays a quote)
+      const allow = new Set([...(await storyTokens(scope)), ...humanHandleTokens(rejection?.reason)]);
+      const out = await callNamed<ReworkPlan>(
+        llm,
+        {
+          run,
+          purpose: "plan_rework",
+          ...promptOf(context, REWORK_INSTRUCTION, JSON.stringify({ reworkFrom: rejection?.reworkFrom ?? input.rework_from, reason, scenes: scenes.map((s) => ({ ord: s.ord, summary: s.summary })) })),
+          output: { kind: "object", schemaName: "ReworkPlan", schema: reworkPlanSchema as z.ZodType<ReworkPlan> },
+        },
+        allow,
+        "작업 지시",
+      );
+      const plan = out.value;
       const sceneIds = scenes.filter((s) => plan.target_scene_ords.includes(s.ord)).map((s) => s.id);
-      return { plan: { ...plan, instructions: plan.instructions || reason }, sceneIds, reason };
+      // the fallback (the reason itself) is used only when it is clean too
+      const instructions = plan.instructions || (leakedHandleTokens(reason, allow).length ? "" : reason);
+      return { plan: { ...plan, instructions }, sceneIds, reason };
     },
     async commit(tx, run, input, p) {
       const scope = scopeOf(run);

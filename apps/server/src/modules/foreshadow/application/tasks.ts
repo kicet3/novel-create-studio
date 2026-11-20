@@ -7,7 +7,7 @@
 import { z, ZodError } from "zod";
 import { DEFAULTS, defaultValue } from "@ncs/shared";
 import { actors, type ActorRef, type NovelScope } from "../../../platform/index.js";
-import { callWithRepair, type AgentTaskHandler, type ContextBuilder, type ContextPack, type ContextSpec } from "../../agents/index.js";
+import { callWithRepair, handleLeakIssue, handleLeakRepairIssues, leakedHandleTokens, NO_HANDLE_RULE, type AgentTaskHandler, type ContextBuilder, type ContextPack, type ContextSpec } from "../../agents/index.js";
 import type { ModelCallPort } from "../../llm/index.js";
 import { TaskFailure, type RunHandle } from "../../orchestration/index.js";
 import { foreshadowRepo as repo } from "../adapters/db/foreshadow-repository.js";
@@ -44,7 +44,23 @@ async function buildSimpleContext(builder: ContextBuilder, run: RunHandle, spec:
   });
 }
 
+/**
+ * 설계 추가 0026 (P1): the only exemption — the novel's story tokens (handle-looking tokens inside a name a person gave an
+ * entity, "E3 구역"). `storyHandleTokens` is optional on the port (narrow stubs).
+ */
+async function storyTokens(deps: ForeshadowPorts, scope: NovelScope): Promise<Set<string>> {
+  return deps.ontology.storyHandleTokens ? orPlaceholder(() => deps.ontology.storyHandleTokens!(scope), new Set<string>()) : new Set<string>();
+}
+/** a diagnostic note of a check / review that still names someone by a handle is not stored (the verdict itself stays) */
+const cleanNote = <T extends string | undefined>(text: T, story: ReadonlySet<string>): T | undefined => (text && leakedHandleTokens(text, story).length ? undefined : text);
+
 // ── plan_setups ──────────────────────────────────────────────────────────
+/**
+ * 설계 추가 0026: fields of a SetupPlan that are not scanned — id references (resolved / validated as ids, never
+ * sentences) and the plan's `rationale` (a comment on the arc text that is not stored in any setup / beat: it is
+ * dropped when it carries a handle instead of sending the whole plan back).
+ */
+const PLAN_REFS = { skipKeys: ["entity_ids", "fact_ids", "setup_id", "rationale"] };
 export const planSetupsInputSchema = z.object({ arc_id: z.string() }).passthrough();
 export type PlanSetupsInput = z.infer<typeof planSetupsInputSchema>;
 export interface PlanSetupsProposal {
@@ -111,14 +127,20 @@ export function planSetupsHandler(deps: ForeshadowPorts, svc: ForeshadowInternal
         ...open.map((s) => `- id=${s.id} ${formatSetupNo(s.displayNo)} "${s.title}" 상태=${s.narrativeStatus} 기한=${s.effectiveDueEpisodeNo ?? "?"}화 중요도=${s.importance}: ${s.description}`),
         "[/OPEN_SETUPS]",
       ].join("\n");
-      const prompt = compose(context, PLAN_INSTRUCTION, user);
+      // 설계 추가 0026 (P7): "E7" style symbols are never written into a setup title / description / beat note
+      const prompt = compose(context, `${PLAN_INSTRUCTION}\n- ${NO_HANDLE_RULE}`, user);
+      // P1/P3: this run is shown no handle marks and its arc text may echo handles of other packs, so a token cannot be
+      // mapped to a name with this pack's labels — it goes back for repair. Only a token inside a real entity name
+      // (of the pack or of the novel: "E3 구역") is story text.
+      const story = await storyTokens(deps, scope);
+      const leaksOf = (p: SetupPlan) => leakedHandleTokens(p, story, PLAN_REFS);
       // 07 §1.3 correction request in the same run, as an agent-to-agent repair dialogue (recorded on the run)
       const repaired = await callWithRepair({
         llm,
         request: { run, purpose: "plan", system: prompt.system, messages: prompt.messages, output: { kind: "object", schemaName: SCHEMA_NAMES.plan, schema: setupPlanSchema } },
         validate: async (p: SetupPlan) => {
           const v = validateSetupPlan(p, await checkContext(scope, arc.id));
-          return { result: v, issues: v.map((x) => ({ item: `[${x.rule}] ${x.target}`, problem: x.message })) };
+          return { result: v, issues: [...v.map((x) => ({ item: `[${x.rule}] ${x.target}`, problem: x.message })), ...handleLeakRepairIssues(leaksOf(p), "떡밥 문장")] };
         },
         label: "떡밥 배치 검사",
         critic: "떡밥 배치 검사 에이전트",
@@ -127,7 +149,11 @@ export function planSetupsHandler(deps: ForeshadowPorts, svc: ForeshadowInternal
         repairPurpose: "repair",
       });
       const plan = setupPlanSchema.parse(repaired.value);
-      if (repaired.issues.length) throw new TaskFailure("invalid_output", `떡밥 배치 검사 실패(에이전트 간 수정 대화 ${repaired.rounds}회 후): ${describeViolations(repaired.result)}`, false);
+      if (leakedHandleTokens(plan.rationale, story).length) delete plan.rationale;
+      if (repaired.result.length) throw new TaskFailure("invalid_output", `떡밥 배치 검사 실패(에이전트 간 수정 대화 ${repaired.rounds}회 후): ${describeViolations(repaired.result)}`, false);
+      // never stored with a handle token left; the next attempt is told why (retry with feedback)
+      const leaks = leaksOf(plan);
+      if (leaks.length) throw new TaskFailure("invalid_output", `떡밥 문장 검사 실패(에이전트 간 수정 대화 ${repaired.rounds}회 후): ${handleLeakIssue(leaks)}`, true);
       return { arcId: arc.id, plan };
     },
     async commit(tx, run, _input, proposal) {
@@ -276,7 +302,13 @@ export function checkSetupsHandler(deps: ForeshadowPorts, svc: ForeshadowInterna
         "",
         ...sceneBlocks,
       ].join("\n");
-      const report = await callObject(llm, run, "check", SCHEMA_NAMES.check, setupCheckReportSchema, compose(context, CHECK_INSTRUCTION, user));
+      const raw = await callObject(llm, run, "check", SCHEMA_NAMES.check, setupCheckReportSchema, compose(context, `${CHECK_INSTRUCTION}\n- note·contradiction_note에는 'E7' 같은 'E숫자' 기호를 쓰지 말고 인물·장소의 이름을 쓰세요. quote는 원고 그대로 둡니다.`, user));
+      // 설계 추가 0026: the notes end up in issue messages — one that carries a handle is dropped (quotes stay verbatim)
+      const story = await storyTokens(deps, scope);
+      const report: SetupCheckReport = {
+        findings: raw.findings.map((f) => ({ ...f, note: cleanNote(f.note, story), contradiction_note: cleanNote(f.contradiction_note, story) })),
+        unplanned: raw.unplanned.map((u) => ({ ...u, note: cleanNote(u.note, story) })),
+      };
       const sceneFallback: SceneSpan[] = scenes.length ? scenes : [];
       const results: BeatResult[] = targets.map((b) => {
         const f = report.findings.find((x) => x.beat_id === b.id);
@@ -399,7 +431,10 @@ export function reviewSetupDueHandler(deps: ForeshadowPorts, svc: ForeshadowInte
         s.description,
         `비트: ${s.beats.map((b) => `${b.kind}@${b.plannedEpisodeNo ?? "?"}화(${b.status})`).join(", ")}`,
       ].join("\n");
-      const review = await callObject(llm, run, "review_due", SCHEMA_NAMES.due, setupDueReviewSchema, compose(context, DUE_INSTRUCTION, user));
+      const raw = await callObject(llm, run, "review_due", SCHEMA_NAMES.due, setupDueReviewSchema, compose(context, `${DUE_INSTRUCTION}\n${NO_HANDLE_RULE}`, user));
+      // 설계 추가 0026: rationale / body become the question text — with a handle left, the built-in wording is used
+      const story = await storyTokens(deps, scope);
+      const review: SetupDueReview = { ...raw, rationale: cleanNote(raw.rationale, story) ?? "", body: cleanNote(raw.body, story) };
       return { setupId: s.id, asOf, due, review };
     },
     async commit(tx, run, _input, p) {

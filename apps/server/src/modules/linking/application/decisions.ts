@@ -3,6 +3,7 @@
  * hitl answer appliers (`entity_disambiguation`, `duplicate_entity`) and the `identity_change` approval handler.
  */
 import { ConflictError, DomainValidationError, NotFoundError, type ActorRef, type NovelScope, type Tx } from "../../../platform/index.js";
+import { carriesHandle, isHandleShaped } from "../../agents/index.js";
 import type { AnswerApplier, ApprovalHandler, HitlService } from "../../hitl/index.js";
 import type { NovelService } from "../../novel/index.js";
 import { normalizedKey, type Mention, type OntologyService } from "../../ontology/index.js";
@@ -25,6 +26,9 @@ export interface DecisionDeps {
 export async function rememberAlias(d: DecisionDeps, tx: Tx, scope: NovelScope, entityId: string, m: Pick<Mention, "surface" | "mentionKind">, actor: ActorRef): Promise<string | null> {
   const surface = m.surface.trim();
   if (!surface || m.mentionKind === "zero" || m.mentionKind === "pronoun" || isCoreferenceOnly(classifySurface(surface, m.mentionKind))) return null;
+  // 설계 추가 0026 (P5 / P1): a leaked entity handle is never an alias, nor a surface that carries one ("E12 일행") —
+  // whoever answered confirmed the link, not that spelling as a name of the story
+  if (carriesHandle(surface, await d.ontology.storyHandleTokens(scope, tx))) return null;
   const e = await d.ontology.getEntity(scope, entityId, tx).catch(() => null);
   if (!e || (e.status !== "active" && e.status !== "candidate")) return null;
   const key = normalizedKey(surface);
@@ -44,6 +48,7 @@ export async function rememberAlias(d: DecisionDeps, tx: Tx, scope: NovelScope, 
 /** 설계 추가 0015 non-entity memory (glossary_terms category non_entity); pronouns are covered by the fixed list */
 export async function rememberNotEntity(d: DecisionDeps, tx: Tx, scope: NovelScope, m: Pick<Mention, "surface" | "mentionKind">, actor: ActorRef, note?: string): Promise<void> {
   if (!m.surface.trim() || m.mentionKind === "zero" || isCoreferenceOnly(classifySurface(m.surface, m.mentionKind))) return;
+  if (isHandleShaped(m.surface)) return; // 설계 추가 0026 (P5): not a word of the story — nothing to remember
   // a name some entity carries is not a generic word
   if ((await d.ontology.findExactNamedEntities(scope, m.surface, {}, tx)).length) return;
   await d.ontology.recordNonEntitySurface(tx, scope, m.surface, actor, note);
@@ -61,9 +66,18 @@ export async function confirmMention(d: DecisionDeps, tx: Tx, scope: NovelScope,
   let entityId: string;
   if (decision.kind === "entity") entityId = decision.entityId;
   else {
+    // 설계 추가 0026 (P5): an entity handle left in the text ("E7") is a reference mark, not somebody new — it is never
+    // created or established as an entity (link the mention to the person it stands for instead)
+    // (P1) nor a surface that carries one ("E12 일행"): made an entity it would exempt its token in every later guard.
+    // A name that really contains such a token is created by a person in the entity editor.
+    const newName = (decision.preferredName || m.surface).trim();
+    if (carriesHandle(newName, await d.ontology.storyHandleTokens(scope, tx))) {
+      throw new DomainValidationError("handle_shaped_name", `'${newName}'에는 이름이 아닌 'E숫자' 기호가 들어 있어 새 엔티티로 만들 수 없습니다. 실제 인물·대상에 연결하거나 엔티티가 아닌 것으로 처리하세요.`, { surface: newName });
+    }
     // "새 인물": reuse the L5 candidate entity when the mention already points at one (EN3(c)), else create (EN2)
     const linked = m.linkedEntityId ? await d.ontology.getEntity(scope, m.linkedEntityId, tx) : null;
-    if (linked && linked.status === "candidate" && m.linkStatus === "new_entity_candidate") {
+    // (a candidate the linker once made out of a handle surface is not reused either: the given name gets its own entity)
+    if (linked && linked.status === "candidate" && m.linkStatus === "new_entity_candidate" && !isHandleShaped(m.surface)) {
       await d.ontology.setEquivalenceCheck(tx, scope, linked.id, { status: "passed", duplicateOf: null });
       await d.ontology.setEntityStatus(tx, scope, linked.id, "active", actor, "새 인물 답변");
       entityId = linked.id;
@@ -139,8 +153,14 @@ export function disambiguationApplier(d: DecisionDeps): AnswerApplier {
     if (!v || v.kind === "hold") return { status: "not_applied", reason: "보류를 선택했습니다", items: [{ changeKind: "no_change", ref: { type: "mention", id: ms[0]!.id }, summary: "연결을 보류합니다" }] };
     const items: Awaited<ReturnType<AnswerApplier>>["items"] = [];
     let newEntityId: string | null = null;
+    const story = await d.ontology.storyHandleTokens(scope, tx);
     for (const m of ms) {
       if (m.linkStatus === "new_entity_candidate" && v.kind === "not_entity") continue; // MN6 only from ambiguous
+      if (v.kind === "new_entity" && !newEntityId && carriesHandle(m.surface, story)) {
+        // 설계 추가 0026 (P5): the mention stays pending — a handle never becomes an entity
+        items.push({ changeKind: "no_change", ref: { type: "mention", id: m.id }, summary: `"${m.surface}"은(는) 이름이 아닌 기호라서 새 엔티티로 만들지 않았습니다` });
+        continue;
+      }
       const decision: Decision =
         v.kind === "entity"
           ? { kind: "entity", entityId: v.entityId! }
@@ -156,6 +176,7 @@ export function disambiguationApplier(d: DecisionDeps): AnswerApplier {
       if (memory && v.kind === "not_entity") await rememberNotEntity(d, tx, scope, m, actor, `Q-${question.displayNo} 답변`);
       items.push({ changeKind: "fact_changed", ref: { type: "mention", id: m.id }, summary: r.entityId ? `"${m.surface}" 연결을 확정했습니다` : `"${m.surface}"은(는) 엔티티가 아닌 것으로 기록했습니다` });
     }
+    if (items.length > 0 && items.every((i) => i.changeKind === "no_change")) return { status: "not_applied", reason: "'E숫자' 기호는 이름이 아니라서 새 엔티티로 만들 수 없습니다", items };
     return { status: "applied", items };
   };
 }

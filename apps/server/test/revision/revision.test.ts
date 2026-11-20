@@ -6,6 +6,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { and, eq } from "@ncs/db/orm";
 import { approvals, episodeAuthorNotes, revisionChatProposals } from "@ncs/db/schema";
+import { handleLeakIssue } from "../../src/modules/agents/index.js";
 import type { ClaudeRequest } from "../support/scripted-claude.js";
 import { scriptPipeline } from "../support/pipeline-script.js";
 import { bindChat, CHAT, createTgEnv, flushOutbox, type TgEnv } from "../messaging/setup.js";
@@ -154,6 +155,36 @@ describe("화별 수정 대화", () => {
     const repairs = chatRequests().slice(-2);
     expect(repairs[0]!.messages.at(-1)!.content).toContain("원고에 그대로 나오지 않습니다");
     expect(repairs[0]!.messages.at(-1)!.content).toContain("25%");
+  });
+
+  it("설계 추가 0026: a handle symbol in the reply or a replacement is sent back; only a symbol the author typed may stay in the reply body", async () => {
+    const { v } = await current();
+    const quote = uniqueSentences(v.content)[0]!;
+    expect((await api("POST", "/messages", { body: "본문의 E9가 누구인지 알려 주고 고쳐 줘" })).status).toBe(201);
+    const before = chatRequests().length;
+    let n = 0;
+    reply((r: ClaudeRequest) => {
+      expect(r.system).toContain("E와 숫자로 된 기호는 이름이 아닙니다");
+      return {
+        reply_text: n++ === 0 ? "E9와 E7은 같은 인물입니다." : "E9는 한결을 가리킵니다.",
+        diagnosis_kind: "style",
+        sources: [{ kind: "plan", ref_id: null, quote: "E7이 눈을 뜬다" }],
+        question: null,
+        proposals: [{ kind: "text_patch", patches: [{ quote, replacement: "E7은 눈을 떴다.", reason: "이름 정리" }], fact_id: null, new_value: null, reason: "" }],
+      };
+    }, 3);
+    const view = await turn();
+    const calls = chatRequests().slice(before);
+    expect(calls).toHaveLength(3);
+    const critique = calls[1]!.messages.at(-1)!.content;
+    expect(critique).toContain("답변 reply_text");
+    expect(critique).toContain(handleLeakIssue(["E7"])); // E9 (typed by the author) is not reported
+    expect(critique).toContain("proposals[0].patches[0] replacement");
+    expect(calls[2]!.messages.at(-1)!.content).not.toContain("답변 reply_text");
+    const msg = view.messages.at(-1);
+    expect(msg.body).toBe("E9는 한결을 가리킵니다.");
+    expect(msg.sources).toEqual([{ kind: "plan", refId: null, quote: null }]); // the quote with a symbol is not stored
+    expect(view.proposals.filter((p: { kind: string; status: string }) => p.kind === "text_patch" && p.status === "pending")).toHaveLength(0);
   });
 
   it("partial accept creates a human-accepted revision version and re-runs extraction; a stale proposal is never applied", async () => {

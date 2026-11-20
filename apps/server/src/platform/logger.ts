@@ -6,7 +6,7 @@ export type { Logger };
 export const REDACT_KEYS = ["token", "botToken", "bot_token", "apiKey", "api_key", "password", "secret", "plaintext", "authorization", "cookie"];
 
 /** Structured logger with secret redaction (NFR-SEC-02). */
-export function createLogger(level = "info", opts: { pretty?: boolean } = {}): Logger {
+export function createLogger(level = "info", opts: { pretty?: boolean; otel?: { write(line: string): void } } = {}): Logger {
   const paths = [
     ...REDACT_KEYS,
     ...REDACT_KEYS.map((k) => `*.${k}`),
@@ -17,11 +17,15 @@ export function createLogger(level = "info", opts: { pretty?: boolean } = {}): L
     "req.headers.authorization",
     "req.headers.cookie",
   ];
-  return pino({
-    level,
-    redact: { paths, censor: "[redacted]" },
-    ...(opts.pretty ? { transport: { target: "pino-pretty", options: { colorize: true, translateTime: "SYS:HH:MM:ss.l" } } } : {}),
-  });
+  const pretty = { target: "pino-pretty", options: { colorize: true, translateTime: "SYS:HH:MM:ss.l" } };
+  const base = { level, redact: { paths, censor: "[redacted]" } };
+  if (opts.otel) {
+    // stdout as before + the same (already redacted) JSON lines to the OpenTelemetry sink (platform/otel-logs.ts)
+    const stdout = opts.pretty ? pino.transport(pretty) : pino.destination(1);
+    const min = level as pino.Level;
+    return pino(base, pino.multistream([{ level: min, stream: stdout }, { level: min, stream: opts.otel }]));
+  }
+  return pino({ ...base, ...(opts.pretty ? { transport: pretty } : {}) });
 }
 
 /** Recursively mask secret-looking keys in arbitrary JSON (used by audit before/after/details). */

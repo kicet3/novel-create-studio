@@ -29,6 +29,11 @@ export const outlineDataSchema = z.object({
   target_chars: z.number().int().min(0).default(0),
 });
 export type OutlineData = z.output<typeof outlineDataSchema>;
+/**
+ * 설계 추가 0026: entity REFERENCE / key fields of an outline — they carry handles or ids and are resolved before
+ * storing; every other string of an outline is a sentence a person reads (never a handle like "E7").
+ */
+export const OUTLINE_REF_KEYS = ["key", "local_key", "pov_entity_id", "location_entity_id", "participant_entity_ids", "timeline_id", "setup_beat_ids", "answer_ids"] as const;
 
 // ── 07 §3.2.1 WriterAnnotations ──
 export const writerAnnotationsSchema = z.object({

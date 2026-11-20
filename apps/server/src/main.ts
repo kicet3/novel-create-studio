@@ -31,6 +31,7 @@ import { DEFAULTS, isLoopbackHost, ulid, type InstallConfig } from "@ncs/shared"
 import { bundleDirName, writeBundle } from "./modules/system/adapters/backup/backup-engine.js";
 import { loadInstallConfig } from "./platform/config.js";
 import { createLogger } from "./platform/logger.js";
+import { createOtelLogSink, otelLogsEnabled } from "./platform/otel-logs.js";
 import { createServerCore, type ServerCore } from "./app-core.js";
 
 export const APP_VERSION = "0.1.0";
@@ -50,7 +51,10 @@ export interface StartServerOptions {
 }
 
 export async function startServer(config: InstallConfig = loadInstallConfig(), opts: StartServerOptions = {}): Promise<StartedServer> {
-  const log = createLogger(config.logging.level, { pretty: process.env.NCS_LOG_PRETTY === "1" });
+  // OpenTelemetry log export is on when a standard OTLP endpoint variable is set (platform/otel-logs.ts)
+  const otel = otelLogsEnabled() ? createOtelLogSink({ serviceVersion: APP_VERSION }) : null;
+  const log = createLogger(config.logging.level, { pretty: process.env.NCS_LOG_PRETTY === "1", ...(otel ? { otel: otel.stream } : {}) });
+  if (otel) log.info({ endpoint: process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT ?? process.env.OTEL_EXPORTER_OTLP_ENDPOINT }, "OpenTelemetry log export enabled");
   const providers = new Set(["anthropic", "claude_code", "openai", "xai", "google", ...(opts.llmAdapters ?? []).map((a) => a.provider)]);
   if (!providers.has(config.llm.provider)) {
     // a provider this server has no adapter for runs on Claude
@@ -146,6 +150,8 @@ export async function startServer(config: InstallConfig = loadInstallConfig(), o
         await database.close();
         fileLock.release();
         log.info("server stopped");
+        // last: flush buffered log records to the collector (bounded by the exporter timeout)
+        await otel?.shutdown();
       })();
       return stopping;
     },

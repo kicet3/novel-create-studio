@@ -13,8 +13,10 @@ import {
   type NovelScope,
   type Tx,
 } from "../../../platform/index.js";
+import { assertNoHandleTokens, findHandleTokens, HandleLeakError, leakedHandleTokens } from "../../agents/index.js";
 import { manuscriptRepo as repo } from "../adapters/db/manuscript-repository.js";
-import { computeSpans, coversExactly, initialSpans, lineAttribution } from "../domain/attribution.js";
+import { authoredHandleTokens, computeSpans, coversExactly, initialSpans, lineAttribution } from "../domain/attribution.js";
+import { OUTLINE_REF_KEYS } from "../domain/schemas.js";
 import { diffText } from "../domain/diff.js";
 import { decideGate } from "../domain/gate.js";
 import { retainSceneIds, storyPoint } from "../domain/scenes.js";
@@ -141,6 +143,9 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
     return updated;
   };
 
+  /** 설계 추가 0026 (P1): story tokens — handle-looking tokens inside a name a person gave an entity ("E3 구역") */
+  const storyTokens = (tx: Tx, scope: NovelScope) => soft(() => ontology.storyHandleTokens(scope, tx), new Set<string>());
+
   // ── versions ────────────────────────────────────────────────────────
   const saveVersion = async (tx: Tx, scope: NovelScope, episodeId: string, input: InternalSaveVersion) => {
     const ep = await mustEpisode(tx, scope, episodeId, true);
@@ -153,17 +158,33 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
     const author = { actorType: input.author.type, actorId: input.author.id };
     let spans: AttributionSpan[];
     let humanSpansChanged = false;
+    let diffedAgainst: string | null = null;
     if (input.inheritSpansFrom) {
       spans = spansOf(input.inheritSpansFrom) ?? initialSpans(content.length, author, id);
     } else if (parent && parent.kind !== "outline" && input.kind !== "outline") {
       const r = computeSpans(spansOf(parent), diffText(parent.content, content), content.length, author, id);
       spans = r.spans;
       humanSpansChanged = r.humanSpansChanged;
+      diffedAgainst = parent.content;
     } else {
       spans = initialSpans(content.length, author, id);
     }
     if (!coversExactly(spans, content.length)) spans = initialSpans(content.length, author, id); // INV-MV-02 safety net
     const agent = input.author.type === "agent" ? input.author : null;
+    if (agent) {
+      // 설계 추가 0026 (P6): last line of defence — text an agent authored is never stored with an entity handle in it
+      // (the task handlers rewrite / reject first; reaching this is a bug upstream). Human edits and the text a version
+      // inherits from its parent are not judged here.
+      const tokens = authoredHandleTokens(content, spans, id, diffedAgainst);
+      // (scanned as a value, never as JSON text: the "n" of an escaped line break would hide the token after it)
+      const refs = input.outlineData != null && leakedHandleTokens(input.outlineData, new Set(), { skipKeys: OUTLINE_REF_KEYS }).length > 0;
+      if (tokens.length || refs) {
+        const story = await storyTokens(tx, scope);
+        const leaks = tokens.filter((t) => !story.has(t)).map((token) => ({ path: "content", token }));
+        if (leaks.length) throw new HandleLeakError(`manuscript version (${input.kind})`, leaks);
+        if (refs) assertNoHandleTokens(input.outlineData, "outline data", story, { skipKeys: OUTLINE_REF_KEYS });
+      }
+    }
     const version = await repo.insertVersion(tx.db, {
       id,
       novelId: scope.novelId,
@@ -239,6 +260,13 @@ export function createManuscriptService(ports: Ports): { service: ManuscriptServ
     }
     if (pos !== version.content.length) throw new DomainValidationError("scene_ranges_invalid", "씬 구간이 본문 전체를 빈틈없이 덮어야 합니다.");
     const old = await repo.lockActiveScenes(tx.db, scope, ep.id);
+    if (actor.type === "agent") {
+      // 설계 추가 0026 (P6): a scene summary an agent writes now never carries an entity handle (summaries the episode
+      // already has are carried over, not written)
+      const had = new Set(old.map((s) => s.summary));
+      const fresh = sorted.map((d) => d.summary).filter((s) => !!s && !had.has(s) && findHandleTokens(s).length > 0);
+      if (fresh.length) assertNoHandleTokens(fresh, "scene summaries", await storyTokens(tx, scope));
+    }
     const oldVersionIds = [...new Set(old.map((s) => s.manuscriptVersionId))];
     const oldContent = oldVersionIds.length === 1 ? (await mustVersion(tx, scope, oldVersionIds[0]!)).content : null;
     const ops = oldContent !== null ? diffText(oldContent, version.content) : [];

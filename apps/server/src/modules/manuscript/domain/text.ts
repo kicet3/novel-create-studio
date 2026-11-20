@@ -3,6 +3,7 @@
  * Counts Unicode code points of the NFC-normalized body. `without_spaces` drops every whitespace char.
  */
 import { EPISODE_HARD_MIN_CHARS, type CountBasis } from "@ncs/shared";
+import { handleTokenSpans } from "../../agents/index.js";
 
 export function normalizeText(text: string): string {
   return text.normalize("NFC").replace(/\r\n?/g, "\n");
@@ -193,5 +194,33 @@ export function factSignature(text: string, names: readonly string[]): Map<strin
 export function signaturesEqual(a: Map<string, number>, b: Map<string, number>): boolean {
   if (a.size !== b.size) return false;
   for (const [k, v] of a) if (b.get(k) !== v) return false;
+  return true;
+}
+
+/**
+ * 설계 추가 0026: fact comparison of a rewrite that may turn entity handles into names. `handles` = the handle tokens
+ * of the original ("E7") that are not story text: they are no numerals ("#7" is no fact) and the name written in
+ * their place is no new fact — numerals stay equal, known names may only be added. Without handles this is
+ * `signaturesEqual` of the two signatures.
+ */
+export function factsKept(original: string, rewritten: string, names: readonly string[], handles: readonly string[] = []): boolean {
+  if (!handles.length) return signaturesEqual(factSignature(original, names), factSignature(rewritten, names));
+  const drop = new Set(handles);
+  const strip = (text: string) => {
+    let out = "";
+    let last = 0;
+    for (const t of handleTokenSpans(text)) {
+      if (!drop.has(t.token)) continue;
+      out += text.slice(last, t.start);
+      last = t.end;
+    }
+    return out + text.slice(last);
+  };
+  const a = factSignature(strip(original), names);
+  const b = factSignature(strip(rewritten), names);
+  for (const k of new Set([...a.keys(), ...b.keys()])) {
+    const [x, y] = [a.get(k) ?? 0, b.get(k) ?? 0];
+    if (k.startsWith("#") ? x !== y : y < x) return false;
+  }
   return true;
 }

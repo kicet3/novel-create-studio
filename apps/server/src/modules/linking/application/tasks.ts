@@ -5,7 +5,7 @@
 import { z } from "zod";
 import { defaultValue } from "@ncs/shared";
 import { NotImplementedError, actors, type ActorRef, type Logger, type NovelScope, type Tx } from "../../../platform/index.js";
-import { callWithRepair, summarizeIssues, type AgentTaskHandler, type AgentsService, type ContextBuilder, type ContextPack } from "../../agents/index.js";
+import { callWithRepair, carriesHandle, isHandleShaped, summarizeIssues, type AgentTaskHandler, type AgentsService, type ContextBuilder, type ContextPack } from "../../agents/index.js";
 import type { AuditService } from "../../audit/index.js";
 import type { HitlService } from "../../hitl/index.js";
 import type { LlmService } from "../../llm/index.js";
@@ -20,6 +20,7 @@ import { agentSettings, commitLinkerResult, disambiguationDraft, duplicateDraft,
 import { runLinker } from "./linker.js";
 import { AGENT_HOLD_TAG, applyPlanToLinker, finishPlan, planExtraction, type ExtractionPlan } from "./agent-resolution.js";
 import { classifySurface, isCoreferenceOnly } from "../domain/salience.js";
+import { extractionHandleIssues, initialOntologyHandleIssues, scrubExtraction, scrubInitialOntology } from "./handle-guard.js";
 
 export interface TaskDeps {
   ontology: OntologyService;
@@ -153,6 +154,8 @@ const EXTRACT_SYSTEM = [
   "- char_start/char_end는 선택 힌트입니다. 씬 본문 첫 글자를 0으로 세며, 본문이 줄바꿈으로 시작하면 그 줄바꿈도 1자로 셉니다. 정확히 셀 수 없으면 비워 둡니다.",
   "- scene_ord는 언급이 실제로 있는 씬의 ord입니다.",
   "- 사실의 주어·목적어가 되는 언급과 각 씬에 처음 등장하는 인물·장소·조직 언급은 빠짐없이 냅니다.",
+  // 설계 추가 0026
+  "- 'E7'처럼 E와 숫자로 된 기호는 이름이 아닙니다. 그런 기호만으로 된 표기는 언급으로 내지 않고, 사실의 value와 identity_assertions의 evidence에도 쓰지 않습니다(인물·장소의 이름으로 씁니다).",
 ].join("\n");
 
 function extractionPrompt(scenes: SceneText[], known: Array<{ surface: string; entityType: string }> = [], entityTypes: string[] = []): string {
@@ -180,14 +183,18 @@ export function extractFactsHandler(deps: TaskDeps): AgentTaskHandler<ExtractInp
       }
       // dictionary of known names (L0 supplement below; also listed to the model so it reuses the canonical surfaces)
       const dict = (await deps.ontology.listEntities(scope, { statuses: ["candidate", "active"], limit: 500 })).map((e) => e.entity);
+      // 설계 추가 0026 (P5): a handle-shaped name ("E11" — a ghost of leaked handles) is never offered or matched
       const dictNames: Array<{ surface: string; nameKind: string; entityType: string }> = [];
-      for (const e of dict) for (const n of await deps.ontology.listEntityNames(scope, e.id)) if (n.status !== "retired" && n.nameKind !== "hidden_variant") dictNames.push({ surface: n.surface, nameKind: n.nameKind, entityType: e.entityType });
+      for (const e of dict) for (const n of await deps.ontology.listEntityNames(scope, e.id)) if (n.status !== "retired" && n.nameKind !== "hidden_variant" && !isHandleShaped(n.surface)) dictNames.push({ surface: n.surface, nameKind: n.nameKind, entityType: e.entityType });
+      // 설계 추가 0026 (P1): the only handle-looking tokens a stored sentence may keep are the novel's story tokens
+      const story = await deps.ontology.storyHandleTokens(scope);
       // P3b: LLM extraction (L0). The server locates every mention (surface + quote; offsets are hints). Mentions it
       // cannot place go back to the producer as a validator critique in the same conversation (agent-to-agent repair).
       const entityTypes = new Set((await deps.ontology.getSchema(scope)).schema.entityTypes.filter((t) => t.enabled).map((t) => t.key as string));
       const check = (value: ExtractionResult) => {
         const c = checkExtraction(scenes, value, { entityTypes });
-        return { result: c, issues: c.issues };
+        // 설계 추가 0026 (P3): a handle token in a fact value / evidence cannot be mapped to anyone → repair
+        return { result: c, issues: [...c.issues, ...extractionHandleIssues(value, story)] };
       };
       const repaired = await callWithRepair({
         llm,
@@ -202,7 +209,9 @@ export function extractFactsHandler(deps: TaskDeps): AgentTaskHandler<ExtractInp
         label: "언급 위치 검증",
         instruction: "각 항목을 원문에 적힌 그대로의 surface와, 그 언급을 포함한 원문 그대로의 quote(10~40자, 한 줄)로 다시 지정하거나, 원문에 없는 언급이면 빼세요.",
       });
-      const extraction = repaired.value;
+      // what the dialogue left is dropped, never stored (설계 추가 0026)
+      const scrubbed = scrubExtraction(repaired.value, story);
+      const extraction = scrubbed.extraction;
       const checked = repaired.result;
       // deterministic check (07 §4.3): unlocated mentions are dropped one by one; only a mostly-unusable answer fails
       const dropped = checked.unlocated.length;
@@ -215,9 +224,17 @@ export function extractFactsHandler(deps: TaskDeps): AgentTaskHandler<ExtractInp
       const mentions: LinkerInputMention[] = [];
       const excerpts: Record<number, string> = {};
       const taken = new Map<number, Array<[number, number]>>();
+      // 설계 추가 0026 (P5 / P1): a surface that is a handle or carries one ("E7", "E12 일행" left in the manuscript) is
+      // not a mention — it never reaches the linker, so it is never a new-entity candidate; facts pointing at it are
+      // skipped with it
+      const handleSurfaces: string[] = [];
       for (const loc of checked.located) {
         const m = extraction.mentions[loc.index]!;
         const sc = sceneByOrd.get(loc.sceneOrd)!;
+        if (carriesHandle(loc.surface, story)) {
+          handleSurfaces.push(loc.surface);
+          continue;
+        }
         taken.set(sc.sceneOrd, [...(taken.get(sc.sceneOrd) ?? []), [loc.start, loc.end]]);
         excerpts[mentions.length] = excerpt(sc.text, loc.start, loc.end);
         mentions.push({
@@ -242,6 +259,11 @@ export function extractFactsHandler(deps: TaskDeps): AgentTaskHandler<ExtractInp
           excerpts[mentions.length] = excerpt(sc.text, hit.start, hit.end);
           mentions.push({ surface: hit.surface, charStart: sc.charOffset + hit.start, charEnd: sc.charOffset + hit.end, sceneId: sc.sceneId, storyPoint: sc.storyPoint, mentionKind: hit.mentionKind, povEntityId: sc.povEntityId ?? null, sceneParticipantEntityIds: sc.participantEntityIds, excerpt: excerpts[mentions.length - 1] });
         }
+      }
+      if (handleSurfaces.length || scrubbed.droppedFacts.length || scrubbed.clearedEvidence) {
+        const guard = { handleSurfaces: [...new Set(handleSurfaces)].slice(0, 20), mentionsDropped: handleSurfaces.length, factsDropped: scrubbed.droppedFacts.length, evidenceCleared: scrubbed.clearedEvidence };
+        run.noteOutputSummary?.("handleGuard", guard);
+        deps.log?.warn({ runId: run.runId, manuscriptVersionId: input.manuscript_version_id, ...guard }, "extract_facts: entity handles left in the manuscript — handle-shaped mentions / leaking facts dropped");
       }
       await run.checkpoint();
       // P3c: linker (L4 through the model port)
@@ -536,19 +558,28 @@ export function buildInitialOntologyHandler(deps: TaskDeps): AgentTaskHandler<Bu
       const scope = { novelId: run.novelId };
       const bible = await deps.novel.getBible(scope, input.series_bible_id);
       const det = parseBibleContent(bible.content);
+      const story = await storyTokens(deps, scope);
       let fromLlm: InitialOntology = { entities: [], facts: [] };
       try {
-        const out = await llm.call({
-          run,
-          purpose: "build_initial_ontology",
-          system: `${context.system ? `${context.system}\n\n` : ""}기획서에서 엔티티와 사실을 추출합니다. 기획서에 적힌 내용만 씁니다. predicate는 스키마 키를 씁니다.`,
-          messages: [...context.messages, { role: "user", content: `<series_bible>\n${bible.contentMd}\n</series_bible>` }],
-          output: { kind: "object", schemaName: "linking_initial_ontology", schema: initialOntologySchema },
+        // 설계 추가 0026 (P3): names / summaries / values with an entity handle go back to the producer; what is left
+        // after the dialogue is dropped at commit (scrubInitialOntology), never stored
+        const out = await callWithRepair({
+          llm,
+          request: {
+            run,
+            purpose: "build_initial_ontology",
+            system: `${context.system ? `${context.system}\n\n` : ""}기획서에서 엔티티와 사실을 추출합니다. 기획서에 적힌 내용만 씁니다. predicate는 스키마 키를 씁니다. 'E7'처럼 E와 숫자로 된 기호는 이름이 아닙니다. 이름·별칭·요약·사실 값에는 쓰지 않고 인물·장소의 이름으로 씁니다.`,
+            messages: [...context.messages, { role: "user", content: `<series_bible>\n${bible.contentMd}\n</series_bible>` }],
+            output: { kind: "object", schemaName: "linking_initial_ontology", schema: initialOntologySchema },
+          },
+          validate: (v) => ({ result: null, issues: initialOntologyHandleIssues(v, story) }),
+          label: "이름·문장 검증",
+          instruction: "기호가 가리키는 인물·장소의 이름을 기획서에서 찾아 쓰고, 알 수 없으면 그 항목을 빼세요.",
         });
-        const v = initialOntologySchema.safeParse(out.value);
-        if (v.success) fromLlm = v.data;
+        fromLlm = out.value;
       } catch (err) {
-        if (!(err instanceof NotImplementedError)) throw err;
+        // a model failure or an answer outside the schema leaves the deterministic entries (as before)
+        if (!(err instanceof NotImplementedError) && !(err instanceof z.ZodError)) throw err;
       }
       // deterministic entries first; LLM adds entities with new names only
       const names = new Set(det.entities.map((e) => `${e.entity_type}|${normalizedKey(e.name)}`));
@@ -563,7 +594,15 @@ export function buildInitialOntologyHandler(deps: TaskDeps): AgentTaskHandler<Bu
   };
 }
 
-export async function commitInitialOntology(deps: TaskDeps, tx: Tx, scope: NovelScope, bibleId: string, p: InitialOntology, actor: ActorRef): Promise<CommitOutcome> {
+/** 설계 추가 0026 (P1): the novel's story tokens (ontology) */
+const storyTokens = (deps: TaskDeps, scope: NovelScope, tx?: Tx): Promise<Set<string>> => deps.ontology.storyHandleTokens(scope, tx);
+
+export async function commitInitialOntology(deps: TaskDeps, tx: Tx, scope: NovelScope, bibleId: string, p0: InitialOntology, actor: ActorRef): Promise<CommitOutcome> {
+  // 설계 추가 0026 (P3 / P5): the bible text may still carry entity handles (copied by the deterministic parse or the
+  // model) — such names, aliases, summaries and fact values are not stored
+  const scrub = scrubInitialOntology(p0, await storyTokens(deps, scope, tx));
+  const p = scrub.ontology;
+  if (p !== p0) deps.log?.warn({ novelId: scope.novelId, bibleId, droppedEntities: scrub.droppedEntities.slice(0, 20), droppedAliases: scrub.droppedAliases, clearedSummaries: scrub.clearedSummaries, droppedFacts: scrub.droppedFacts }, "build_initial_ontology: entity handles in the bible — handle-carrying names / summaries / facts dropped");
   const { schema } = await deps.ontology.getSchema(scope, tx);
   const tl = await deps.ontology.getDefaultTimeline(scope, tx);
   const keyToEntity = new Map<string, string>();

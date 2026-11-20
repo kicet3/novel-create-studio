@@ -26,7 +26,7 @@ export type ContinuityManuscriptPort = Pick<
 >;
 export type ContinuityOntologyPort = Pick<
   OntologyService,
-  "listMentions" | "findIdentityLeaks" | "findSchemaViolations" | "getCanonAt" | "getConstraints" | "knowledgeOf" | "resolveEntityIds" | "factVersionUsage" | "getEntityCards"
+  "listMentions" | "findIdentityLeaks" | "findSchemaViolations" | "getCanonAt" | "getConstraints" | "knowledgeOf" | "resolveEntityIds" | "factVersionUsage" | "getEntityCards" | "storyHandleTokens"
 >;
 
 export interface ContinuityPorts {

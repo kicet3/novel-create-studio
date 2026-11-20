@@ -9,7 +9,7 @@
 import { z } from "zod";
 import type { MentionKind, QuestionTopic } from "@ncs/shared";
 import { actors, DomainValidationError, InvalidTransitionError, savepoint, type ActorRef, type NovelScope, type Tx } from "../../../platform/index.js";
-import type { AgentTaskHandler } from "../../agents/index.js";
+import { carriesHandle, type AgentTaskHandler } from "../../agents/index.js";
 import type { AnswerApplier, Question } from "../../hitl/index.js";
 import { normalizedKey, type Mention } from "../../ontology/index.js";
 import type { CommitOutcome } from "../../orchestration/index.js";
@@ -217,7 +217,7 @@ export async function planBacklog(deps: BacklogDeps, run: Parameters<AgentTaskHa
   if (items.length && llm) {
     const entities = await resolverEntities(deps.ontology, scope);
     for (const e of entities) typeOf.set(e.entityId, { type: e.entityType, status: e.status });
-    const out = await resolveMentions({ llm, run, items, entities, entityTypes, system: context?.system, messages: context?.messages, log: deps.log });
+    const out = await resolveMentions({ llm, run, items, entities, entityTypes, system: context?.system, messages: context?.messages, story: await deps.ontology.storyHandleTokens(scope), log: deps.log });
     proposal.calls = out.calls;
     for (const it of items) {
       const ts = itemTargets.get(it.key)!;
@@ -278,10 +278,18 @@ async function applyMentionDecision(deps: BacklogDeps, tx: Tx, scope: NovelScope
   if (ms.length === 0) return { status: "not_applied", reason: "이미 처리된 언급입니다", items: [] };
   const items: Awaited<ReturnType<AnswerApplier>>["items"] = [];
   const newType = a.entityType || "character";
+  let handleSkipped = 0;
+  const story = await deps.ontology.storyHandleTokens(scope, tx);
   for (const m of ms) {
     if (a.kind === "not_entity" && m.linkStatus === "new_entity_candidate") continue; // MN6 only from ambiguous
     let decision: Parameters<typeof confirmMention>[4];
-    const name = a.canonicalName || m.surface;
+    // 설계 추가 0026 (P5 / P1): a canonical name that is a handle or carries one is not used; such a surface never
+    // becomes an entity
+    const name = (a.canonicalName && !carriesHandle(a.canonicalName, story) ? a.canonicalName : null) || m.surface;
+    if (a.kind === "new_entity" && carriesHandle(name, story)) {
+      handleSkipped++;
+      continue;
+    }
     const createdKey = `${newType}|${normalizedKey(name)}`;
     if (a.kind === "entity") decision = { kind: "entity", entityId: a.entityId! };
     else if (a.kind === "new_entity") {
@@ -299,6 +307,7 @@ async function applyMentionDecision(deps: BacklogDeps, tx: Tx, scope: NovelScope
     if (a.kind === "not_entity" && a.source === "agent") await rememberNotEntity(deps, tx, scope, m, actor, a.rationale);
     items.push({ changeKind: "fact_changed", ref: { type: "mention", id: m.id }, summary: r.entityId ? `"${m.surface}" 연결을 확정했습니다(에이전트)` : `"${m.surface}"은(는) 엔티티가 아닌 것으로 기록했습니다(에이전트)` });
   }
+  if (items.length === 0 && handleSkipped > 0) return { status: "not_applied", reason: "'E숫자' 기호는 이름이 아니라서 새 엔티티로 만들 수 없습니다", items };
   return { status: "applied", items };
 }
 

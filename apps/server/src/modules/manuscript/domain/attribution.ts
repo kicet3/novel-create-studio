@@ -3,6 +3,7 @@
  *   1. diff parent → new  2. unchanged ranges inherit the parent span  3. inserted ranges get the new
  *   author + origin = new version  4. merge neighbours, check full coverage  6. detect changed user spans.
  */
+import { handleTokenSpans } from "../../agents/index.js";
 import type { AttributionSpan } from "../index.js";
 import type { DiffOp } from "./diff.js";
 
@@ -32,6 +33,30 @@ export function coversExactly(spans: readonly AttributionSpan[], length: number)
     pos = s.end;
   }
   return pos === length;
+}
+
+/**
+ * 설계 추가 0026 (P6): the handle-looking tokens ("E7") that touch text version `versionId` authored itself.
+ * Inherited spans (a human's edit, an earlier version) are not this version's text and are not judged again.
+ * `parentContent`: the text the version was diffed against. A large rewrite makes the diff fall back to one
+ * delete + insert (diffText maxEdits), which attributes untouched scenes in between to the new version — so a token
+ * counts only when the version also has MORE of it than its parent (an inherited token is never "written" again).
+ */
+export function authoredHandleTokens(content: string, spans: readonly AttributionSpan[], versionId: string, parentContent?: string | null): string[] {
+  const own = spans.filter((s) => s.originVersionId === versionId);
+  const count = (text: string) => {
+    const n = new Map<string, number>();
+    for (const t of handleTokenSpans(text)) n.set(t.token, (n.get(t.token) ?? 0) + 1);
+    return n;
+  };
+  const now = count(content);
+  const before = parentContent != null ? count(parentContent) : null;
+  const out = new Set<string>();
+  for (const t of handleTokenSpans(content)) {
+    if (before && (now.get(t.token) ?? 0) <= (before.get(t.token) ?? 0)) continue;
+    if (own.some((s) => s.start < t.end && t.start < s.end)) out.add(t.token);
+  }
+  return [...out];
 }
 
 export function initialSpans(length: number, author: SpanAuthor, versionId: string): AttributionSpan[] {

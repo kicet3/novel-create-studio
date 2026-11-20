@@ -16,7 +16,7 @@
 import type { MentionKind } from "@ncs/shared";
 import type { ActorRef, Logger, NovelScope, Tx } from "../../../platform/index.js";
 import type { AuditService } from "../../audit/index.js";
-import type { ContextPack } from "../../agents/index.js";
+import { carriesHandle, isHandleShaped, type ContextPack } from "../../agents/index.js";
 import type { ModelCallPort } from "../../llm/index.js";
 import type { NovelService } from "../../novel/index.js";
 import { normalizedKey, type OntologyService } from "../../ontology/index.js";
@@ -70,8 +70,12 @@ export async function resolverEntities(ontology: OntologyService, scope: NovelSc
   const list = await ontology.listEntities(scope, { statuses: ["candidate", "active"], limit: 500 }, tx);
   const out: ResolverEntity[] = [];
   for (const { entity: e, preferredName } of list) {
-    const names = (await ontology.listEntityNames(scope, e.id, tx)).filter((n) => n.status !== "retired" && n.nameKind !== "hidden_variant").map((n) => n.surface);
-    out.push({ entityId: e.id, entityType: e.entityType, status: e.status, names: [preferredName, ...names.filter((n) => n !== preferredName)], summary: e.summary, disambiguator: e.disambiguator });
+    const live = (await ontology.listEntityNames(scope, e.id, tx)).filter((n) => n.status !== "retired" && n.nameKind !== "hidden_variant").map((n) => n.surface);
+    // 설계 추가 0026 (P5): a handle-shaped name ("E11") is not a name — an entity that has nothing else (a ghost made
+    // from a leaked handle) is never offered as a link target
+    const names = [preferredName, ...live.filter((n) => n !== preferredName)].filter((n) => !isHandleShaped(n));
+    if (!names.length) continue;
+    out.push({ entityId: e.id, entityType: e.entityType, status: e.status, names, summary: e.summary, disambiguator: e.disambiguator });
   }
   return out;
 }
@@ -172,7 +176,7 @@ export async function planExtraction(
   if (items.length) {
     const entities = await resolverEntities(deps.ontology, scope);
     for (const e of entities) if (!ents.has(e.entityId)) ents.set(e.entityId, { id: e.entityId, entityType: e.entityType, status: e.status } as never);
-    const out = await resolveMentions({ llm, run, items, entities, entityTypes: input.entityTypes, system: input.context?.system, messages: input.context?.messages, log: deps.log });
+    const out = await resolveMentions({ llm, run, items, entities, entityTypes: input.entityTypes, system: input.context?.system, messages: input.context?.messages, story: await deps.ontology.storyHandleTokens(scope), log: deps.log });
     plan.calls = out.calls;
     plan.failed = out.failed;
     for (const { key, g } of pending) {
@@ -216,6 +220,7 @@ export async function applyPlanToLinker(deps: ResolutionDeps, tx: Tx, scope: Nov
     r.newEntities = r.newEntities!.filter((n) => n.mentionIndex !== i);
     r.reportHold = r.reportHold!.filter((x) => x !== i);
   };
+  const story = await deps.ontology.storyHandleTokens(scope, tx);
   const note = (e: PlanEntry) => `에이전트 판정(${e.source}, ${e.confidence.toFixed(2)}): ${e.rationale}`.slice(0, 500);
   const applied: PlanEntry[] = [];
   for (const e0 of plan.entries) {
@@ -243,7 +248,10 @@ export async function applyPlanToLinker(deps: ResolutionDeps, tx: Tx, scope: Nov
         }
         case "create": {
           const type = e.entityType ?? r.newEntities!.find((n) => n.mentionIndex === i)?.entityType ?? "character";
-          const name = e.canonicalName?.trim() || m.surface;
+          // 설계 추가 0026 (P5 / P1): a canonical name that is a handle or carries one (a plan made before the resolver
+          // check) is not used
+          const canonical = e.canonicalName?.trim();
+          const name = canonical && !carriesHandle(canonical, story) ? canonical : m.surface;
           drop(i);
           r.newEntities!.push({ mentionIndex: i, entityType: type, surface: name });
           r.agentCreatedKeys!.push(`${type}|${normalizedKey(name)}`);

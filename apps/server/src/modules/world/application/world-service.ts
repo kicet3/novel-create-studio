@@ -20,7 +20,7 @@ import { ENUMS, labelKo, type WorldItemDto, type WorldItemKind, type WorldOntolo
 import type { WorldOntologyItemsRow } from "@ncs/db/schema";
 import { ConflictError, DomainValidationError, NotImplementedError, actors, type ActorRef, type NovelScope, type Platform, type Tx } from "../../../platform/index.js";
 import type { AuditService } from "../../audit/index.js";
-import type { AgentTaskHandler, AgentsService, ContextPack } from "../../agents/index.js";
+import { handleLeakIssue, isHandleShaped, leakedHandleTokens, type AgentTaskHandler, type AgentsService, type ContextPack } from "../../agents/index.js";
 import type { ConceptService } from "../../concept/index.js";
 import type { LlmCitation, LlmService } from "../../llm/index.js";
 import type { NovelService, NovelStatusChangedContext } from "../../novel/index.js";
@@ -82,7 +82,11 @@ const RULES = `## 세계관 온톨로지 작성 규칙
 - 인물(등장인물)은 새로 만들지 않습니다. 인물은 목록에 X 키가 있을 때만 관계에 씁니다.
 - 브리프와 모순되는 설정을 만들지 않습니다. 브리프에 없는 설정은 브리프의 장르·분위기에 맞는 제안으로 냅니다. 실존 인물·실존 단체를 작품 속 세력으로 쓰지 않습니다.
 - 분량: 분류마다 2~8개, 관계는 꼭 필요한 것만 20개 이내, 요약은 1~2문장. 한국어로 씁니다.
+- 'E7'처럼 E와 숫자로 된 기호는 이름이 아닙니다. 이름·별칭·요약·규칙 문장에는 쓰지 않고 인물·장소의 이름으로 씁니다.
 - 바깥 사실(역사·제도·지리·장르 관습)을 웹 검색으로 확인해 반영한 항목은 source_urls에 실제로 참고한 URL을 적습니다. 검색하지 않았으면 빈 배열입니다. 검색 결과를 반영했다면 sources_note 끝에 '출처:' 목록을 붙입니다.`;
+
+/** proposal fields that carry keys / URLs (resolved or cited, never read as sentences) — 설계 추가 0026 */
+const WORLD_REFERENCE_KEYS = ["key", "parent_key", "place_key", "participant_keys", "subject_key", "object_key", "predicate", "source_urls", "sources_note"];
 
 export function createWorldService(deps: WorldServiceDeps) {
   const { platform, ontology, orchestration, concept, novel } = deps;
@@ -251,6 +255,10 @@ export function createWorldService(deps: WorldServiceDeps) {
       });
       const v = worldProposalSchema.safeParse(out.value);
       if (!v.success) throw new TaskFailure("invalid_output", "세계관 온톨로지 응답 형식이 올바르지 않습니다.", true);
+      // 설계 추가 0026 (P3): this task is shown no entity handles, so a handle token in a name / summary / statement cannot
+      // be mapped to anyone — the answer is not stored and the next attempt is told why. Keys and URLs are references.
+      const leaks = leakedHandleTokens(v.data, await ontology.storyHandleTokens(scope), { skipKeys: WORLD_REFERENCE_KEYS });
+      if (leaks.length) throw new TaskFailure("invalid_output", `세계관 온톨로지 응답의 ${[...new Set(leaks.map((l) => l.path))].slice(0, 3).join(", ")}: ${handleLeakIssue(leaks)}`, true);
       return {
         raw: v.data,
         existing,
@@ -299,6 +307,7 @@ export function createWorldService(deps: WorldServiceDeps) {
 
     // (1) entities: reuse same-name entities (never overwrite kept ones), refresh untouched AI candidates, create the rest
     for (const e of norm.entities) {
+      if (isHandleShaped(e.name)) continue; // 설계 추가 0026 (P5): a handle is never an entity (its relations drop with it)
       const nameKey = `${e.entityType}|${normalizedKey(e.name)}`;
       // the author rejected this one before: never bring it back as a new candidate (its relations drop with it)
       if (rejected.keys.has(nameKey) || e.aliases.some((a) => rejected.keys.has(`${e.entityType}|${normalizedKey(a)}`))) {
@@ -330,7 +339,7 @@ export function createWorldService(deps: WorldServiceDeps) {
           status: "candidate",
           summary: e.summary || null,
           source: { kind: "system_derived", refType: "task", refId: task.id },
-          names: e.aliases.map((a) => ({ surface: a, nameKind: "alias" as const, status: "proposed" as const, source: { kind: "system_derived" as const, refType: "task" as const, refId: task.id } })),
+          names: e.aliases.filter((a) => !isHandleShaped(a)).map((a) => ({ surface: a, nameKind: "alias" as const, status: "proposed" as const, source: { kind: "system_derived" as const, refType: "task" as const, refId: task.id } })),
         },
         actor,
       );

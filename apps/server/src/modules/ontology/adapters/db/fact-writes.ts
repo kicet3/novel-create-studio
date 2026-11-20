@@ -39,6 +39,7 @@ import {
   textArray,
   type OntoDeps,
 } from "./common.js";
+import { leakedHandleTokensOf } from "./entities.js";
 
 const LIVE: CanonStatus[] = ["candidate", "approved", "published_locked"];
 
@@ -71,6 +72,14 @@ export async function writeCandidateFacts(d: OntoDeps, tx: Tx, scope: NovelScope
     if (dr.factKind === "knowledge" && !dr.knowledgeStance) {
       result.rejected.push({ index: i, reason: "knowledge_stance_required" });
       continue;
+    }
+    // 설계 추가 0026 (P6): an agent-written value never keeps an entity handle ("E7의 스승") — a person may type anything
+    if (actor.type === "agent" && dr.value != null) {
+      const leaks = await leakedHandleTokensOf(tx.db, scope, dr.value);
+      if (leaks.length) {
+        result.rejected.push({ index: i, reason: `handle_token_in_value:${leaks.slice(0, 3).join(",")}` });
+        continue;
+      }
     }
     const written: Record<string, string> = {};
     const subj = dr.subjectEntityId ? (resolved.get(dr.subjectEntityId) ?? null) : null;

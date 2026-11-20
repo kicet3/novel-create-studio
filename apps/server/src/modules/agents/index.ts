@@ -187,7 +187,24 @@ export interface AgentsService {
  */
 export { callWithRepair, formatCritique, summarizeIssues, repairDialoguesOfRun } from "./application/repair-dialogue.js";
 export type { RepairIssue, RepairVerdict, RepairDialogueOptions, RepairDialogueResult } from "./application/repair-dialogue.js";
-export { findHandleTokens, replaceHandleTokens } from "./domain/handle-text.js";
+export {
+  findHandleTokens,
+  replaceHandleTokens,
+  replaceRefTokens,
+  handleTokenSpans,
+  carriesHandle,
+  isHandleShaped,
+  storyHandleTokens,
+  humanHandleTokens,
+  leakedHandleTokens,
+  rewriteHandlesDeep,
+  handleLeakIssue,
+  handleLeakRepairIssues,
+  assertNoHandleTokens,
+  HandleLeakError,
+  NO_HANDLE_RULE,
+} from "./domain/handle-text.js";
+export type { HandleLeak, HandleScanOptions } from "./domain/handle-text.js";
 export { parseHandle } from "./domain/context-budget.js";
 export { priorFailureFeedback } from "./application/retry-feedback.js";
 export type { AgentsModuleDeps } from "./module.js";

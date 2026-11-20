@@ -331,3 +331,139 @@ describe("payoff contradiction (CR-15) with pinned planted facts", () => {
     expect(report.r4ContradictionCandidates).toEqual([expect.objectContaining({ setupId: s.id, issueId: issue!.id, severity: "high" })]);
   });
 });
+
+describe("plan_setups: no entity handle in setup text (설계 추가 0026)", () => {
+  const HANDLE = /(?<![A-Za-z0-9_])E\d{1,3}(?![A-Za-z0-9_])/;
+  const planOf = (description: string, note: string, extra: Record<string, unknown> = {}) => ({
+    new_setups: [
+      {
+        key: "N1",
+        title: "깨진 인장",
+        description,
+        importance: "medium",
+        due_kind: "arc",
+        beats: [
+          { kind: "plant", planned_episode_no: 41, note },
+          { kind: "payoff", planned_episode_no: 43, note: "인장의 주인을 밝힙니다." },
+        ],
+        entity_ids: [],
+        fact_ids: [],
+        ...extra,
+      },
+    ],
+    existing_setup_beats: [],
+    rationale: "아크 범위 안에 배치했습니다.",
+  });
+
+  it("a handle in a description / beat note goes back for repair and the stored text is the repaired one", async () => {
+    const arcId = await h.createArc(41, 43);
+    const plan = h.reg.taskHandlers.get("plan_setups");
+    let n = 0;
+    const llm = h.llm(() => (++n === 1 ? planOf("E1의 인장이 깨진 이유.", "E1이 인장을 줍습니다.") : planOf("서윤의 인장이 깨진 이유.", "서윤이 인장을 줍습니다.")));
+    const run = await h.createRun("plan_setups", "foreshadow_manager", "arc", arcId);
+    // this pack's labels are other entities: the token is never rewritten with them
+    const context = { ...h.context, handles: { entities: ["ent_x"], names: [], labels: ["확정 캐스트에서 확인되는 규칙"] } };
+    const proposal = await plan.execute(run, { arc_id: arcId }, context, llm);
+    expect(n).toBe(2);
+    expect(llm.inputs[0]!.system).toContain("E와 숫자로 된 기호는 이름이 아닙니다"); // P7
+    const critique = llm.inputs[1]!.messages.at(-1)!.content;
+    expect(critique).toContain("떡밥 문장 new_setups[0].description");
+    expect(critique).toContain("떡밥 문장 new_setups[0].beats[0].note");
+    expect(critique).toContain("'E1'");
+    expect(JSON.stringify(proposal.plan)).not.toMatch(HANDLE);
+    expect(proposal.plan.new_setups[0].description).toBe("서윤의 인장이 깨진 이유.");
+    expect(await h.tx((tx) => plan.commit(tx, run, { arc_id: arcId }, proposal, run.task))).toMatchObject({ kind: "done" });
+    const stored = (await h.foreshadow.listSetups(h.scope)).find((s) => s.title === "깨진 인장")!;
+    expect(JSON.stringify([stored.title, stored.description, stored.beats.map((b) => b.plannedNote)])).not.toMatch(HANDLE);
+  });
+
+  it("fails (retryable, with the symbol named) when the handle survives the repair rounds; nothing is proposed", async () => {
+    const arcId = await h.createArc(51, 53);
+    const plan = h.reg.taskHandlers.get("plan_setups");
+    const before = (await h.foreshadow.listSetups(h.scope)).length;
+    const leaking = planOf("E7이 숨긴 인장.", "단서를 보여 줍니다.");
+    leaking.new_setups[0]!.beats = [
+      { kind: "plant", planned_episode_no: 51, note: "단서를 보여 줍니다." },
+      { kind: "payoff", planned_episode_no: 53, note: "인장의 주인을 밝힙니다." },
+    ];
+    const llm = h.llm(() => leaking);
+    const run = await h.createRun("plan_setups", "foreshadow_manager", "arc", arcId);
+    await expect(plan.execute(run, { arc_id: arcId }, h.context, llm)).rejects.toMatchObject({ name: "TaskFailure", errorFamily: "invalid_output", retryable: true, message: expect.stringMatching(/떡밥 문장 검사 실패.*'E7'/) });
+    expect(llm.inputs.length).toBeGreaterThan(1);
+    expect((await h.foreshadow.listSetups(h.scope)).length).toBe(before);
+  });
+
+  it("only a story token of the novel is story text (never a label of the run's pack); id reference fields are not scanned", async () => {
+    const arcId = await h.createArc(61, 63);
+    const plan = h.reg.taskHandlers.get("plan_setups");
+    const ok = planOf("E3 구역의 봉인이 풀린 이유.", "E3 구역 입구의 인장을 보여 줍니다.");
+    ok.new_setups[0]!.beats = [
+      { kind: "plant", planned_episode_no: 61, note: "E3 구역 입구의 인장을 보여 줍니다." },
+      { kind: "payoff", planned_episode_no: 63, note: "인장의 주인을 밝힙니다." },
+    ];
+    const llm = h.llm(() => ok);
+    const run = await h.createRun("plan_setups", "foreshadow_manager", "arc", arcId);
+    // the pack's labels include names agents derived from stored text ("E12 일행"): they exempt nothing
+    const context = { ...h.context, handles: { entities: ["ent_x", "ent_y"], names: [], labels: ["E3 구역", "E12 일행"] } };
+    await expect(plan.execute(run, { arc_id: arcId }, context, llm)).rejects.toMatchObject({ errorFamily: "invalid_output", message: expect.stringContaining("'E3'") });
+    // a person named an entity "E3 구역" → E3 is a story token of the novel
+    h.ontology.storyTokens = ["E3"];
+    try {
+      const llm1 = h.llm(() => ok);
+      const proposal = await plan.execute(await h.createRun("plan_setups", "foreshadow_manager", "arc", arcId), { arc_id: arcId }, context, llm1);
+      expect(llm1.inputs).toHaveLength(1);
+      expect(proposal.plan.new_setups[0].description).toBe("E3 구역의 봉인이 풀린 이유.");
+      const llm2 = h.llm(() => ({ ...ok, new_setups: [{ ...ok.new_setups[0]!, description: "E12가 숨긴 봉인." }] }));
+      const run2 = await h.createRun("plan_setups", "foreshadow_manager", "arc", arcId);
+      await expect(plan.execute(run2, { arc_id: arcId }, context, llm2)).rejects.toMatchObject({ errorFamily: "invalid_output", message: expect.stringContaining("'E12'") });
+      // the plan's own rationale is not stored anywhere: a handle in it is dropped, the plan stands
+      const llm3 = h.llm(() => ({ ...ok, rationale: "E7의 동선에 맞춰 배치했습니다." }));
+      const p3 = await plan.execute(await h.createRun("plan_setups", "foreshadow_manager", "arc", arcId), { arc_id: arcId }, context, llm3);
+      expect(llm3.inputs).toHaveLength(1);
+      expect(p3.plan.rationale).toBeUndefined();
+    } finally {
+      h.ontology.storyTokens = [];
+    }
+  });
+
+  it("check_setups / review_setup_due: a diagnostic note that names someone by a handle is not stored", async () => {
+    const arcId = await h.createArc(71, 80, "active");
+    const agent = actors.agent("foreshadow_manager", (await h.createRun("plan_setups", "foreshadow_manager", "arc", arcId)).runId);
+    const s = await h.tx((tx) => h.foreshadow.createSetup(tx, h.scope, { title: "사라진 열쇠", description: "창고 열쇠의 행방", importance: "medium", dueKind: "episode", dueEpisodeNo: 72, plannedArcId: arcId }, agent));
+    await h.tx((tx) => h.foreshadow.planBeats(tx, h.scope, s.id, [{ kind: "plant", plannedEpisodeNo: 71 }, { kind: "payoff", plannedEpisodeNo: 72 }], agent));
+    await h.tx((tx) => h.foreshadow.applyArcPlanDecision(tx, h.scope, arcId, "approved", actors.system("orchestrator")));
+
+    const ep = await h.createEpisode(arcId, 71);
+    const v = await h.createVersion(ep, "아무 일도 없었다.");
+    const check = h.reg.taskHandlers.get("check_setups");
+    const run = await h.createRun("check_setups", "foreshadow_manager", "episode", ep);
+    const llm = h.llm((input) => ({
+      findings: [...input.messages.at(-1)!.content.matchAll(/\[BEAT\] id=(sbt_\w+)/g)].map((m) => ({ beat_id: m[1], found: false, note: "E7이 열쇠를 줍는 장면이 없습니다." })),
+      unplanned: [{ kind: "plant", quote: "아무 일도 없었다.", note: "E7의 흔적" }],
+    }));
+    const p = await check.execute(run, { episode_id: ep, manuscript_version_id: v.versionId }, h.context, llm);
+    expect(llm.inputs[0]!.system).toContain("'E숫자' 기호를 쓰지 말고"); // P7
+    expect(p.results).toHaveLength(1);
+    expect(p.results[0]).toMatchObject({ found: false, note: null });
+    expect(p.unplanned[0]).toMatchObject({ quote: "아무 일도 없었다." });
+    expect(p.unplanned[0].note).toBeUndefined();
+    // a clean note is kept
+    const run2 = await h.createRun("check_setups", "foreshadow_manager", "episode", ep);
+    const clean = h.llm((input) => ({ findings: [...input.messages.at(-1)!.content.matchAll(/\[BEAT\] id=(sbt_\w+)/g)].map((m) => ({ beat_id: m[1], found: false, note: "열쇠를 줍는 장면이 없습니다." })) }));
+    const p2 = await check.execute(run2, { episode_id: ep, manuscript_version_id: v.versionId }, h.context, clean);
+    expect(p2.results[0].note).toBe("열쇠를 줍는 장면이 없습니다.");
+
+    const handler = h.reg.taskHandlers.get("review_setup_due");
+    const rrun = await h.createRun("review_setup_due", "foreshadow_manager", "setup", s.id);
+    const input = { setup_id: s.id, as_of_episode_no: 75 };
+    const rllm = h.llm(() => ({ recommendation: "extend", extend_to_episode_no: 78, rationale: "E7의 동선이 아직 정리되지 않았습니다.", body: "E7이 열쇠를 숨긴 채 72화가 지났습니다." }));
+    const proposal = await handler.execute(rrun, input, h.context, rllm);
+    expect(rllm.inputs[0]!.system).toContain("E와 숫자로 된 기호는 이름이 아닙니다"); // P7
+    expect(proposal.review).toMatchObject({ recommendation: "extend", extend_to_episode_no: 78, rationale: "" });
+    expect(proposal.review.body).toBeUndefined();
+    await h.tx((tx) => handler.commit(tx, rrun, input, proposal, rrun.task));
+    const q = h.calls.createQuestion.at(-1)!;
+    expect(q.draft.body).toContain("회수되지 않았습니다");
+    expect(JSON.stringify([q.draft.title, q.draft.body, q.draft.rationale, q.draft.recommendation.rationale])).not.toMatch(HANDLE);
+  });
+});

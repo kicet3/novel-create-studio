@@ -4,6 +4,7 @@
  */
 import { z } from "zod";
 import { ENUMS, type ContinuityIssueKind, type ContinuityIssueStatus, type IssueFixScope, type IssueSeverity } from "@ncs/shared";
+import { handleTokenSpans, leakedHandleTokens } from "../../agents/index.js";
 import { OPEN_STATUSES } from "./transitions.js";
 
 export interface RuleDef {
@@ -32,7 +33,60 @@ export const RULES: Readonly<Record<string, RuleDef>> = {
   "CR-12": { id: "CR-12", kind: "published_canon_conflict", severity: "high", llm: false, title: "공개 사실과 충돌" },
   "CR-13": { id: "CR-13", kind: "answer_constraint", severity: "high", llm: true, title: "답변 제약 위반" },
   "CR-16": { id: "CR-16", kind: "glossary_spelling", severity: "low", llm: false, title: "표기 규칙 위반" },
+  // 설계 추가 0026: a context handle (E7 …) written in the prose instead of a name — high, so the check gate never passes it silently
+  "CR-17": { id: "CR-17", kind: "glossary_spelling", severity: "high", llm: false, title: "본문에 이름 대신 기호(E숫자) 사용" },
 };
+
+// ── 설계 추가 0026: entity handles never stay in stored text ──
+export interface HandleSymbolFinding {
+  /** distinct non-exempt handle tokens, reading order */
+  tokens: string[];
+  /** first occurrence in the text */
+  charStart: number;
+  charEnd: number;
+  message: string;
+}
+
+type Range = { start: number; end: number };
+
+/**
+ * CR-17 (deterministic): handle-looking tokens in the manuscript under check. `story` = story tokens ("E3 구역") — the
+ * only exemption for agent-written text. `typed` = ranges a person typed: a symbol there is the author's own text
+ * (no automatic rewrite touches such a scene), so it is not reported. null = clean.
+ */
+export function findHandleSymbols(content: string, story: ReadonlySet<string>, typed: readonly Range[] = [], within?: Range): HandleSymbolFinding | null {
+  const hits = handleTokenSpans(content).filter(
+    (t) => !story.has(t.token) && (!within || (t.start >= within.start && t.start < within.end)) && !typed.some((r) => r.start < t.end && t.start < r.end),
+  );
+  if (!hits.length) return null;
+  const tokens = [...new Set(hits.map((t) => t.token))];
+  const shown = `${tokens.slice(0, 5).join(", ")}${tokens.length > 5 ? " 외" : ""}`;
+  return {
+    tokens,
+    charStart: hits[0]!.start,
+    charEnd: hits[0]!.end,
+    message: `본문에 이름 대신 기호(${shown})가 쓰였습니다. 기호를 인물·장소의 실제 이름으로 바꿔야 합니다.`,
+  };
+}
+
+/**
+ * CR-17 per scene: one finding for every scene that has a symbol (an automatic rewrite only touches the scenes an
+ * issue names, so a single finding would leave the other scenes as they are), plus one for text outside every scene.
+ */
+export function findHandleSymbolsByScene<S extends Range>(content: string, story: ReadonlySet<string>, scenes: readonly S[], typed: readonly Range[] = []): Array<HandleSymbolFinding & { scene: S | null }> {
+  if (!scenes.length) {
+    const f = findHandleSymbols(content, story, typed);
+    return f ? [{ ...f, scene: null }] : [];
+  }
+  const out: Array<HandleSymbolFinding & { scene: S | null }> = [];
+  for (const scene of scenes) {
+    const f = findHandleSymbols(content, story, typed, scene);
+    if (f) out.push({ ...f, scene });
+  }
+  const outside = findHandleSymbols(content, story, [...typed, ...scenes]);
+  if (outside) out.push({ ...outside, scene: null });
+  return out;
+}
 
 /** LLM-reported issue kinds accepted from the open review (others are produced deterministically) */
 export const LLM_REVIEW_KINDS = ["appearance", "age", "relationship", "ability_rule", "location_travel", "death_state", "character_knowledge", "plan_deviation", "opening_continuity"] as const;
@@ -100,6 +154,38 @@ export const continuityReviewSchema = z.object({
     .default([]),
 });
 export type ContinuityReview = z.infer<typeof continuityReviewSchema>;
+
+/** review fields that are not model-written sentences: verbatim manuscript quotes, fact handles (F1 …), candidate ids */
+export const REVIEW_REFERENCE_KEYS = ["quote", "evidence", "candidate_id"] as const;
+
+/** 설계 추가 0026 (P4): handle tokens left in the review's own sentences (message / proposed_fix) */
+export function reviewHandleLeaks(review: ContinuityReview, allow: ReadonlySet<string>) {
+  return leakedHandleTokens(review, allow, { skipKeys: REVIEW_REFERENCE_KEYS });
+}
+
+/** the message of an open issue whose own wording could not be kept (it named someone by a handle symbol) */
+export const NEUTRAL_ISSUE_MESSAGE = "설정·흐름과 어긋나는 점이 보고되었습니다. 표시된 대목과 근거 사실을 확인하세요.";
+
+/**
+ * What is left after the repair rounds is never stored: a leaking verdict message falls back to the candidate's own
+ * message, a leaking proposed_fix is dropped, an open issue whose message leaks is removed (counted in `lostIssues`)
+ * — or, with `neutral`, kept under that neutral message (its kind, quote, scene and evidence still say what to look at;
+ * counted in `neutralized`).
+ */
+export function dropHandleLeaks(review: ContinuityReview, allow: ReadonlySet<string>, neutral?: string): { review: ContinuityReview; lostIssues: number; neutralized: number } {
+  const leaks = (s: string | undefined) => !!s && leakedHandleTokens(s, allow).length > 0;
+  const clean = (s: string | undefined) => (leaks(s) ? undefined : s);
+  const bad = review.issues.filter((i) => leaks(i.message)).length;
+  const issues = neutral ? review.issues.map((i) => (leaks(i.message) ? { ...i, message: neutral } : i)) : review.issues.filter((i) => !leaks(i.message));
+  return {
+    review: {
+      verdicts: review.verdicts.map((v) => ({ ...v, message: clean(v.message), proposed_fix: clean(v.proposed_fix) })),
+      issues: issues.map((i) => ({ ...i, proposed_fix: clean(i.proposed_fix) })),
+    },
+    lostIssues: neutral ? 0 : bad,
+    neutralized: neutral ? bad : 0,
+  };
+}
 
 // ── reconciliation plan (C1 dedupe, C4 reproduce, C3/C5 not reproduced) ──
 export interface ExistingIssue {

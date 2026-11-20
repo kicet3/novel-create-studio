@@ -5,6 +5,7 @@
  */
 import { defaultValue, type MentionKind, type MentionSourceKind } from "@ncs/shared";
 import { NotImplementedError, type NovelScope } from "../../../platform/index.js";
+import { carriesHandle, findHandleTokens } from "../../agents/index.js";
 import type { LlmService } from "../../llm/index.js";
 import { normalizedKey, type OntologyService, type StoryAnchor } from "../../ontology/index.js";
 import type { RunHandle } from "../../orchestration/index.js";
@@ -95,10 +96,15 @@ export async function runLinker(
   const timelineId = input.anchor.timelineId;
   const nameCache = new Map<string, Awaited<ReturnType<OntologyService["findNameCandidates"]>>>();
   const built: Built[] = [];
+  // 설계 추가 0026 (P5 / P1): a surface that is an entity handle or carries one ("E7", "E12 일행" — leaked prose) is not
+  // a mention — ignored, never a new-entity candidate (its name would make the token story text). Indexes of the
+  // result follow the remaining mentions (callers with per-index data filter beforehand).
+  const story = input.mentions.some((m) => findHandleTokens(m.surface).length) ? await ontology.storyHandleTokens(scope) : new Set<string>();
+  const inputMentions = input.mentions.filter((m) => !carriesHandle(m.surface, story));
 
   // L2/L3 per mention
-  for (let index = 0; index < input.mentions.length; index++) {
-    const m = input.mentions[index]!;
+  for (let index = 0; index < inputMentions.length; index++) {
+    const m = inputMentions[index]!;
     const kind: MentionKind = m.mentionKind ?? "named";
     const p = m.storyPoint;
     const cands = new Map<string, CandidateFeatures & { label?: string }>();
@@ -245,7 +251,9 @@ async function llmJudge(deps: LinkerDeps, run: RunHandle, b: Built, anchor: Stor
   const cards = b.candidates.map(cardLine).join("\n");
   const system =
     "당신은 웹소설 세계관 관리자(world_keeper)입니다. 원문 속 표기가 아래 후보 카드 중 어느 엔티티를 가리키는지 고릅니다. " +
-    "반드시 후보 핸들(C1, C2 …) 하나 또는 NIL(새 엔티티), NON_ENTITY(엔티티 아님), UNSURE(판단 불가) 중 하나만 답합니다.";
+    "반드시 후보 핸들(C1, C2 …) 하나 또는 NIL(새 엔티티), NON_ENTITY(엔티티 아님), UNSURE(판단 불가) 중 하나만 답합니다. " +
+    // 설계 추가 0026 (the rationale is not stored, the rule keeps the answer free of symbols all the same)
+    "rationale에는 핸들이나 'E7' 같은 기호를 쓰지 않고 이름을 씁니다.";
   // 설계 추가 0025: the POV's name, never its raw id
   const povName = anchor.povEntityId ? (await Promise.resolve().then(() => deps.ontology.getEntityCards({ novelId: run.novelId }, [anchor.povEntityId!], anchor, "canon")).catch(() => []))[0]?.displayName : undefined;
   const user = [
