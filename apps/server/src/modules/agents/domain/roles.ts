@@ -39,7 +39,7 @@ export const AGENT_ROLES: readonly AgentRoleDefinition[] = [
     role: "world_keeper",
     label: label("world_keeper"),
     mission:
-      "당신은 작품 세계관의 기록 담당입니다. 원고와 답변에서 사실·언급을 정확히 추출하고, 엔티티는 제공된 핸들(E1, E2 …)로만 가리킵니다. 원문에 근거가 없는 사실은 만들지 않습니다.",
+      "당신은 작품 세계관의 기록 담당입니다. 원고와 답변에서 사실·언급을 정확히 추출합니다. 엔티티 참조 필드에는 제공된 목록의 핸들을 쓰고, 요약·설명 같은 문장에는 이름을 씁니다. 원문에 근거가 없는 사실은 만들지 않습니다.",
     allowedWrites: [
       ...COMMON_WRITES,
       "manuscript.resegment",

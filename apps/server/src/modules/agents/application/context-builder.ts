@@ -3,7 +3,9 @@
  * No LLM calls (C-3). Every world item carries an id recorded in the ContextSnapshot (C-1, FR-AGT-04).
  *
  * Providers may reference entities inside their text with `{{E:<entity_id>}}`; the builder replaces
- * them with the pack handle (`E<n>`, 04 §9.6) and adds the entity to the snapshot.
+ * them with the entity's name and adds the entity to the snapshot. `{{E!:<entity_id>}}` is the entity's
+ * reference mark: the pack handle (`E<n>`, 04 §9.6) for a task that resolves handles (`spec.entityMarks`), nothing
+ * for everyone else (설계 추가 0025 — a handle shown in place of a name ended up in the manuscript: "E6은 …").
  */
 import { DEFAULTS, LABELS_KO } from "@ncs/shared";
 import { NotImplementedError, type NovelScope, type Platform } from "../../../platform/index.js";
@@ -12,6 +14,7 @@ import type { FactAtAnchor, OntologyService, StoryAnchor } from "../../ontology/
 import { TaskFailure, type RunHandle } from "../../orchestration/index.js";
 import type { ContextBuilder, ContextPack, ContextSectionKind, ContextSectionProvider, ContextSectionResult, ContextSpec } from "../index.js";
 import { SECTION_RANK, SECTION_TITLE, estimateTokens, fitSections, entityHandle } from "../domain/context-budget.js";
+import { UNNAMED_ENTITY, entityRefIds, renderEntityRefs } from "../domain/handle-text.js";
 import { cardLayer, roleDefinition } from "../domain/roles.js";
 import { snapshotRepo } from "../adapters/db/snapshot-repository.js";
 
@@ -49,7 +52,9 @@ async function safe<T>(p: () => Promise<T>): Promise<T | null> {
 }
 
 const uniq = (xs: Iterable<string>) => [...new Set(xs)];
-const factLine = (f: FactAtAnchor, tag = "") => `- {{E:${f.subjectEntityId}}} ${tag}${f.text}`;
+/** `f.text` already names its subject ("서이온 — 나이: 27"); the subject joins the snapshot through `refs.entityIds` */
+const factLine = (f: FactAtAnchor, tag = "") => `- ${tag}${f.text}`;
+const subjectsOf = (facts: FactAtAnchor[]) => uniq(facts.map((f) => f.subjectEntityId).filter((x): x is string => !!x));
 
 export function packStorageKey(novelId: string, snapshotId: string): string {
   return `novels/${novelId}/context/${snapshotId}.json`;
@@ -59,7 +64,7 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder &
   const { platform, novel, ontology } = deps;
   const { uow, clock, ids, storage } = platform;
 
-  async function builtin(section: ContextSectionKind, scope: NovelScope, spec: ContextSpec, run: RunHandle, seeds: string[], prior: Built[]): Promise<(ContextSectionResult & Pick<Built, "without">) | null> {
+  async function builtin(section: ContextSectionKind, scope: NovelScope, spec: ContextSpec, run: RunHandle, seeds: string[], prior: Built[], names: Map<string, string>): Promise<(ContextSectionResult & Pick<Built, "without">) | null> {
     const a = spec.anchor;
     switch (section) {
       case "entity_cards": {
@@ -72,7 +77,8 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder &
           for (const c of cards) {
             const primary = c.usableNames[0]?.surface ?? c.displayName;
             const others = c.usableNames.slice(1).map((n) => n.surface);
-            lines.push(`- {{E:${c.entityId}}} ${primary} (${label("entity_type", c.entityType)})${c.disambiguator ? ` — ${c.disambiguator}` : ""}${others.length ? ` / 다른 표기: ${others.join(", ")}` : ""}`);
+            names.set(c.entityId, primary);
+            lines.push(`- ${primary} [{{E!:${c.entityId}}}] (${label("entity_type", c.entityType)})${c.disambiguator ? ` — ${c.disambiguator}` : ""}${others.length ? ` / 다른 표기: ${others.join(", ")}` : ""}`);
             const fs = c.facts.filter((f) => !(f.canonStatus === "candidate" && skip.has(f.factVersionId)));
             for (const f of fs) lines.push(`  · ${f.canonStatus === "candidate" ? "[미확정] " : ""}${f.text}`);
             shown.push(...fs.map((f) => f.factVersionId));
@@ -109,7 +115,7 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder &
       case "knowledge": {
         const facts = await safe(() => ontology.knowledgeOf(scope, a.povEntityId ?? "narrator", a.storyPoint, a.timelineId));
         if (!facts?.length) return null;
-        return { text: facts.map((f) => factLine(f)).join("\n"), tokenEstimate: 0, refs: { factVersionIds: facts.map((f) => f.factVersionId), entityIds: facts.map((f) => f.subjectEntityId) } };
+        return { text: facts.map((f) => factLine(f)).join("\n"), tokenEstimate: 0, refs: { factVersionIds: facts.map((f) => f.factVersionId), entityIds: subjectsOf(facts) } };
       }
       case "constraints": {
         const facts = await safe(() => ontology.getConstraints(scope, { entityIds: seeds, answerIds: spec.seeds.answerIds, anchor: a }));
@@ -117,7 +123,7 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder &
         return {
           text: facts.map((f) => factLine(f)).join("\n"),
           tokenEstimate: 0,
-          refs: { constraintFactIds: facts.map((f) => f.factId), factVersionIds: facts.map((f) => f.factVersionId), answerIds: spec.seeds.answerIds },
+          refs: { constraintFactIds: facts.map((f) => f.factId), factVersionIds: facts.map((f) => f.factVersionId), answerIds: spec.seeds.answerIds, entityIds: subjectsOf(facts) },
         };
       }
       case "canon_1hop": {
@@ -126,7 +132,7 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder &
         if (!facts?.length) return null;
         // oldest story_range start dropped first when trimming → keep newest first
         const sorted = [...facts].sort((x, y) => y.storyRange.from - x.storyRange.from);
-        return { text: sorted.map((f) => factLine(f)).join("\n"), tokenEstimate: 0, refs: { factVersionIds: sorted.map((f) => f.factVersionId) } };
+        return { text: sorted.map((f) => factLine(f)).join("\n"), tokenEstimate: 0, refs: { factVersionIds: sorted.map((f) => f.factVersionId), entityIds: subjectsOf(sorted) } };
       }
       case "canon_2hop": {
         const hop1 = prior.find((p) => p.section === "canon_1hop");
@@ -138,14 +144,14 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder &
         const used = new Set(hop1?.refs.factVersionIds ?? []);
         const rest = (facts ?? []).filter((f) => !used.has(f.factVersionId) && (allowed === "all" || allowed.includes(f.predicate)));
         if (!rest.length) return null;
-        return { text: rest.map((f) => factLine(f)).join("\n"), tokenEstimate: 0, refs: { factVersionIds: rest.map((f) => f.factVersionId), entityIds: next } };
+        return { text: rest.map((f) => factLine(f)).join("\n"), tokenEstimate: 0, refs: { factVersionIds: rest.map((f) => f.factVersionId), entityIds: uniq([...next, ...subjectsOf(rest)]) } };
       }
       case "candidates": {
         if (!seeds.length) return null;
         const facts = await safe(() => ontology.getCanonAt(scope, seeds, a.storyPoint, a.timelineId, { include: "canon_and_safe_candidates" }));
         const cands = (facts ?? []).filter((f) => f.canonStatus === "candidate");
         if (!cands.length) return null;
-        return { text: cands.map((f) => factLine(f, "[미확정] ")).join("\n"), tokenEstimate: 0, refs: { candidateFactVersionIds: cands.map((f) => f.factVersionId) } };
+        return { text: cands.map((f) => factLine(f, "[미확정] ")).join("\n"), tokenEstimate: 0, refs: { candidateFactVersionIds: cands.map((f) => f.factVersionId), entityIds: subjectsOf(cands) } };
       }
       case "unresolved_surfaces": {
         if (!spec.manuscriptVersionId) return null;
@@ -215,6 +221,8 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder &
 
     const providers = deps.providers();
     const built: Built[] = [];
+    /** entity id → the name this role may use (entity cards first, the rest looked up below) */
+    const names = new Map<string, string>();
     const sections = uniq(spec.sections) as ContextSectionKind[];
     sections.sort((x, y) => SECTION_RANK[x] - SECTION_RANK[y]);
     for (const section of sections) {
@@ -223,7 +231,7 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder &
         const r = await p.build(scope, effSpec, run);
         if (r && r.text.trim()) built.push({ ...r, section, module: p.module });
       }
-      const b = await builtin(section, scope, effSpec, run, seeds, built);
+      const b = await builtin(section, scope, effSpec, run, seeds, built, names);
       if (b && b.text.trim()) built.push({ ...b, section, module: BUILTIN });
     }
 
@@ -233,14 +241,34 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder &
       if (id && !entityIds.includes(id)) entityIds.push(id);
     };
     for (const b of built) for (const id of b.refs.entityIds ?? []) addEntity(id);
-    for (const b of built) for (const m of b.text.matchAll(/\{\{E:([^}]+)\}\}/g)) addEntity(m[1]!);
+    for (const b of built) for (const id of entityRefIds(b.text)) addEntity(id);
     const handleOf = (id: string) => entityHandle(entityIds.indexOf(id));
+    // names of entities that have no card in this pack (fact subjects, 2-hop neighbours, mention candidates)
+    const layer = cardLayer(run.role, !!anchor.povEntityId);
+    const unnamed = entityIds.filter((id) => !names.has(id));
+    if (unnamed.length) {
+      // a referenced entity may be gone (deleted / never created): that one stays unnamed, the pack still builds
+      const nameOfCard = (c: { usableNames: Array<{ surface: string }>; displayName: string }) => c.usableNames[0]?.surface ?? c.displayName;
+      const cardsOf = (ids: string[]) => ontology.getEntityCards(scope, ids, anchor, layer).catch(() => null);
+      for (const c of (await cardsOf(unnamed)) ?? []) names.set(c.entityId, nameOfCard(c));
+      // one by one for the rest: the batch failed on a missing id, or a merged id came back under its survivor's id
+      for (const id of unnamed.filter((x) => !names.has(x))) {
+        const c = (await cardsOf([id]))?.[0];
+        if (c) names.set(id, nameOfCard(c));
+      }
+    }
+    const nameOf = (id: string) => names.get(id) || UNNAMED_ENTITY;
+    // handles are shown only to a task that resolves them (spec.entityMarks) — never to a role that writes prose
+    const marks = !!spec.entityMarks && roleDefinition(run.role).contextLayer !== "pov";
+    const renderRefs = (text: string) => renderEntityRefs(text, { nameOf, handleOf, marks });
     for (const b of built) {
-      b.text = b.text.replace(/\{\{E:([^}]+)\}\}/g, (_m, id: string) => handleOf(id));
+      b.text = renderRefs(b.text);
       b.tokenEstimate = Math.max(b.tokenEstimate || 0, estimateTokens(b.text) + 8);
     }
 
-    const system = headerText(n, run) + (entityIds.length ? "\n\n엔티티는 이름 대신 핸들(E1, E2 …)로 가리킵니다. 핸들은 이 컨텍스트 안에서만 유효합니다." : "");
+    const handleNote =
+      "\n\n엔티티 옆의 [E1], [E2] … 는 참조용 핸들입니다. JSON의 엔티티 참조 필드에만 쓰고, 요약·설명·본문 같은 문장에는 핸들 대신 이름을 씁니다. 핸들은 이 컨텍스트 안에서만 유효합니다.";
+    const system = headerText(n, run) + (marks && entityIds.length ? handleNote : "");
     const decision = fitSections(built, estimateTokens(system), spec.maxInputTokens, spec.keepSections ?? []);
     if (!decision.ok) {
       throw new TaskFailure("internal", `컨텍스트 상한 초과: 필수 섹션만으로 ${decision.required} 토큰이 필요하지만 상한은 ${decision.max} 토큰입니다.`, false);
@@ -255,7 +283,7 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder &
         if (!b.without) continue;
         const r = b.without(shownPending);
         const before = b.tokenEstimate;
-        b.text = r.text.replace(/\{\{E:([^}]+)\}\}/g, (_m, id: string) => handleOf(id));
+        b.text = renderRefs(r.text);
         b.refs = r.refs;
         b.tokenEstimate = estimateTokens(b.text) + 8;
         decision.total -= Math.max(0, before - b.tokenEstimate);
@@ -271,7 +299,7 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder &
       snapshotId,
       system,
       messages,
-      handles: { entities: entityIds, names: nameIds },
+      handles: { entities: entityIds, names: nameIds, labels: entityIds.map((id) => names.get(id) ?? "") },
       tokenEstimate: decision.total,
       droppedSections: decision.dropped,
       sections: kept.map((b) => ({ section: b.section, module: b.module, tokenEstimate: b.tokenEstimate })),
@@ -330,6 +358,8 @@ export function createContextBuilder(deps: ContextBuilderDeps): ContextBuilder &
       if (!orig) throw new TaskFailure("internal", `원본 컨텍스트 스냅숏이 없습니다: ${snapshotId}`, false);
       const stored = await loadStored(scope.novelId, snapshotId);
       if (!stored) throw new TaskFailure("internal", `원본 컨텍스트 내용이 없습니다: ${snapshotId}`, false);
+      // 설계 추가 0025: a pack stored before 0025 shows handles in place of names — the caller rebuilds the context instead
+      if (!Array.isArray(stored.pack.handles?.labels)) throw new TaskFailure("internal", `이전 형식의 컨텍스트라 다시 구성합니다: ${snapshotId}`, false);
       const id = ids.next("ctx");
       await uow.run(async (tx) => {
         const { id: _old, createdAt: _c, ...rest } = orig;

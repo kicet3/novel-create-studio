@@ -6,7 +6,7 @@
 import type { TaskKind } from "@ncs/shared";
 import { actors, DomainValidationError, type NovelScope, type Tx } from "../../../platform/index.js";
 import { ModelCallError } from "../../llm/index.js";
-import type { ContextSectionKind } from "../../agents/index.js";
+import { findHandleTokens, parseHandle, replaceHandleTokens, type ContextPack, type ContextSectionKind } from "../../agents/index.js";
 import type { CommitOutcome, RunHandle } from "../../orchestration/index.js";
 import { manuscriptRepo as repo } from "../adapters/db/manuscript-repository.js";
 import { userRanges } from "../domain/attribution.js";
@@ -84,7 +84,9 @@ export const CONTINUITY_KEEP_SECTIONS: readonly ContextSectionKind[] = ["recent_
 const KEEP_FOR: readonly TaskKind[] = ["outline_episode", "draft_episode"];
 
 const OUTLINE_INSTRUCTION = `당신은 웹소설 기획자(planner)입니다. 이번 화 아웃라인을 JSON으로 씁니다.
-- scenes[]마다 key(s1, s2 …)·summary·pov_entity_id·location_entity_id·participant_entity_ids·setup_beat_ids를 채웁니다. 엔티티는 ID로만 참조합니다.
+- scenes[]마다 key(s1, s2 …)·summary·pov_entity_id·location_entity_id·participant_entity_ids·setup_beat_ids를 채웁니다.
+- pov_entity_id·location_entity_id·participant_entity_ids에는 '엔티티 카드'에서 이름 옆에 적힌 핸들(E1, E2 …)을 넣습니다. 카드에 없는 대상은 비워 둡니다.
+- summary·hook·beats 같은 문장에는 핸들을 쓰지 않고 인물·장소의 이름을 그대로 씁니다("E3이 떠난다"가 아니라 이름으로).
 - 배정된 떡밥 비트는 모두 한 씬 이상에 배정합니다. 새 인물은 new_entity_proposals에 이름만 제안합니다.
 - 씬 수는 [작품 구성]의 이번 화 계획 씬 수를 따르고, 계획한 플롯 사건과 현재 부 목표를 벗어나지 않습니다.
 - target_chars는 이번 화 목표 분량(최소~최대 분량 사이)입니다. 아직 등장 전인 인물은 등장시키지 않습니다.
@@ -103,6 +105,7 @@ const unitRule = (u: import("../index.js").EpisodeUnitContext, episodeNo: number
 const DRAFT_INSTRUCTION = `당신은 웹소설 작가(writer)입니다. 아웃라인의 씬을 순서대로 본문으로 씁니다.
 - 씬과 씬 사이에는 "${SCENE_SEPARATOR}" 한 줄만 둡니다. 다른 표기·주석은 넣지 않습니다.
 - 작품 연령 등급을 넘는 묘사를 쓰지 않습니다. 시점 인물이 모르는 이름은 쓰지 않습니다.
+- 인물·장소·조직은 컨텍스트에 적힌 이름으로 부릅니다. 영문·숫자로 된 기호나 ID를 이름 자리에 쓰지 않습니다.
 - 분량은 허용 범위(최소~최대) 안에서 목표 분량에 맞춥니다. 최소 분량에 못 미치거나 최대 분량을 넘기지 않습니다.
 - [작품 구성]의 결말·현재 부 목표·플롯 핵심 사건·이번 화 계획을 벗어나지 않습니다.
 - 2화부터 첫 씬 첫 문단은 직전 화 마지막 장면에서 자연스럽게 이어집니다('직전 화 끝 상태'·'직전 내용'의 시간·장소·등장 인물·몸과 마음 상태·열린 행동).
@@ -141,6 +144,37 @@ const quotesOf = (t: string) => [...t.matchAll(/["“「『][^"”」』]*["”�
 const REWORK_INSTRUCTION = `당신은 쇼러너(showrunner)입니다. 사람이 반려한 사유를 읽고 다시 쓸 씬 번호와 작업 지시를 JSON으로 정합니다. 원고는 쓰지 않습니다.`;
 const SAFETY_INSTRUCTION = `당신은 원고 안전 검수자입니다. 씬마다 (1) 작품 연령 등급을 넘는 성적·폭력·언어 수위 (2) 미성년 인물의 성적 묘사 (3) 실존 인물 사칭·명예훼손이 있는지 판정해 violations JSON으로만 답합니다. 문제가 없으면 빈 배열입니다.`;
 
+/** handle-looking tokens of a run's own input (context text without the "[E1]" marks + task data): story text, not handles */
+function inputHandleTokens(context: Pick<ContextPack, "messages">, data: string): Set<string> {
+  const text = context.messages.map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content))).join("\n").replace(/[[(]E\d{1,3}[\])]/g, "");
+  return new Set(findHandleTokens(`${text}\n${data}`));
+}
+
+const ENTITY_ID = /^ent_[0-9A-HJKMNP-TV-Z]{26}$/;
+/**
+ * 설계 추가 0025: an entity reference of a structured LLM answer → entity id of this run's context, else null.
+ * Accepts an id the pack knows, a pack handle ("E3") or the exact name shown on an entity card.
+ */
+export function entityRefResolver(context: Pick<ContextPack, "handles">): (ref: unknown) => string | null {
+  const { entities, labels = [] } = context.handles;
+  const known = new Set(entities);
+  return (ref) => {
+    if (typeof ref !== "string") return null;
+    const r = ref.trim().replace(/^\[|\]$/g, "");
+    if (ENTITY_ID.test(r)) return !known.size || known.has(r) ? r : null;
+    const h = parseHandle(r);
+    if (h?.kind === "E") return entities[h.index] ?? null;
+    const byLabel = (name: string) => {
+      const i = name ? labels.indexOf(name) : -1;
+      return i >= 0 && labels.indexOf(name, i + 1) < 0 ? (entities[i] ?? null) : null;
+    };
+    // a card echo: "서이온 [E3]", "E3 (서이온)", "e3" → its one handle, else the name before the bracket
+    const hs = [...new Set([...r.matchAll(/(?<![A-Za-z0-9_])E(\d{1,4})(?![A-Za-z0-9_])/gi)].map((m) => Number(m[1])))];
+    if (hs.length === 1) return entities[hs[0]! - 1] ?? null;
+    return byLabel(r) ?? byLabel(r.replace(/\s*[[(].*$/, "").trim());
+  };
+}
+
 export function createWriting(m: ManuscriptInternals, getService: () => ManuscriptService) {
   const { ports } = m;
   const { novel, ontology, platform } = ports.deps;
@@ -163,10 +197,14 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
     for (const s of scenes) {
       for (const x of [s.pov_entity_id, s.location_entity_id, ...(Array.isArray(s.participant_entity_ids) ? s.participant_entity_ids : [])]) if (typeof x === "string" && x.startsWith("ent_")) ids.add(x);
     }
-    if (ids.size === 0) {
+    // outline cast first, then the novel's active cast up to 12 (a partly filled outline must not shrink the cards)
+    if (ids.size < 12) {
       const cast = await soft(() => ontology.listEntities(scope, { statuses: ["active"], entityTypes: ["character", "place", "organization", "item", "ability"], limit: 200 }), []);
       const rank = (t: string) => ["character", "place", "organization", "item", "ability"].indexOf(t);
-      for (const e of [...cast].sort((a, b) => rank(a.entity.entityType) - rank(b.entity.entityType) || b.appearanceEpisodeCount - a.appearanceEpisodeCount).slice(0, 12)) ids.add(e.entity.id);
+      for (const e of [...cast].sort((a, b) => rank(a.entity.entityType) - rank(b.entity.entityType) || b.appearanceEpisodeCount - a.appearanceEpisodeCount).slice(0, 12)) {
+        if (ids.size >= 12) break;
+        ids.add(e.entity.id);
+      }
     }
     return [...ids];
   };
@@ -184,6 +222,8 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       manuscriptVersionId: versionId,
       seeds: { entityIds, setupIds: [], answerIds: input.answer_ids ?? [], mentionIds: [] },
       ...(task.kind && KEEP_FOR.includes(task.kind) ? { keepSections: [...CONTINUITY_KEEP_SECTIONS] } : {}),
+      // 설계 추가 0025: only the outline fills entity fields from handles
+      ...(task.kind === "outline_episode" ? { entityMarks: true } : {}),
     };
   };
 
@@ -288,12 +328,13 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
         if (!s.summary) s.summary = synth.outline.scenes[Math.min(i, synth.outline.scenes.length - 1)]!.summary;
       }
       // check (2): entity / beat / answer references are ids from this run's inputs only (FR-ONT-12)
-      const isEntityId = (x: unknown): x is string => typeof x === "string" && /^ent_[0-9A-HJKMNP-TV-Z]{26}$/.test(x);
+      // 설계 추가 0025: the planner sees handles, not ids — a handle (or an exact card name) resolves through the pack
+      const entityOf = entityRefResolver(context);
       const answerIds = new Set(input.answer_ids ?? []);
       for (const s of scenes) {
-        s.pov_entity_id = isEntityId(s.pov_entity_id) ? s.pov_entity_id : null;
-        s.location_entity_id = isEntityId(s.location_entity_id) ? s.location_entity_id : null;
-        s.participant_entity_ids = s.participant_entity_ids.filter(isEntityId);
+        s.pov_entity_id = entityOf(s.pov_entity_id);
+        s.location_entity_id = entityOf(s.location_entity_id);
+        s.participant_entity_ids = [...new Set(s.participant_entity_ids.map(entityOf).filter((x): x is string => !!x))];
         s.timeline_id = s.timeline_id === ep.primaryTimelineId ? s.timeline_id : null;
         s.setup_beat_ids = s.setup_beat_ids.filter((b) => beatIds.includes(b));
         s.answer_ids = s.answer_ids.filter((a) => answerIds.has(a));
@@ -302,8 +343,26 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       const assigned = new Set(scenes.flatMap((s) => s.setup_beat_ids));
       const missing = beatIds.filter((b) => !assigned.has(b));
       if (missing.length) scenes[Math.floor(scenes.length / 2)]!.setup_beat_ids.push(...missing);
-      const outline: OutlineData = outlineDataSchema.parse({ ...v.outline, scenes, hook: v.outline.hook || synth.outline.hook, target_chars: targetIn(profile, v.outline.target_chars || target) });
-      return { outline: { summary: v.summary || synth.summary, title: v.title ?? ep.title, outline }, modelId: out.modelId };
+      // 설계 추가 0025: a handle the planner left inside a sentence becomes the entity's name (never reaches the writer)
+      // (a token the planner's own input uses — "E3 구역", "E1급" — is story text, not a handle)
+      const keep = inputHandleTokens(context, data);
+      const left = new Set<string>();
+      const named = (t: string) => {
+        const r = replaceHandleTokens(t, context.handles.labels ?? [], keep);
+        for (const h of r.unresolved) if (!keep.has(h) && Number(h.slice(1)) <= context.handles.entities.length) left.add(h);
+        return r.text;
+      };
+      for (const s of scenes) s.summary = named(s.summary);
+      const outline: OutlineData = outlineDataSchema.parse({
+        ...v.outline,
+        beats: (v.outline.beats ?? []).map((b) => ({ ...b, purpose: named(b.purpose ?? "") })),
+        scenes,
+        hook: named(v.outline.hook || synth.outline.hook),
+        target_chars: targetIn(profile, v.outline.target_chars || target),
+      });
+      const proposal = { summary: named(v.summary || synth.summary), title: v.title ? named(v.title) : ep.title, outline };
+      if (left.size) throw new ModelCallError("invalid_output", null, undefined, `아웃라인 문장에 엔티티 핸들(${[...left].join(", ")})이 남아 있습니다. 문장에는 이름을 써야 합니다.`);
+      return { outline: proposal, modelId: out.modelId };
     },
     async commit(tx, run, input, p) {
       const scope = scopeOf(run);
@@ -369,6 +428,13 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
       });
       let content = normalizeText(String(out.value)).trim();
       if (!content) throw new ModelCallError("invalid_output", null, undefined, "모델이 빈 초고를 반환했습니다.");
+      // 설계 추가 0025: a handle-looking token the prompt never contained is an invented stand-in for a name
+      const allowed = inputHandleTokens(context, data);
+      const assertNamed = (text: string) => {
+        const bad = findHandleTokens(text).filter((h) => !allowed.has(h));
+        if (bad.length) throw new ModelCallError("invalid_output", null, undefined, `본문에 이름 대신 기호(${bad.join(", ")})가 쓰였습니다.`);
+      };
+      assertNamed(content);
       // continuation while short (max attempts, stop when a continuation barely grows the text)
       let attempt = 0;
       let lastGrowth: number | null = null;
@@ -400,6 +466,7 @@ export function createWriting(m: ManuscriptInternals, getService: () => Manuscri
         });
         modelId = more.modelId;
         const extra = normalizeText(String(more.value)).trim();
+        assertNamed(extra);
         // 설계 추가 0017: a "continuation" that starts the episode over again is a rewrite, never appended to the text
         // (draft + a second copy doubled episodes); a fuller rewrite replaces the short draft
         const head = content.split(/\n\s*\n/)[0]!.trim();

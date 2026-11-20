@@ -187,7 +187,9 @@ describe("MVP-α end to end (scripted Claude responses)", () => {
     const cast = (await t.http("GET", `${base}/entities?type=character`)).body.items as Array<{ preferredName: string; appearanceEpisodeCount: number }>;
     const draftPrompt = t.claude.requests.filter((r) => r.schema === null && r.system.includes("아웃라인의 씬을 순서대로 본문으로")).map((r) => `${r.system}\n${r.prompt}`).at(-1) ?? "";
     expect(draftPrompt.length).toBeGreaterThan(0);
-    for (const c of cast) expect(draftPrompt, `entity card of ${c.preferredName} in the draft prompt`).toMatch(new RegExp(`E\\d+ ${c.preferredName} \\(인물\\)`));
+    for (const c of cast) expect(draftPrompt, `entity card of ${c.preferredName} in the draft prompt`).toMatch(new RegExp(`- ${c.preferredName} \\(인물\\)`));
+    // 설계 추가 0025: the writer's prompt carries no entity handle (a handle shown as a name ended up in the prose)
+    expect(draftPrompt).not.toMatch(/(?<![A-Za-z0-9_])E\d{1,3}(?![A-Za-z0-9_])/);
     expect(cast.some((c) => c.appearanceEpisodeCount > 0), JSON.stringify(cast)).toBe(true);
     // the confirmed cast is an input of the bible and the writer (context section "cast"); the bible's 한결/서린
     // reuse the cast entities (no duplicate characters)

@@ -321,7 +321,9 @@ export function checkContinuityHandler(deps: ContinuityPorts, svc: ContinuityInt
     const povKnowledge: string[] = [];
     for (const pov of [...new Set(scenes.map((s) => s.povEntityId).filter((x): x is string => !!x))]) {
       const k = await orPlaceholder(() => deps.ontology.knowledgeOf(scope, pov, anchorPoint, timelineId), [], skip("CR-07"));
-      if (k.length) povKnowledge.push(`- 시점 인물 ${pov}: ${k.map((f) => f.text).join(" / ")}`);
+      // 설계 추가 0025: the POV's name, never its raw id
+      const povName = (await Promise.resolve().then(() => deps.ontology.getEntityCards(scope, [pov], { storyPoint: anchorPoint, timelineId }, "canon")).catch(() => []))[0]?.displayName;
+      if (k.length) povKnowledge.push(`- 시점 인물${povName ? ` ${povName}` : ""}: ${k.map((f) => f.text).join(" / ")}`);
     }
     // 설계 추가(미확정 사실 선행 집필): provisional facts of earlier episodes still waiting for approval (drafts written
     // ahead) — the review may cite them; canon of the same version wins (already in allFacts)

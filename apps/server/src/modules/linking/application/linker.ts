@@ -246,8 +246,10 @@ async function llmJudge(deps: LinkerDeps, run: RunHandle, b: Built, anchor: Stor
   const system =
     "당신은 웹소설 세계관 관리자(world_keeper)입니다. 원문 속 표기가 아래 후보 카드 중 어느 엔티티를 가리키는지 고릅니다. " +
     "반드시 후보 핸들(C1, C2 …) 하나 또는 NIL(새 엔티티), NON_ENTITY(엔티티 아님), UNSURE(판단 불가) 중 하나만 답합니다.";
+  // 설계 추가 0025: the POV's name, never its raw id
+  const povName = anchor.povEntityId ? (await Promise.resolve().then(() => deps.ontology.getEntityCards({ novelId: run.novelId }, [anchor.povEntityId!], anchor, "canon")).catch(() => []))[0]?.displayName : undefined;
   const user = [
-    `표기: "${b.m.surface}" (유형: ${b.kind}, 지점: ${b.m.storyPoint}${anchor.povEntityId ? `, 시점 인물: ${anchor.povEntityId}` : ""})`,
+    `표기: "${b.m.surface}" (유형: ${b.kind}, 지점: ${b.m.storyPoint}${povName ? `, 시점 인물: ${povName}` : ""})`,
     b.m.excerpt ? `문맥: ${b.m.excerpt}` : "",
     "후보 카드:",
     cards,

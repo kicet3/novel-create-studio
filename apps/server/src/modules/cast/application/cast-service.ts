@@ -1193,10 +1193,10 @@ export function createCastService(deps: CastServiceDeps) {
       const brief: string[] = [];
       for (const { c, profile: p, role } of cast) {
         if (!focused(c)) {
-          brief.push(`- [${labelKo("character_role", role)}] ${p.name}${c.entityId ? ` ({{E:${c.entityId}}})` : ""}${appearance(p)}${p.storyRole ? ` — ${p.storyRole}` : p.personality ? ` — ${clip(p.personality, 60)}` : ""}`);
+          brief.push(`- [${labelKo("character_role", role)}] ${p.name}${c.entityId ? ` ({{E!:${c.entityId}}})` : ""}${appearance(p)}${p.storyRole ? ` — ${p.storyRole}` : p.personality ? ` — ${clip(p.personality, 60)}` : ""}`);
           continue;
         }
-        const head = `### [${labelKo("character_role", role)}] ${p.name}${c.entityId ? ` ({{E:${c.entityId}}})` : ""}${appearance(p)}`;
+        const head = `### [${labelKo("character_role", role)}] ${p.name}${c.entityId ? ` ({{E!:${c.entityId}}})` : ""}${appearance(p)}`;
         const rels = (p.relationships ?? []).filter((r) => nameOf.has(r.targetCharacterId));
         const fields = [
           c.conceptCharacterKey ? `character_key: ${c.conceptCharacterKey}` : `character_key: ${c.id}`,

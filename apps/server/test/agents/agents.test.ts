@@ -80,7 +80,7 @@ describe("agents: ContextBuilder", () => {
       section: "outline",
       module: "test",
       async build(_scope, spec) {
-        return { text: `- 씬1: {{E:ent_01J0000000000000000000000A}}가 {{E:ent_01J0000000000000000000000B}}를 만난다 (${spec.episodeId})`, tokenEstimate: 0, refs: { setupIds: ["stp_TEST"], versionIds: ["mnv_X"] } };
+        return { text: `- 주연 ({{E!:ent_01J0000000000000000000000A}})\n- 씬1: {{E:ent_01J0000000000000000000000A}}가 {{E:ent_01J0000000000000000000000B}}를 만난다 (${spec.episodeId})`, tokenEstimate: 0, refs: { setupIds: ["stp_TEST"], versionIds: ["mnv_X"] } };
       },
     });
     const { taskId, runId } = await seedTaskRun(t, novelId);
@@ -90,7 +90,11 @@ describe("agents: ContextBuilder", () => {
     const pack = await agents().contextBuilder.build(run, spec);
     expect(pack.snapshotId).toMatch(/^ctx_/);
     expect(pack.system).toMatch(/회귀한 서고지기/);
-    expect(pack.messages[0]!.content).toMatch(/E1가 E2를 만난다 \(epi_TEST\)/);
+    // 설계 추가 0025: a prose role (writer) never sees a handle — names in sentences, reference marks removed
+    expect(pack.messages[0]!.content).toMatch(/- 주연\n- 씬1: 이름 없는 대상가 이름 없는 대상를 만난다 \(epi_TEST\)/);
+    expect(pack.messages[0]!.content).not.toMatch(/E\d/);
+    expect(pack.system).not.toMatch(/핸들/);
+    expect(pack.handles.labels).toEqual(["", ""]);
     expect(pack.handles.entities).toEqual(["ent_01J0000000000000000000000A", "ent_01J0000000000000000000000B"]);
     expect(agents().resolveEntityHandle(pack, "E2")).toBe("ent_01J0000000000000000000000B");
     expect(() => agents().resolveEntityHandle(pack, "E9")).toThrow(TaskFailure);
@@ -99,7 +103,13 @@ describe("agents: ContextBuilder", () => {
     expect(snap).toMatchObject({ runId, storyPoint: 3000, entityIds: pack.handles.entities, setupIds: ["stp_TEST"], answerIds: ["ans_1"], clonedFromSnapshotId: null });
     const r = await t.http("GET", `/api/novels/${novelId}/context-snapshots/${pack.snapshotId}`);
     expect(r.status).toBe(200);
-    expect(r.body.pack.messages[0].content).toMatch(/E1가/);
+    expect(r.body.pack.messages[0].content).toMatch(/이름 없는 대상가/);
+
+    // a task that resolves handles (spec.entityMarks: outline_episode) keeps the reference marks, still no handle inside a sentence
+    const p2 = await seedTaskRun(t, novelId);
+    const planner = await agents().contextBuilder.build(runHandle(novelId, p2.taskId, p2.runId, "planner"), { ...spec, sections: ["outline"], entityMarks: true });
+    expect(planner.messages[0]!.content).toMatch(/- 주연 \(E1\)\n- 씬1: 이름 없는 대상가 이름 없는 대상를 만난다/);
+    expect(planner.system).toMatch(/JSON의 엔티티 참조 필드에만/);
 
     // RU-3 clone
     const rerun = await seedTaskRun(t, novelId, { taskId });

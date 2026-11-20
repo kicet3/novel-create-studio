@@ -24,7 +24,7 @@ export interface PromptTemplateData {
 }
 
 const JSON_NOTE = "응답은 지정된 JSON 스키마를 정확히 따르는 객체 하나만 출력합니다. 설명 문장이나 코드 블록 표시는 붙이지 않습니다.";
-const HANDLE_NOTE = "엔티티는 이름 대신 컨텍스트의 핸들(E1, E2 …)로 가리킵니다. 목록에 없는 대상은 {\"new\": \"표기\"} 형태로 냅니다.";
+const HANDLE_NOTE = "엔티티 참조 필드에는 컨텍스트의 핸들(E1, E2 …)을 쓰고, 요약 같은 문장에는 핸들 대신 이름을 씁니다. 목록에 없는 대상은 {\"new\": \"표기\"} 형태로 냅니다.";
 
 const T = (role: AgentRole, kind: TaskKind, instruction: string, output: string = JSON_NOTE): PromptTemplateData => ({ role, kind, version: TEMPLATE_VERSION, instruction, output });
 
@@ -40,7 +40,7 @@ const DRAFT_RULES = [
   PROSE_RHYTHM_RULES,
   "- 아웃라인의 비트와 씬 순서를 지키고, 배정된 떡밥 비트를 자연스럽게 넣습니다.",
   "- 마지막 문단은 다음 화가 궁금해지는 훅으로 끝냅니다.",
-  "- '서술·대사에 쓰면 안 되는 표기' 목록의 이름은 쓰지 않습니다. 엔티티 핸들(E1 등)은 본문에 쓰지 않습니다.",
+  "- '서술·대사에 쓰면 안 되는 표기' 목록의 이름은 쓰지 않습니다. 인물·장소는 이름으로 부르고, 영문·숫자로 된 기호나 ID를 본문에 쓰지 않습니다.",
   "- 작품 연령 등급을 넘는 묘사는 쓰지 않습니다.",
 ].join("\n");
 

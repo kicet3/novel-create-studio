@@ -87,6 +87,11 @@ export interface ContextSpec {
   arcId?: string;
   /** 설계 추가 0019: sections never dropped by the token budget for this run (e.g. recent_text for outline / draft) */
   keepSections?: ContextSectionKind[];
+  /**
+   * 설계 추가 0025: show entity handles ("서이온 [E1]") — only for a task whose handler resolves them out of structured
+   * entity fields (outline_episode). Everyone else gets names only.
+   */
+  entityMarks?: boolean;
 }
 
 export interface ContextSectionResult {
@@ -122,7 +127,12 @@ export interface ContextPack {
   system: string;
   messages: LlmMessage[];
   /** resolution table (04 §9.6): `entities[i]` is the entity id behind handle `E${i+1}`, `names[i]` the entity_name id behind `N${i+1}` */
-  handles: { entities: string[]; names: string[] };
+  handles: {
+    entities: string[];
+    names: string[];
+    /** 설계 추가 0025: `labels[i]` is the name behind handle `E${i+1}` ("" when unknown) — absent in packs stored before 0025 */
+    labels?: string[];
+  };
   tokenEstimate: number;
   droppedSections: ContextSectionKind[];
   /** sections that made it into the pack (debug / tests) */
@@ -177,6 +187,8 @@ export interface AgentsService {
  */
 export { callWithRepair, formatCritique, summarizeIssues, repairDialoguesOfRun } from "./application/repair-dialogue.js";
 export type { RepairIssue, RepairVerdict, RepairDialogueOptions, RepairDialogueResult } from "./application/repair-dialogue.js";
+export { findHandleTokens, replaceHandleTokens } from "./domain/handle-text.js";
+export { parseHandle } from "./domain/context-budget.js";
 export { priorFailureFeedback } from "./application/retry-feedback.js";
 export type { AgentsModuleDeps } from "./module.js";
 export { createAgentsModule } from "./module.js";

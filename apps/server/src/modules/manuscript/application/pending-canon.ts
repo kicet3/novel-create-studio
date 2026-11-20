@@ -104,7 +104,8 @@ export function createPendingCanon(ports: Ports) {
       const used: PendingPriorFact[] = [];
       let chars = PENDING_CANON_HEADER.length;
       for (const f of facts) {
-        const line = `- {{E:${f.subjectEntityId}}} ${f.text} ${pendingLabel(f.sourceEpisodeNo)}`;
+        // `f.text` names its subject already (설계 추가 0025: no handle prefix)
+        const line = `- ${f.text} ${pendingLabel(f.sourceEpisodeNo)}`;
         if (chars + line.length > PENDING_CANON_MAX_CHARS && used.length) break;
         chars += line.length + 1;
         lines.push(line);
@@ -112,7 +113,7 @@ export function createPendingCanon(ports: Ports) {
       }
       const text = [PENDING_CANON_HEADER, ...lines].join("\n");
       const versionIds = used.map((f) => f.factVersionId);
-      return { text, tokenEstimate: 0, refs: { factVersionIds: versionIds, candidateFactVersionIds: versionIds } };
+      return { text, tokenEstimate: 0, refs: { factVersionIds: versionIds, candidateFactVersionIds: versionIds, entityIds: [...new Set(used.map((f) => f.subjectEntityId).filter(Boolean))] } };
     },
   };
 
