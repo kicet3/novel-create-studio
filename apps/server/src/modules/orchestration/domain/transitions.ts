@@ -231,5 +231,6 @@ export const wakeKeys = {
   reclaim: (runId: string, taskId: string) => `reclaim:${runId}:${taskId}`,
   resume: (seq: number | string, taskId: string) => `resume:${seq}:${taskId}`,
   budgetReleased: (reservationId: string, taskId: string) => `budget_rel:${reservationId}:${taskId}`,
+  providerRecovered: (stamp: number, taskId: string) => `provider_ok:${stamp}:${taskId}`,
   dispatch: (runId: string) => `dispatch:${runId}`,
 };

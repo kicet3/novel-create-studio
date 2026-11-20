@@ -363,6 +363,8 @@ export interface LlmService {
   /** providers of the 새 작품 기본 모델 that have a usable connection now (outside any transaction) */
   roleDefaultConnections(): Promise<ReadonlySet<string>>;
   getBinding(scope: NovelScope, role: AgentRole, tx?: Tx): Promise<RoleModelBinding>;
+  /** the role's bound provider has a usable connection now */
+  isRoleProviderConnected(scope: NovelScope, role: AgentRole): Promise<boolean>;
   listBindings(scope: NovelScope): Promise<RoleModelBinding[]>;
   updateBinding(scope: NovelScope, role: AgentRole, patch: BindingPatch, actor: ActorRef): Promise<RoleModelBinding>;
   listProviderProfiles(): Promise<ProviderProfile[]>;

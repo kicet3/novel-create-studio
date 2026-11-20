@@ -287,6 +287,12 @@ export function createLlmService(deps: LlmServiceDeps): LlmService {
       return out;
     },
     getBinding,
+    /** the role's bound provider has a usable connection now (orchestration releases `provider_unavailable` tasks on it) */
+    isRoleProviderConnected: async (scope, role) => {
+      const b = await getBinding(scope, role);
+      const profile = await getProfile(b.providerProfileId);
+      return usableProvider(profile.provider) && (await providers.isCallProviderConnected(profile.provider));
+    },
     listBindings: (scope) => repo.listBindings(uow.db, scope),
 
     async updateBinding(scope, role, patch: BindingPatch, actor: ActorRef) {

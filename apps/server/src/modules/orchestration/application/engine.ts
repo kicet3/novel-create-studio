@@ -61,7 +61,12 @@ import { taskRepo as repo } from "../adapters/db/task-repository.js";
 export interface EngineLlmPort {
   recoverInterruptedRun?(tx: Tx, scope: NovelScope, runId: string): Promise<unknown>;
   getBinding?(scope: NovelScope, role: AgentRole, tx?: Tx): Promise<{ providerProfileId: string }>;
+  /** connection check of the role's bound provider (02 §5.7: a `provider_unavailable` block ends when it passes) */
+  isRoleProviderConnected?(scope: NovelScope, role: AgentRole): Promise<boolean>;
 }
+
+/** a `provider_unavailable` task is first re-checked this long after the engine saw it blocked (then every minute) */
+export const PROVIDER_RECHECK_MS = 5 * 60_000;
 
 export interface EngineOptions {
   leaseTtlMs?: number;
@@ -305,6 +310,41 @@ export function createOrchestrationEngine(deps: EngineDeps): OrchestrationEngine
           await unblockTasks(tx, scope, fresh, (t) => ({ reason: "budget_released", key: wakeKeys.budgetReleased(`tick${stamp}`, t.id) }));
         })
         .catch((err) => log.warn({ err, novelId }, "reservation-wait recheck failed"));
+    }
+  };
+
+  /**
+   * 02 §5.7 / 04 §7.3: a task blocked on its provider (`provider_unavailable`: connection missing, key expired, outage)
+   * goes back to ready once the connection check of its role's provider passes. Without this the block never ended:
+   * neither reconnecting the account nor resuming the task released it.
+   */
+  let providerRecheckAt = 0;
+  const providerBlockedSince = new Map<string, number>();
+  const recheckProviderBlocks = async () => {
+    const check = deps.llm?.isRoleProviderConnected;
+    if (!check || clock.now() < providerRecheckAt) return;
+    providerRecheckAt = clock.now() + 60_000;
+    // "blocked since" is kept in memory on the app clock (tasks.updated_at is DB time and moves with unrelated edits):
+    // after a restart every blocked task waits one window before its first check
+    const blocked = (await repo.blockedByReason(uow.db, null, "provider_unavailable")).filter((t) => !t.pausedAt);
+    const ids = new Set(blocked.map((t) => t.id));
+    for (const id of providerBlockedSince.keys()) if (!ids.has(id)) providerBlockedSince.delete(id);
+    for (const t of blocked) if (!providerBlockedSince.has(t.id)) providerBlockedSince.set(t.id, clock.now());
+    const due = blocked.filter((t) => clock.now() - providerBlockedSince.get(t.id)! >= PROVIDER_RECHECK_MS);
+    const connected = new Map<string, boolean>();
+    for (const t of due) {
+      const scope = { novelId: t.novelId };
+      const key = `${t.novelId}:${t.agentRole}`;
+      if (!connected.has(key)) connected.set(key, await check(scope, t.agentRole).catch(() => false));
+      if (!connected.get(key)) continue;
+      const stamp = Math.floor(clock.now() / PROVIDER_RECHECK_MS);
+      await uow
+        .run(async (tx) => {
+          const fresh = (await repo.getTasks(tx.db, scope, [t.id])).filter((x) => x.status === "blocked" && x.blockReason === "provider_unavailable");
+          await unblockTasks(tx, scope, fresh, (x) => ({ reason: "retry", key: wakeKeys.providerRecovered(stamp, x.id) }));
+          providerBlockedSince.delete(t.id);
+        })
+        .catch((err) => log.warn({ err, novelId: t.novelId, taskId: t.id }, "provider-block recheck failed"));
     }
   };
 
@@ -739,6 +779,7 @@ export function createOrchestrationEngine(deps: EngineDeps): OrchestrationEngine
     await promotePending();
     for (const w of await repo.discardableWakes(uow.db)) await repo.updateWake(uow.db, { novelId: w.novelId }, w.id, { status: "discarded" }, "pending"); // W4
     await recheckReservationWaits();
+    await recheckProviderBlocks();
     const free = Math.min(pool.available(), opt.maxGlobal - active.size);
     if (free <= 0 || signal.aborted) return 0;
     const now = clock.date();
